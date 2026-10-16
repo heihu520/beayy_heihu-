@@ -135,6 +135,67 @@ const section = (title, body, { count, aside } = {}) =>
   `<section class="mx-sec"><div class="mx-sec-head"><h3>${esc(title)}</h3>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
 const emptyInline = (text) => `<p class="mx-empty-inline">${esc(text)}</p>`;
 
+// ---------- 弹层（墨线 Dialog 小窗口）：新建、编辑、填几项再提交都在这里，页面上不展开编辑框 ----------
+// 同一时间只开一个，挂在 body 上，页面重画不影响它。点遮罩、Esc、关闭都等于取消；提交中不关。
+
+let DLG = null;
+
+/** title、body（HTML）、ok（主按钮文字）、okClass（primary／danger）、busy（提交中的按钮文字）、cancel（false＝不要取消钮）、
+ *  closable（false＝只能点主按钮关）、submit(el)：抛错就把错写在窗口里、不关，返回 false 也不关；onOpen(el, d) 绑窗口里的交互 */
+function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取消", closable = true, submit, onOpen }) {
+  closeDialog();
+  const root = document.createElement("div");
+  root.className = "mx-scrim dlg-root";
+  root.innerHTML = `<div class="mx-dialog mx-dialog--sm" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div class="mx-dialog-head"><h2 id="dlg-title">${esc(title)}</h2>${closable ? `<button class="mx-iconbtn" data-dlg="close" aria-label="关闭">${ICON.close}</button>` : ""}</div>
+    <div class="mx-dialog-body">${body}<div class="mx-field-error" data-dlg="err" hidden></div></div>
+    <div class="mx-dialog-foot">${cancel ? `<button class="mx-btn mx-btn--secondary" data-dlg="close">${esc(cancel)}</button>` : ""}${ok ? `<button class="mx-btn mx-btn--${okClass}" data-dlg="ok">${esc(ok)}</button>` : ""}</div></div>`;
+  document.body.appendChild(root);
+  const el = root.querySelector(".mx-dialog"), okBtn = root.querySelector('[data-dlg="ok"]'), err = root.querySelector('[data-dlg="err"]');
+  const d = (DLG = { root, el, busy: false, back: document.activeElement });
+  d.setErr = (m) => { err.hidden = !m; err.textContent = m || ""; };
+  d.setOk = (text) => { if (okBtn) okBtn.textContent = text; };
+  d.go = async () => {
+    if (d.busy || !okBtn || okBtn.disabled) return;
+    const label = okBtn.textContent;
+    d.busy = true; okBtn.disabled = true; d.setErr(null); if (busy) okBtn.textContent = busy;
+    try { if ((await submit(el, d)) !== false) { d.busy = false; return closeDialog(); } }
+    catch (x) { d.setErr(String(x && x.message ? x.message : x)); }
+    d.busy = false; okBtn.disabled = false; okBtn.textContent = label;
+  };
+  const cancelable = () => closable && !d.busy;
+  root.addEventListener("mousedown", (e) => { if (e.target === root && cancelable()) closeDialog(); });
+  root.addEventListener("click", (e) => { const b = e.target.closest("[data-dlg]"); if (!b) return; if (b.dataset.dlg === "close" && cancelable()) closeDialog(); else if (b.dataset.dlg === "ok") d.go(); });
+  root.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") { if (cancelable()) closeDialog(); return; }
+    // 单行输入框里回车、任何地方 ⌘↩ 都等于点主按钮；输入法选字时的回车不算
+    if (e.key === "Enter" && !e.isComposing && (e.metaKey || e.target.tagName === "INPUT")) { e.preventDefault(); d.go(); return; }
+    if (e.key === "Tab") {
+      const fs = [...el.querySelectorAll("button:not(:disabled), input:not([hidden]), textarea, [tabindex='0']")];
+      if (!fs.length) return;
+      const i = fs.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); fs[fs.length - 1].focus(); }
+      else if (!e.shiftKey && i === fs.length - 1) { e.preventDefault(); fs[0].focus(); }
+    }
+  });
+  if (onOpen) onOpen(el, d);
+  const first = el.querySelector(".mx-dialog-body input:not([hidden]), .mx-dialog-body textarea") || okBtn || el.querySelector("[data-dlg]");
+  if (first) { first.focus(); if (first.setSelectionRange && first.value) first.setSelectionRange(first.value.length, first.value.length); }
+  return d;
+}
+
+function closeDialog() {
+  const d = DLG; if (!d) return;
+  DLG = null; d.root.remove();
+  if (d.back && d.back.isConnected && d.back.focus) d.back.focus();
+}
+
+/** 弹层里的一项输入 */
+const dlgField = (id, label, { type = "text", ph = "", value = "", mono = type !== "text", help = "" } = {}) =>
+  `<div class="mx-field"><label for="${id}">${label}</label><input class="mx-input${mono ? " mono" : ""}" id="${id}" type="${type}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(value)}">${help ? `<p class="note">${help}</p>` : ""}</div>`;
+const dlgVal = (el, id) => { const x = el.querySelector("#" + id); return x ? x.value.trim() : ""; };
+
 // ---------- 人生记录：读数、一天的形状、作息图 ----------
 
 const shade = (min, v) => (min ? `background:color-mix(in srgb, var(${v}) ${Math.round(30 + (Math.min(min, 60) / 60) * 70)}%, var(--rec-track))` : "");
@@ -529,7 +590,7 @@ async function renderSummary(arg) {
 
 // ---------- 规矩 ----------
 
-const RS = { adding: false, editing: null, deleting: null };
+const RS = { deleting: null };
 
 /** 把一条规矩识别成能算的三类；识别不了返回 null（交给日总结对照）
  *  after：几点以后不用（电脑／手机／都不用）；limit：某设备每天不超过多久；app：某个 app 每天不超过多久 */
@@ -580,6 +641,22 @@ function checkRule(r, d) {
   return null;
 }
 
+/** 加一条或改一条规矩（小弹层） */
+function ruleDialog(r, save) {
+  openDialog({
+    title: r ? "改规矩" : "加一条规矩", ok: r ? "保存改动" : "加上这条",
+    body: `<div class="mx-field"><label for="rule-text">规矩</label><textarea class="mx-input dlg-ta" id="rule-text" placeholder="用自己的话写，比如「21:00 以后不开电脑」">${esc(r ? r.text : "")}</textarea>
+      <p class="note">「几点以后不用电脑／手机」「电脑／手机每天不超过几小时」「某个 app 每天不超过几分钟」会当场对照，别的写法交给日总结。⌘↩ 保存。</p></div>`,
+    submit: async (el) => {
+      const text = dlgVal(el, "rule-text");
+      if (!text) throw "先写一条规矩。";
+      if (r) S.rules.find((x) => x.id === r.id).text = text;
+      else S.rules.unshift({ id: "r" + Date.now().toString(36), text, enabled: true });
+      await save();
+    },
+  });
+}
+
 async function renderRules() {
   if (!S.rules) S.rules = await call("get_rules");
   const rules = S.rules;
@@ -590,10 +667,7 @@ async function renderRules() {
     if (!c) return `<div class="verdict muted">这条算不出来，交给日总结对照</div>`;
     return `<div class="verdict ${c.ok === null ? "muted" : c.ok ? "ok" : "over"}"><span>${esc(c.label)}</span>${c.value ? `<b>${esc(c.value)}</b>` : ""}${c.ok === null ? "" : c.ok ? ` · 守住了` : ` · 没守住`}</div>`;
   };
-  const editor = (id, text, saveTitle) => `<div class="editor" data-id="${id}">
-      <textarea class="mx-input" placeholder="用自己的话写一条规矩" aria-label="规矩">${esc(text)}</textarea>
-      <div class="mx-form-actions"><button class="mx-btn mx-btn--text" data-act="cancel">取消</button><button class="mx-btn mx-btn--secondary" data-act="save">${saveTitle}</button></div></div>`;
-  const row = (r, i) => RS.editing === r.id ? editor(r.id, r.text, "保存改动") : `<div class="rule${r.enabled === false ? " off" : ""}" data-id="${r.id}">
+  const row = (r, i) => `<div class="rule${r.enabled === false ? " off" : ""}" data-id="${r.id}">
       <div class="mx-row"><span class="mx-row-mark mono">${i + 1}</span>
         <div class="mx-row-main"><div class="mx-row-name">${esc(r.text)}</div>${verdict(r)}</div>
         <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
@@ -601,28 +675,18 @@ async function renderRules() {
       </div>
       ${RS.deleting === r.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条规矩？</b><span>删除后日总结不再对照它，删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
     </div>`;
-  $app.innerHTML = header("规矩", `<button class="mx-btn mx-btn--primary" id="add" ${RS.adding ? "disabled" : ""}>加一条规矩</button>`)
+  $app.innerHTML = header("规矩", `<button class="mx-btn mx-btn--primary" id="add">加一条规矩</button>`)
     + `<div class="reading" id="rules">
-      ${RS.adding ? editor("new", "", "加上这条") : ""}
-      ${rules.length ? rules.map(row).join("") : RS.adding ? "" : emptyInline("用自己的话写下想守的规矩，比如「21:00 以后不开电脑」「手机每天不超过 3 小时」「抖音每天不超过 30 分钟」。这三类会用今天的数据当场对照，别的写法交给日总结逐条对照。")}
+      ${rules.length ? rules.map(row).join("") : emptyInline("用自己的话写下想守的规矩，比如「21:00 以后不开电脑」「手机每天不超过 3 小时」「抖音每天不超过 30 分钟」。这三类会用今天的数据当场对照，别的写法交给日总结逐条对照。")}
     </div>`;
   const save = async () => { await call("save_rules", { rules: S.rules }); renderRules(); };
-  document.getElementById("add").onclick = () => { RS.adding = true; RS.editing = RS.deleting = null; renderRules(); };
-  const ta = $app.querySelector(".editor textarea");
-  if (ta) { ta.focus(); ta.onkeydown = (e) => { if (e.key === "Escape") { RS.adding = false; RS.editing = null; renderRules(); } if (e.key === "Enter" && e.metaKey) ta.closest(".editor").querySelector('[data-act="save"]').click(); }; }
+  document.getElementById("add").onclick = () => { RS.deleting = null; ruleDialog(null, save); };
   const keepBtn = $app.querySelector('[data-act="keep"]');
   if (keepBtn) keepBtn.focus();
   document.getElementById("rules").onclick = async (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const box = b.closest("[data-id]"), id = box.dataset.id, act = b.dataset.act;
-    if (act === "cancel") { RS.adding = false; RS.editing = null; return renderRules(); }
-    if (act === "save") {
-      const text = box.querySelector("textarea").value.trim(); if (!text) return box.querySelector("textarea").focus();
-      if (id === "new") { S.rules.unshift({ id: "r" + Date.now().toString(36), text, enabled: true }); RS.adding = false; }
-      else { S.rules.find((r) => r.id === id).text = text; RS.editing = null; }
-      return save();
-    }
-    if (act === "edit") { RS.editing = id; RS.adding = false; RS.deleting = null; return renderRules(); }
+    if (act === "edit") { RS.deleting = null; return ruleDialog(S.rules.find((r) => r.id === id), save); }
     if (act === "delete") { RS.deleting = id; return renderRules(); }
     if (act === "keep") { RS.deleting = null; return renderRules(); }
     if (act === "remove") { S.rules = S.rules.filter((r) => r.id !== id); RS.deleting = null; return save(); }
@@ -633,7 +697,7 @@ async function renderRules() {
 
 // ---------- 设备：绑定的电脑和手机，各自的记录状态 ----------
 
-const DS = { open: null, adding: false, msg: null, err: null, busy: false, account: null, removing: null };
+const DS = { open: null, msg: null, err: null, busy: false, account: null, removing: null };
 const DEV_ICON = {
   mac: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   win: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
@@ -674,13 +738,13 @@ async function renderDevices() {
       <div class="add-opt">${DEV_ICON.mac}<div><b>另一台 Mac</b><span>装上 Beayy，在设置里用同一个账号登录，记录就会同步过来，出现在下面的列表里。</span></div></div>
       <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>Windows 版还没有安装包（代码能编译，没在真机上测过）。</span></div></div>
     </div>`;
-  $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--${DS.adding ? "secondary" : "primary"}" id="add-dev">${DS.adding ? "收起" : "添加设备"}</button>`)
-    + `<div class="reading">${DS.adding ? adding : ""}${syncCard(sy)}<div class="devs">${devs.map((d) => `<div class="dev${DS.open === d.id ? " open" : ""}" data-id="${esc(d.id)}">
+  $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
+    + `<div class="reading">${syncCard(sy)}<div class="devs">${devs.map((d) => `<div class="dev${DS.open === d.id ? " open" : ""}" data-id="${esc(d.id)}">
         <button class="dev-head" aria-expanded="${DS.open === d.id}"><span class="dev-ico">${DEV_ICON[d.kind] || DEV_ICON.mac}</span>
           <span class="dev-main"><span class="dev-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}${d.synced ? `<span class="mx-tag">经同步</span>` : ""}</span><span class="dev-status">${status(d)}</span></span>
           <span class="chev">${ICON.chevR}</span></button>
         ${DS.open === d.id ? `<div class="dev-body">${detail(d)}</div>` : ""}</div>`).join("") || emptyInline("还没有设备的记录。")}</div></div>`;
-  document.getElementById("add-dev").onclick = () => { DS.adding = !DS.adding; renderDevices(); };
+  document.getElementById("add-dev").onclick = () => openDialog({ title: "添加设备", body: adding, cancel: "关闭" });
   $app.querySelectorAll(".dev-head").forEach((b) => (b.onclick = () => { const id = b.closest(".dev").dataset.id; DS.open = DS.open === id ? null : id; renderDevices(); }));
   $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
   bindSync();
