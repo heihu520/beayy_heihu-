@@ -19,6 +19,8 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
 pub const DEFAULT_SERVER: &str = "https://sync.beayy.com";
@@ -463,6 +465,7 @@ pub fn status(root: &Path) -> Value {
         "uploaded": s.up.len(),
         "need_login": s.raw.get("need_login").and_then(Value::as_bool).unwrap_or(false),
         "remote_devices": remote_set(root),
+        "progress": progress(),
     })
 }
 
@@ -500,7 +503,30 @@ fn safe_name(s: &str) -> bool {
 }
 
 /// 一轮：先上传本机写的分段里变了的，再下载别的设备新传的。没开同步返回 None
+// ---------- 这一轮进行到哪（设备页显示进度） ----------
+
+static PHASE: Mutex<&'static str> = Mutex::new("");
+static DONE: AtomicUsize = AtomicUsize::new(0);
+static TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+fn set_phase(phase: &'static str, total: usize) {
+    *PHASE.lock().unwrap() = phase;
+    DONE.store(0, Ordering::Relaxed);
+    TOTAL.store(total, Ordering::Relaxed);
+}
+
+/// {phase: "upload"／"download"／""（没在同步）, done, total}
+pub fn progress() -> Value {
+    json!({"phase": *PHASE.lock().unwrap(), "done": DONE.load(Ordering::Relaxed), "total": TOTAL.load(Ordering::Relaxed)})
+}
+
 pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
+    let r = sync_round(root, local_device);
+    set_phase("", 0);
+    r
+}
+
+fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
     let a = load(root)?;
     let mut st = read_state(root);
     let mut errors = vec![];
@@ -544,6 +570,7 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
         }
     }
     todo.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
+    set_phase("upload", todo.len());
     let ag = agent();
     let mut uploaded = 0;
     // 每 200 段记一次进度：传到一半退出，下次接着传
@@ -572,6 +599,7 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
                                     }
                                     Ok(*sig)
                                 })();
+                                DONE.fetch_add(1, Ordering::Relaxed);
                                 (format!("{d}/{n}"), r)
                             })
                             .collect::<Vec<_>>()
@@ -616,11 +644,18 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
         let v: Value = r.body_mut().read_json().unwrap_or(Value::Null);
         let items = v["items"].as_array().cloned().unwrap_or_default();
         let full = items.len() >= 5000;
-        for it in &items {
+        // 要下载的：别的设备的（本机电脑和本机读到的 iPhone 是自己传的）
+        let wanted = |it: &Value| {
+            let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
+            let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(d).exists() && !is_remote(root, &st, d));
+            !mine && safe_name(d) && safe_name(n)
+        };
+        let want: Vec<bool> = items.iter().map(wanted).collect();
+        set_phase("download", want.iter().filter(|w| **w).count());
+        for (it, want) in items.iter().zip(want) {
             let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
             let updated = it["updated"].as_i64().unwrap_or(0);
-            let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(d).exists() && !is_remote(root, &st, d));
-            if !mine && safe_name(d) && safe_name(n) {
+            if want {
                 let got = (|| {
                     let mut resp = ag.get(&format!("{}/v1/blob/{d}/{n}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
                     if !resp.status().is_success() {
@@ -651,6 +686,7 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
                 })();
                 match got {
                     Ok(_) => {
+                        DONE.fetch_add(1, Ordering::Relaxed);
                         st.remote.insert(d.to_string());
                         downloaded += 1;
                     }

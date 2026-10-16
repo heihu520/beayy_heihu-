@@ -254,7 +254,8 @@ function renderSide() {
   const nm = document.getElementById("me-name");
   if (nm) nm.textContent = pf.name || "我";
   const sub = document.getElementById("me-sub");
-  if (sub) sub.textContent = st.paused ? " · 已暂停" : !perm.accessibility || !perm.input_monitoring ? " · 缺权限" : st.capturing ? " · 记录中" : " · 没在记录";
+  // 正常记录时不写；暂停、缺权限、没在记录才提示
+  if (sub) sub.textContent = st.paused ? " · 已暂停" : !perm.accessibility || !perm.input_monitoring ? " · 缺权限" : st.capturing ? "" : " · 没在记录";
   renderMeMenu();
 }
 
@@ -819,6 +820,24 @@ async function renderDevices() {
   $app.querySelectorAll(".dev-head").forEach((b) => (b.onclick = () => { const id = b.closest(".dev").dataset.id; DS.open = DS.open === id ? null : id; renderDevices(); }));
   $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
   bindSync();
+  if (sy.running || DS.busy) pollSync();
+}
+
+/** 同步进行中：每 2 秒只刷新同步卡片（进度条），同步完了整页重画一次（设备列表、最近一条会变） */
+let SYNC_POLL = null;
+function pollSync() {
+  if (SYNC_POLL) return;
+  SYNC_POLL = setTimeout(async function tick() {
+    SYNC_POLL = null;
+    if (S.page !== "devices") return;
+    const sy = await call("sync_status").catch(() => null);
+    const card = $app.querySelector(".sync-card");
+    if (!sy || !card) return;
+    if (!sy.running && !DS.busy) return renderDevices();
+    card.outerHTML = syncCard(sy);
+    bindSync();
+    SYNC_POLL = setTimeout(tick, 2000);
+  }, 2000);
 }
 
 /** 多设备同步：按账号。登录了就显示同步状态和「登录着的设备」（可移除）；没登录就引导去设置里登录 */
@@ -836,13 +855,16 @@ function syncCard(sy) {
       <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button></div></section>`;
   const sessions = (DS.account && DS.account.sessions) || [];
   const me = DS.account && DS.account.session;
+  const pg = sy.progress || {};
+  const going = (sy.running || DS.busy) && pg.phase && pg.total > 0;
+  const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? "上传" : "下载"}</span><span class="mono">${numText(pg.done)} / ${numText(pg.total)} 段</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
   return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--${sy.last_error ? "warn" : "ok"}">${sy.running || DS.busy ? "同步中…" : sy.last_error ? "上次有错" : "已开"}</span></div>
-      <p class="note">${esc(sy.email)} · ${sy.last ? `上次 ${mdhm(sy.last)}` : "还没同步过"} · 已传 ${numText(sy.uploaded)} 段 · 每 5 分钟一轮</p>
+      <p class="note">${esc(sy.email)} · ${sy.last ? `上次 ${mdhm(sy.last)}` : "还没同步过"} · 已传 ${numText(sy.uploaded)} 段 · 每 5 分钟一轮</p>${bar}
       ${sy.last_error ? `<div class="mx-field-error">${esc(sy.last_error)}</div>` : ""}
       ${sessions.length ? `<div class="sess"><div class="sess-h">登录着这个账号的设备</div>${sessions.map((x) => `<div class="sess-row"><span>${esc(x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : DS.removing === x.id
         ? `<span class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" data-sess-keep>取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" data-sess-go="${esc(x.id)}">移除</button></span>`
         : `<button class="mx-btn mx-btn--text mx-btn--sm" data-sess="${esc(x.id)}">移除</button>`}</div>`).join("")}</div>` : ""}
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${DS.busy ? "disabled" : ""}>立即同步</button></div>
+      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${DS.busy || sy.running ? "disabled" : ""}>立即同步</button></div>
       ${msg}</section>`;
 }
 

@@ -287,3 +287,8 @@ a.mx-btn { text-decoration: none; }
 .pick-list .mx-menu-val { color: var(--ink-4); font-size: 13px; }
 .pick-list .mx-ico { flex: none; color: var(--accent-ink); visibility: hidden; }
 .pick-list [aria-selected="true"] .mx-ico { visibility: visible; }
+
+/* ---------- 同步进度 ---------- */
+.sync-prog { display: flex; flex-direction: column; gap: 6px; }
+.sync-prog-text { display: flex; justify-content: space-between; font-size: 12px; line-height: 16px; color: var(--ink-3); }
+.sync-prog .bar { height: 6px; }

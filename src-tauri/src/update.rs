@@ -119,7 +119,8 @@ fn check_inner() -> Result<(), String> {
     }
     updatable()?;
     let item = &latest[platform()];
-    let (Some(file), Some(sum)) = (item["file"].as_str(), item["sha256"].as_str()) else { return Err("新版本还没有这个系统的安装包".into()) };
+    // 这个系统的包还没传上来（比如 Mac 的还在等苹果公证）：先当没有新版本
+    let (Some(file), Some(sum)) = (item["file"].as_str(), item["sha256"].as_str()) else { return Ok(()) };
     if file.contains('/') || file.contains('\\') || file.starts_with('.') {
         return Err("安装包名字不对".into());
     }
@@ -160,7 +161,7 @@ pub fn status() -> Value {
         json!({
             "current": current(),
             "latest": latest,
-            "newer": latest.as_deref().map(|v| newer(v, current())).unwrap_or(false),
+            "newer": latest.as_deref().map(|v| newer(v, current())).unwrap_or(false) && s.latest.as_ref().map(|l| l[platform()]["file"].is_string()).unwrap_or(false),
             "notes": s.latest.as_ref().and_then(|l| l["notes"].as_str()),
             "ready": s.ready.is_some(),
             "checking": s.checking,
