@@ -105,13 +105,24 @@ fn save(root: &Path, a: &Account) -> Result<(), String> {
     fs::write(&f, a.code()).map_err(|e| e.to_string())
 }
 
-/// 本机退出同步：忘掉账号和状态（服务器上的数据不动）
+/// 本机退出同步：忘掉账号（服务器上的数据不动）。同步进度留着，同一个账号再登录不用从头重传
 pub fn forget(root: &Path) {
     if use_keychain() {
         let _ = std::process::Command::new("/usr/bin/security").args(["delete-generic-password", "-s", "com.fengli.beayy", "-a", "sync"]).output();
     }
     let _ = fs::remove_file(account_file(root));
-    let _ = fs::remove_file(state_path(root));
+}
+
+/// 登录或注册之后：换了账号才清同步进度（上传记录、下载游标都是按账号的）；同一个账号只清掉「要重新登录」和上次的错
+fn reset_state_for(root: &Path, user: &str) {
+    let mut st = read_state(root);
+    if st.raw.get("user").and_then(Value::as_str) != Some(user) {
+        let _ = fs::remove_file(state_path(root));
+        return;
+    }
+    st.raw.insert("need_login".into(), json!(false));
+    st.raw.insert("last_error".into(), Value::Null);
+    write_state(root, &st);
 }
 
 // ---------- HTTP ----------
@@ -275,7 +286,7 @@ pub fn signup(root: &Path, server: &str, invite: &str, email: &str, password: &s
         key,
     };
     save(root, &a)?;
-    let _ = fs::remove_file(state_path(root));
+    reset_state_for(root, &a.user);
     Ok(recovery_code_of(&key))
 }
 
@@ -291,7 +302,7 @@ pub fn login(root: &Path, server: &str, email: &str, password: &str, device: &st
     let key = unwrap_key(v["wrapped_key"].as_str().unwrap_or(""), &wrap)?;
     let a = Account { server: server.into(), user: v["user"].as_str().unwrap_or("").into(), email: Some(email), token: v["token"].as_str().unwrap_or("").into(), key };
     save(root, &a)?;
-    let _ = fs::remove_file(state_path(root));
+    reset_state_for(root, &a.user);
     Ok(())
 }
 
@@ -534,54 +545,58 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
     }
     todo.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
     let ag = agent();
-    let results: Vec<(String, Result<(u64, u64), String>)> = std::thread::scope(|s| {
-        let chunks: Vec<Vec<&(String, String, PathBuf, (u64, u64))>> = (0..PARALLEL).map(|i| todo.iter().skip(i).step_by(PARALLEL).collect()).collect();
-        let hs: Vec<_> = chunks
-            .into_iter()
-            .map(|chunk| {
-                let (a, ag) = (&a, &ag);
-                s.spawn(move || {
-                    chunk
-                        .into_iter()
-                        .map(|(d, n, f, sig)| {
-                            let r = (|| {
-                                let plain = fs::read(f).map_err(|e| e.to_string())?;
-                                let blob = seal(a, d, n, &plain)?;
-                                let resp = ag
-                                    .put(&format!("{}/v1/blob/{d}/{n}", a.server))
-                                    .header("Authorization", &a.auth())
-                                    .header("Content-Type", "application/octet-stream")
-                                    .send(&blob[..])
-                                    .map_err(|e| e.to_string())?;
-                                if !resp.status().is_success() {
-                                    return Err(err_of(resp));
-                                }
-                                Ok(*sig)
-                            })();
-                            (format!("{d}/{n}"), r)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-    });
     let mut uploaded = 0;
-    for (k, r) in results {
-        match r {
-            Ok(sig) => {
-                st.up.insert(k, sig);
-                uploaded += 1;
-            }
-            Err(e) => {
-                if errors.len() < 5 {
-                    errors.push(format!("上传 {k}：{e}"));
+    // 每 200 段记一次进度：传到一半退出，下次接着传
+    for batch in todo.chunks(200) {
+        let results: Vec<(String, Result<(u64, u64), String>)> = std::thread::scope(|s| {
+            let chunks: Vec<Vec<&(String, String, PathBuf, (u64, u64))>> = (0..PARALLEL).map(|i| batch.iter().skip(i).step_by(PARALLEL).collect()).collect();
+            let hs: Vec<_> = chunks
+                .into_iter()
+                .map(|chunk| {
+                    let (a, ag) = (&a, &ag);
+                    s.spawn(move || {
+                        chunk
+                            .into_iter()
+                            .map(|(d, n, f, sig)| {
+                                let r = (|| {
+                                    let plain = fs::read(f).map_err(|e| e.to_string())?;
+                                    let blob = seal(a, d, n, &plain)?;
+                                    let resp = ag
+                                        .put(&format!("{}/v1/blob/{d}/{n}", a.server))
+                                        .header("Authorization", &a.auth())
+                                        .header("Content-Type", "application/octet-stream")
+                                        .send(&blob[..])
+                                        .map_err(|e| e.to_string())?;
+                                    if !resp.status().is_success() {
+                                        return Err(err_of(resp));
+                                    }
+                                    Ok(*sig)
+                                })();
+                                (format!("{d}/{n}"), r)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        });
+        for (k, r) in results {
+            match r {
+                Ok(sig) => {
+                    st.up.insert(k, sig);
+                    uploaded += 1;
+                }
+                Err(e) => {
+                    if errors.len() < 5 {
+                        errors.push(format!("上传 {k}：{e}"));
+                    }
                 }
             }
         }
+        // 中途出错也把已经传上去的记下来
+        st.raw.insert("user".into(), json!(a.user));
+        write_state(root, &st);
     }
-    // 中途出错也把已经传上去的记下来
-    write_state(root, &st);
 
     // 2. 下载：别的设备新传的
     let mut downloaded = 0;
@@ -659,6 +674,9 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
 }
 
 fn finish(root: &Path, mut st: State, uploaded: usize, downloaded: usize, errors: Vec<String>) -> Report {
+    if let Some(a) = load(root) {
+        st.raw.insert("user".into(), json!(a.user));
+    }
     st.raw.insert("last".into(), json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)));
     st.raw.insert("last_error".into(), if errors.is_empty() { Value::Null } else { json!(errors.join("；")) });
     // 令牌被注销（别的设备用恢复码重设、或在设备列表里移除了这台）：要重新登录
