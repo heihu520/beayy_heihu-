@@ -387,18 +387,38 @@ async function renderToday() {
 
 // ---------- 时间花在哪：按项目、按类型（10 分钟摘要里模型给的标签 × 在电脑前的秒数） ----------
 
+/** 展开着的一级（「domains:工作」这样的键），记在本机，每分钟自动刷新后保持 */
+const WORK_OPEN = new Set((() => { try { return JSON.parse(localStorage.getItem("work-open") || "[]"); } catch (e) { return []; } })());
+
 function workSection(w) {
   if (!w || !((w.domains || []).length || (w.activities || []).length)) return "";
   const dur = (sec) => (sec < 3600 ? Math.round(sec / 60) + "m" : hh(sec) + "h");
-  // 两级：一级一条粗横条，下面缩进列二级
-  const tree = (rows) => {
-    const max = Math.max(...rows.map((r) => r.sec), 1);
-    const bar = (r, kid) => `<div class="bar-row${kid ? " kid" : ""}"><span class="bar-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${dur(r.sec)}</span></div>`;
-    return `<div class="bars">${rows.map((r) => bar(r, false) + (r.children.length > 1 || (r.children[0] && r.children[0].name !== r.name) ? r.children.slice(0, 6).map((c) => bar(c, true)).join("") : "")).join("")}</div>`;
+  // 两级：一级一行，有二级的点开才列；条长按这一列最长的一级比，百分比按这一列合计算
+  const tree = (kind, rows) => {
+    const max = Math.max(...rows.map((r) => r.sec), 1), total = rows.reduce((a, r) => a + r.sec, 0) || 1;
+    const pct = (sec) => { const p = (sec / total) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
+    const cells = (r) => `<span class="bar-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${dur(r.sec)}</span><span class="bar-p mono">${pct(r.sec)}</span>`;
+    return `<div class="bars">${rows.map((r) => {
+      const kids = r.children.length > 1 || (r.children[0] && r.children[0].name !== r.name) ? r.children.slice(0, 6) : [];
+      if (!kids.length) return `<div class="bar-row"><span class="bar-chev"></span>${cells(r)}</div>`;
+      const k = `${kind}:${r.name}`, open = WORK_OPEN.has(k);
+      return `<div class="bar-grp"><button class="bar-row top" data-work="${esc(k)}" aria-expanded="${open}"><span class="bar-chev">${ICON.chevR}</span>${cells(r)}</button>
+        <div class="bar-kids"${open ? "" : " hidden"}>${kids.map((c) => `<div class="bar-row kid"><span class="bar-chev"></span>${cells(c)}</div>`).join("")}</div></div>`;
+    }).join("")}</div>`;
   };
-  return section("时间花在哪", `<div class="work"><div><h4>为了什么（领域 · 项目）</h4>${tree(w.domains || [])}</div><div><h4>在做什么（类型）</h4>${tree(w.activities || [])}</div></div>
-    <p class="note">按每 10 分钟摘要判断的领域、项目和类型，乘以那段在电脑前的时间累计；手机不算在内。</p>`);
+  return section("时间花在哪", `<div class="work"><div><h4>为了什么（领域 · 项目）</h4>${tree("domains", w.domains || [])}</div><div><h4>在做什么（类型）</h4>${tree("activities", w.activities || [])}</div></div>
+    <p class="note">按每 10 分钟摘要判断的领域、项目和类型，乘以那段在电脑前的时间累计；手机不算在内。点一级展开看明细。</p>`);
 }
+
+// 展开／收起一级：直接改这一块，不重画整页
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-work]"); if (!b) return;
+  const k = b.dataset.work, open = b.getAttribute("aria-expanded") !== "true";
+  b.setAttribute("aria-expanded", open);
+  b.nextElementSibling.hidden = !open;
+  open ? WORK_OPEN.add(k) : WORK_OPEN.delete(k);
+  try { localStorage.setItem("work-open", JSON.stringify([...WORK_OPEN])); } catch (x) {}
+});
 
 // ---------- 时间线：电脑的 10 分钟摘要和手机的每次拿起，按设备分页签，新的在上 ----------
 

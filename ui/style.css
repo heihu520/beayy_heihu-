@@ -93,7 +93,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .ico[data-p="1"] img { border-radius: 4px; }
 .strip [data-h] { cursor: pointer; }
 .strip [data-h]:hover { outline: 1px solid var(--ink-4); outline-offset: -1px; }
-@media (prefers-reduced-motion: reduce) { .tl-row .chev { transition: none; } .tl-row.flash { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .tl-row .chev, .bar-chev .mx-ico { transition: none; } .tl-row.flash { animation: none; } }
 
 /* ---------- Markdown（日总结、经过） ---------- */
 .md { font-size: 14px; line-height: 22px; max-width: 72em; }
@@ -207,7 +207,15 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .work { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
 .work h4 { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 400; color: var(--ink-4); }
 .bars { display: flex; flex-direction: column; gap: 6px; }
-.bar-row { display: grid; grid-template-columns: 120px 1fr 44px; gap: var(--space-2); align-items: center; font-size: 13px; line-height: 20px; }
+.bar-row { display: grid; grid-template-columns: 16px 112px 1fr 40px 32px; gap: var(--space-2); align-items: center; padding: 2px 0; font-size: 13px; line-height: 20px; }
+button.bar-row { width: 100%; margin: 0; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+button.bar-row:hover { background: var(--hover); }
+.bar-chev { display: inline-flex; color: var(--ink-4); }
+.bar-chev .mx-ico { width: 14px; height: 14px; transition: transform .15s; }
+.bar-row[aria-expanded="true"] .bar-chev .mx-ico { transform: rotate(90deg); }
+.bar-kids { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.bar-kids[hidden] { display: none; }
+.bar-p { text-align: right; color: var(--ink-4); font-size: 12px; }
 .bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 .bar { height: 8px; border-radius: 4px; background: var(--rec-track); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 4px; background: var(--rec-computer); }
@@ -234,7 +242,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .sess-row .note { margin: 0; font-size: 12px; }
 a.mx-btn { text-decoration: none; }
 .bar-row.kid { font-size: 12px; color: var(--ink-3); }
-.bar-row.kid .bar-name { padding-left: 14px; color: var(--ink-3); }
+.bar-row.kid .bar-name { padding-left: 12px; color: var(--ink-3); }
 .bar-row.kid .bar { height: 5px; }
 .bar-row.kid .bar i { opacity: .55; }
 
