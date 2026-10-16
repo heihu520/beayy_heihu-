@@ -1,0 +1,13 @@
+[package]
+name = "beayy-summary"
+description = "10 分钟摘要：把电脑事件按分段算时长、去重、拼包，调模型写成和 Codex 10min-memory-summary 同格式的 Markdown"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+chrono.workspace = true
+regex = "1"
+# 系统 TLS（macOS Security 框架、Windows SChannel），不用编 C，Mac 上也能交叉检查 Windows
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }

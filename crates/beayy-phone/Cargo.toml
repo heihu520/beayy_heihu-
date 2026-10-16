@@ -1,0 +1,11 @@
+[package]
+name = "beayy-phone"
+description = "iPhone 屏幕使用：读 iPhone 经 iCloud 同步到 Mac 的 Biome App.InFocus 记录，写成 app.focus 事件（只在 macOS 有数据）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+beayy-core.workspace = true
+serde_json.workspace = true
+chrono.workspace = true

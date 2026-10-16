@@ -1,0 +1,1321 @@
+//! 10 分钟摘要：把 Beayy 采到的电脑事件按分段写成摘要，格式与 Codex 电脑历史的 10min-memory-summary 相同。
+//! 从原 脚本/自采摘要.py 移植（10-16 删除），拼包、去重、提示词、输出格式逐项一致：80 个分段拼出的包与 Python 版逐字相同。
+//!
+//! 输入：`<数据根>/devices/mac-*/segments/<UTC 整 10 分>/events.jsonl`（格式见 app/README.md；多台 Mac 同段合并）
+//! 输出：`<数据根>/summaries/YYYY-MM-DDTHH-MM-SS-xxxx-10min-memory-summary.md`（UTC）
+//!
+//! 每个已结束、还没写过摘要的分段：
+//!   1. 代码算时长表：切换区间 ∩ 在电脑前，心跳兜底（同 脚本/beayy时长.py）；早期没有 presence 的分段只按切换算；
+//!   2. 去重：同一「app＋窗口」的文字只留比上一次（含上一分段）新增的行；
+//!   3. 拼包：时长表＋新增文字＋键盘输入/发送（操作者、按键原文）＋点击元素，压到约 1 万字以内；
+//!   4. 调网关（chat.completions）只写描述，数字和 applications 由代码填。
+//!
+//! 设置：`<数据根>/settings.json` 的 gateway（任何 OpenAI 兼容接口，默认 https://api.openai.com/v1）、summary_model（没填就不写摘要）。
+//! 密钥：环境变量 BEAYY_API_KEY（或旧名 LIFE_RECORD_API_KEY）＞ 钥匙串（服务 com.fengli.beayy，账户 api_key）。
+
+use chrono::{DateTime, Duration, Local, NaiveDateTime, Utc};
+use regex::Regex;
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+const GATEWAY: &str = "https://api.openai.com/v1";
+const MODEL: &str = "";
+const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+/// 中文约 0.7 token/字，1 万字约 7 千 token，加提示词和输出约 8 千
+const PACK_CHARS: usize = 10000;
+/// 整段都不在电脑前的固定标题：不调模型，直接写；界面把连续的这种段合成一行
+pub const IDLE_TITLE: &str = "不在电脑前";
+const IDLE_TEXT: &str = "这 10 分钟没有键鼠操作（离开、锁屏或睡眠）。";
+const NOISE: &[&str] = &["app.launch", "permission.changed", "permission.requested", "tap.started", "app.quit", "app.paused", "app.resumed"];
+// 时长（同 脚本/beayy时长.py）
+const IDLE_THRESHOLD: i64 = 180;
+const MAX_GAP: i64 = 180;
+const POINT_TYPES: &[&str] = &["app.activated", "window.changed", "heartbeat", "ui.text", "app.launch"];
+const LEAVE_TYPES: &[&str] = &["system.sleep", "screen.sleep", "screen.locked", "app.quit", "app.paused"];
+const BACK_TYPES: &[&str] = &["system.wake", "screen.wake", "screen.unlocked", "app.resumed"];
+
+static SEG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-00Z$").unwrap());
+/// 界面杂项：Claude 的「运行中」「3.4k 个 token」「上下文 47%」、相对时间
+static JUNK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:[\d.,]+k? 个 token|上下文 \d+%|\d+%|\d+\s*(?:秒|分钟|小时|天)前|.*运行中|处理中…|思考中)$").unwrap());
+
+type Ev = Map<String, Value>;
+
+fn s<'a>(e: &'a Ev, k: &str) -> &'a str {
+    e.get(k).and_then(Value::as_str).unwrap_or("")
+}
+
+fn ty(e: &Ev) -> &str {
+    s(e, "event_type")
+}
+
+fn ts(e: &Ev) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s(e, "timestamp")).map(|t| t.with_timezone(&Utc)).unwrap_or_default()
+}
+
+/// Python 的 s[:n]：按字符截
+fn cut(x: &str, n: usize) -> String {
+    x.chars().take(n).collect()
+}
+
+fn clen(x: &str) -> usize {
+    x.chars().count()
+}
+
+/// Python 的 str.splitlines：\r\n 算一个换行，末尾的换行不产生空行
+fn split_lines(x: &str) -> Vec<&str> {
+    let is_break = |c: char| matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}');
+    let mut out = vec![];
+    let mut start = 0;
+    let mut it = x.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        if is_break(c) {
+            out.push(&x[start..i]);
+            let mut next = i + c.len_utf8();
+            if c == '\r' && it.peek().map(|&(_, n)| n == '\n').unwrap_or(false) {
+                it.next();
+                next += 1;
+            }
+            start = next;
+        }
+    }
+    if start < x.len() {
+        out.push(&x[start..]);
+    }
+    out
+}
+
+/// 一段时间的电脑活动：在电脑前的区间、前台窗口区间（起、止、app 名、bundle id）、切换次数
+pub struct Activity {
+    pub spans: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+    pub windows: Vec<(DateTime<Utc>, DateTime<Utc>, String, String)>,
+    pub switches: usize,
+}
+
+pub struct Summarizer {
+    pub root: PathBuf,
+}
+
+fn seg_start(name: &str) -> DateTime<Utc> {
+    NaiveDateTime::parse_from_str(name, "%Y-%m-%dT%H-%M-%SZ").map(|t| t.and_utc()).unwrap_or_default()
+}
+
+fn hms(t: DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%H:%M:%S").to_string()
+}
+
+/// 人 / 代理：点击、按键看 actor.kind，输入段看 actor_kind
+fn actor(e: &Ev) -> String {
+    let kind_of = |k: &str| e.get(k).and_then(|a| a.get("kind")).and_then(Value::as_str).unwrap_or("");
+    let mut kind = s(e, "actor_kind");
+    if kind.is_empty() {
+        kind = kind_of("actor");
+    }
+    if kind.is_empty() {
+        kind = kind_of("submit_actor");
+    }
+    if kind == "agent" {
+        let mut procs: Vec<String> = match e.get("agent_procs").and_then(Value::as_array) {
+            Some(a) if !a.is_empty() => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            _ => vec![e.get("actor").and_then(|a| a.get("source_proc")).and_then(Value::as_str).unwrap_or("").to_string()],
+        };
+        procs.retain(|p| !p.is_empty());
+        return if procs.is_empty() { "代理".into() } else { format!("代理·{}", procs.join("/")) };
+    }
+    if kind == "human" { "人".into() } else { "?".into() }
+}
+
+fn text_of(e: &Ev) -> String {
+    if let Some(a) = e.get("lines").and_then(Value::as_array) {
+        return a.iter().map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string())).collect::<Vec<_>>().join("\n");
+    }
+    s(e, "text").to_string()
+}
+
+fn is_text_event(e: &Ev) -> bool {
+    let t = ty(e);
+    t == "keyboard.text_input"
+        || (!NOISE.contains(&t)
+            && !t.starts_with("keyboard.")
+            && !t.starts_with("mouse.")
+            && t != "app.activated"
+            && t != "heartbeat"
+            && !text_of(e).trim().is_empty())
+}
+
+/// 同一「app＋窗口」只留新出现的行。用上一分段的文字预热，跨段也去重。
+/// 界面文字（非键盘事件）另去掉杂项行：短于 4 字、等于窗口标题、JUNK；行首的「# 」去掉再比。
+#[derive(Default)]
+struct Dedup {
+    seen: HashMap<(String, String), HashSet<String>>,
+}
+
+impl Dedup {
+    fn feed(&mut self, e: &Ev) -> Vec<String> {
+        let key = (s(e, "app_name").to_string(), s(e, "window_title").to_string());
+        let ui = !ty(e).starts_with("keyboard.");
+        let title = s(e, "window_title");
+        let seen = self.seen.entry(key).or_default();
+        let mut new = vec![];
+        for line in split_lines(&text_of(e)) {
+            let mut x = line.trim().to_string();
+            if ui {
+                x = x.trim_start_matches(['#', ' ']).trim().to_string();
+                if clen(&x) < 4 || x == title || JUNK.is_match(&x) {
+                    continue;
+                }
+            }
+            if !x.is_empty() && x != "[REDACTED]" && !seen.contains(&x) {
+                seen.insert(x.clone());
+                new.push(x);
+            }
+        }
+        new
+    }
+}
+
+fn el_name(el: Option<&Value>) -> String {
+    for k in ["title", "description", "value"] {
+        let v = el.and_then(|e| e.get(k)).and_then(Value::as_str).unwrap_or("").trim();
+        if !v.is_empty() {
+            return cut(v, 60);
+        }
+    }
+    String::new()
+}
+
+/// 整段都不在电脑前：有在场或心跳记录，但没有一条是 active，也没有打字和发送。
+/// 电脑整夜没睡时每分钟一条离开状态的心跳，以前也会调一次模型，写出「本段无可见操作」
+fn is_idle(events: &[Ev]) -> bool {
+    let tracked = events.iter().any(|e| ty(e) == "presence" || ty(e) == "heartbeat");
+    tracked
+        && !events.iter().any(|e| {
+            ((ty(e) == "presence" || ty(e) == "heartbeat") && s(e, "state") == "active")
+                || ty(e) == "keyboard.text_input"
+                || ty(e) == "keyboard.submit"
+        })
+}
+
+/// Python 的 round：四舍六入五成双
+fn py_round(x: f64) -> i64 {
+    x.round_ties_even() as i64
+}
+
+impl Summarizer {
+    pub fn new(root: PathBuf) -> Self {
+        Summarizer { root }
+    }
+
+    fn devices(&self) -> PathBuf {
+        self.root.join("devices")
+    }
+
+    fn out_dir(&self) -> PathBuf {
+        self.root.join("summaries")
+    }
+
+    /// 各台 Mac 的分段目录名（已排序、去重）
+    pub fn segment_names(&self) -> Vec<String> {
+        let mut out = BTreeSet::new();
+        for dev in read_dir_sorted(&self.devices()) {
+            let n = dev.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if !n.starts_with("mac-") {
+                continue;
+            }
+            for seg in read_dir_sorted(&dev.join("segments")) {
+                let name = seg.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                if SEG_RE.is_match(&name) && seg.join("events.jsonl").is_file() {
+                    out.insert(name);
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    fn seg_files(&self, name: &str) -> Vec<PathBuf> {
+        read_dir_sorted(&self.devices())
+            .into_iter()
+            .filter(|d| d.file_name().map(|x| x.to_string_lossy().starts_with("mac-")).unwrap_or(false))
+            .map(|d| d.join("segments").join(name).join("events.jsonl"))
+            .filter(|p| p.is_file())
+            .collect()
+    }
+
+    /// 各台 Mac 同一分段的事件合在一起，按解析后的时间排（旧事件带 +08:00、新的是 UTC）；坏行跳过
+    fn load(&self, name: &str) -> Vec<Ev> {
+        let mut out = vec![];
+        for p in self.seg_files(name) {
+            let bytes = fs::read(&p).unwrap_or_default();
+            for line in String::from_utf8_lossy(&bytes).lines() {
+                if let Ok(Value::Object(e)) = serde_json::from_str::<Value>(line) {
+                    if DateTime::parse_from_rfc3339(s(&e, "timestamp")).is_ok() {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+        out.sort_by_key(ts);
+        out
+    }
+
+    // ---------- 1. 时长表 ----------
+
+    /// 某时段在电脑前的区间和前台窗口区间求交（同 脚本/beayy时长.py 的 query），返回 [(起, 止, app)]
+    fn windows(&self, start: DateTime<Utc>, end: DateTime<Utc>, names: &[String]) -> Vec<(DateTime<Utc>, DateTime<Utc>, String)> {
+        self.compute(start, end, names).windows.into_iter().map(|(a, b, n, _)| (a, b, n)).collect()
+    }
+
+    /// 某时段的电脑活动（页面的实时读数、规矩对照用）
+    pub fn activity(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Activity {
+        self.compute(start, end, &self.segment_names())
+    }
+
+    fn compute(&self, start: DateTime<Utc>, end: DateTime<Utc>, names: &[String]) -> Activity {
+        let mut ev = vec![];
+        for n in names {
+            let slot = seg_start(n);
+            if slot + Duration::minutes(10) <= start || slot >= end {
+                continue;
+            }
+            ev.extend(self.load(n).into_iter().filter(|e| ts(e) >= start && ts(e) < end + Duration::minutes(10)));
+        }
+        ev.sort_by_key(ts);
+        let stop = end.min(Utc::now());
+
+        // 在电脑前的区间
+        let mut spans = vec![];
+        let mut cur: Option<DateTime<Utc>> = None;
+        for e in &ev {
+            let t = ts(e);
+            let typ = ty(e);
+            if typ == "presence" {
+                if s(e, "state") == "active" {
+                    cur = cur.or(Some(t));
+                } else if let Some(c) = cur {
+                    let idle = e.get("idle_seconds").and_then(Value::as_f64).unwrap_or(IDLE_THRESHOLD as f64);
+                    spans.push((c, c.max(t - Duration::milliseconds((idle * 1000.0) as i64))));
+                    cur = None;
+                }
+            } else if LEAVE_TYPES.contains(&typ) && cur.is_some() {
+                spans.push((cur.unwrap(), t));
+                cur = None;
+            } else if BACK_TYPES.contains(&typ)
+                || (typ == "heartbeat" && s(e, "state") == "active" && s(e, "bundle_id") != "com.apple.loginwindow")
+            {
+                cur = cur.or(Some(t));
+            }
+        }
+        if let Some(c) = cur {
+            let last = ev.last().map(ts).unwrap_or(c);
+            spans.push((c, stop.min(last + Duration::seconds(60))));
+        }
+        let spans: Vec<_> = spans.into_iter().map(|(a, b)| (a.max(start), b.min(end))).filter(|(a, b)| b > a).collect();
+
+        // 前台窗口点
+        let points: Vec<(DateTime<Utc>, (String, String))> = ev
+            .iter()
+            .filter(|e| POINT_TYPES.contains(&ty(e)) && !s(e, "app_name").is_empty() && s(e, "bundle_id") != "com.apple.loginwindow")
+            .map(|e| (ts(e), (s(e, "app_name").to_string(), s(e, "bundle_id").to_string())))
+            .collect();
+        let switches = ev.iter().filter(|e| ty(e) == "app.activated" && ts(e) >= start && ts(e) < end).count();
+        let mut intervals = vec![];
+        for w in points.windows(2) {
+            let ((t0, d0), (t1, _)) = (&w[0], &w[1]);
+            if (*t1 - *t0).num_milliseconds() <= MAX_GAP * 1000 {
+                intervals.push((*t0, *t1, d0.clone()));
+            } else {
+                intervals.push((*t0, *t0 + Duration::seconds(60), d0.clone()));
+            }
+        }
+        if let Some((t0, d0)) = points.last() {
+            intervals.push((*t0, stop.min(*t0 + Duration::seconds(60)), d0.clone()));
+        }
+        let mut out = vec![];
+        for (a0, b0, d) in &intervals {
+            for (a, b) in &spans {
+                if b <= a0 || a >= b0 {
+                    continue;
+                }
+                out.push(((*a0).max(*a), (*b0).min(*b), d.0.clone(), d.1.clone()));
+            }
+        }
+        Activity { spans, windows: out, switches }
+    }
+
+    /// 各 app 前台秒数。有 presence/heartbeat 的分段：切换区间 ∩ 在电脑前，心跳兜底；
+    /// 早期分段没有这两类事件，退回只按 app.activated 区间算（开头沿用往前最近一次切换，不扣空闲）。
+    fn durations(&self, name: &str, events: &[Ev], names: &[String]) -> (Vec<(String, f64)>, HashMap<String, String>, &'static str) {
+        let start = seg_start(name);
+        let end = start + Duration::minutes(10);
+        let mut bundles: HashMap<String, String> = HashMap::new();
+        for e in events {
+            if !s(e, "app_name").is_empty() && !s(e, "bundle_id").is_empty() {
+                bundles.insert(s(e, "app_name").into(), s(e, "bundle_id").into());
+            }
+        }
+        let mut sec: Vec<(String, f64)> = vec![];
+        let add = |sec: &mut Vec<(String, f64)>, k: &str, v: f64| match sec.iter_mut().find(|(n, _)| n == k) {
+            Some(x) => x.1 += v,
+            None => sec.push((k.to_string(), v)),
+        };
+        if events.iter().any(|e| ty(e) == "presence" || ty(e) == "heartbeat") {
+            for (a, b, app) in self.windows(start - Duration::minutes(30), end, names) {
+                let (a, b) = (a.max(start), b.min(end));
+                if b > a {
+                    add(&mut sec, &app, (b - a).num_microseconds().unwrap_or(0) as f64 / 1e6);
+                }
+            }
+            let here: f64 = sec.iter().map(|x| x.1).sum();
+            if here < 595.0 {
+                sec.push(("（不在电脑前或没在采）".into(), 600.0 - here));
+            }
+            sec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            return (sec, bundles, "按切换与在电脑前区间求交，心跳兜底");
+        }
+        let mut cur: Option<Ev> = None;
+        let prev: Vec<&String> = names.iter().filter(|n| n.as_str() < name).collect();
+        for p in prev.iter().rev().take(6) {
+            // 往前最多找 1 小时
+            if let Some(a) = self.load(p).into_iter().filter(|e| ty(e) == "app.activated").last() {
+                cur = Some(a);
+                break;
+            }
+        }
+        let mut t = start;
+        let acts: Vec<&Ev> = events.iter().filter(|e| ty(e) == "app.activated").collect();
+        for i in 0..=acts.len() {
+            let e = acts.get(i).copied();
+            let t2 = e.map(|e| ts(e).min(end)).unwrap_or(end);
+            if t2 > t {
+                let d = (t2 - t).num_microseconds().unwrap_or(0) as f64 / 1e6;
+                match &cur {
+                    Some(c) => {
+                        let k = [s(c, "app_name"), s(c, "bundle_id")].into_iter().find(|x| !x.is_empty()).unwrap_or("?").to_string();
+                        add(&mut sec, &k, d);
+                        bundles.entry(k).or_insert_with(|| s(c, "bundle_id").to_string());
+                    }
+                    None => add(&mut sec, "（未知）", d),
+                }
+            }
+            if let Some(e) = e {
+                cur = Some(e.clone());
+                t = t.max(t2);
+            }
+        }
+        sec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        (sec, bundles, "只按切换事件算，未扣空闲")
+    }
+
+    // ---------- 3. 拼包 ----------
+
+    /// 拼好的包、时长表、applications
+    pub fn build_pack(&self, name: &str, events: &[Ev], names: &[String]) -> (String, Vec<String>, i64) {
+        let start = seg_start(name);
+        let (rows, bundles, how) = self.durations(name, events, names);
+        let mut dd = Dedup::default();
+        if let Some(prev) = names.iter().filter(|n| n.as_str() < name).last() {
+            for e in self.load(prev) {
+                if is_text_event(&e) {
+                    dd.feed(&e);
+                }
+            }
+        }
+
+        // 先收成 (时刻, 种类, 正文)，界面文字最后按预算截
+        let mut items: Vec<(String, &'static str, String)> = vec![];
+        let mut clicks: Vec<(String, String, String, String, String)> = vec![];
+        let mut others: Vec<(String, usize)> = vec![];
+        let mut apps: Vec<String> = vec![];
+        let mut urls: HashSet<String> = HashSet::new();
+        let mut last_submit: Option<String> = None;
+        for e in events {
+            let t = ty(e);
+            let hm = hms(ts(e));
+            let mut wh = s(e, "app_name").to_string();
+            let wt = s(e, "window_title");
+            if !wt.is_empty() && wt != wh {
+                wh += &format!("｜{}", cut(wt, 60));
+            }
+            let b = s(e, "bundle_id");
+            if !b.is_empty() && !apps.iter().any(|a| a == b) {
+                apps.push(b.into());
+            }
+            let u = s(e, "url");
+            let url = if u.starts_with("http") && !urls.contains(u) { Some(u.to_string()) } else { None };
+            if let Some(u) = &url {
+                urls.insert(u.clone());
+            }
+            if t == "app.activated" {
+                items.push((hm, "", format!("切到 {wh}")));
+            } else if t == "keyboard.submit" {
+                let text = text_of(e);
+                if last_submit.as_deref() == Some(text.as_str()) {
+                    continue; // 同一条发送偶尔记两次
+                }
+                last_submit = Some(text.clone());
+                let typed = s(e, "typed");
+                let tail = if typed.is_empty() { String::new() } else { format!("（按键原文 {}）", cut(typed, 80)) };
+                items.push((hm, "", format!("[{}] 发送 @{wh}：{}{tail}", actor(e), cut(&text, 500))));
+                dd.feed(e);
+            } else if is_text_event(e) {
+                let new = dd.feed(e);
+                if t == "keyboard.text_input" {
+                    if !new.is_empty() {
+                        items.push((hm, "", format!("[{}] 输入 @{wh}：", actor(e)) + &cut(&new.join(" / "), 1500)));
+                    } else if !s(e, "typed").is_empty() {
+                        items.push((hm, "", format!("[{}] 输入 @{wh}：（读不到输入框，按键原文 {}）", actor(e), cut(s(e, "typed"), 120))));
+                    }
+                } else if !new.is_empty() || url.is_some() {
+                    let u = url.as_ref().map(|u| format!("（{}）", cut(u, 200))).unwrap_or_default();
+                    items.push((hm, "ui", format!("界面 @{wh}{u}：{}", new.join(" / "))));
+                }
+            } else if t == "keyboard.shortcut" {
+                items.push((hm, "", format!("[{}] 快捷键 {} @{wh}", actor(e), s(e, "keys"))));
+            } else if t == "mouse.click" {
+                let n = el_name(e.get("element"));
+                if !n.is_empty() {
+                    let role = e.get("element").and_then(|x| x.get("role")).and_then(Value::as_str).unwrap_or("");
+                    clicks.push((hm, actor(e), wh, role.strip_prefix("AX").unwrap_or(role).to_string(), n));
+                }
+            } else if t == "presence" {
+                items.push((hm, "", if s(e, "state") == "idle" { "离开电脑".into() } else { "回到电脑前".into() }));
+            } else if let Some(label) = match t {
+                "system.sleep" => Some("睡眠"),
+                "system.wake" => Some("唤醒"),
+                "screen.sleep" => Some("屏幕关"),
+                "screen.wake" => Some("屏幕开"),
+                "screen.locked" => Some("锁屏"),
+                "screen.unlocked" => Some("解锁"),
+                _ => None,
+            } {
+                items.push((hm, "", label.into()));
+            } else if let Some(u) = &url {
+                items.push((hm, "", format!("网址 @{wh}：{}", cut(u, 200))));
+            } else if !NOISE.contains(&t) && !["keyboard.return", "heartbeat", "window.changed"].contains(&t) {
+                match others.iter_mut().find(|(k, _)| k == t) {
+                    Some(x) => x.1 += 1,
+                    None => others.push((t.to_string(), 1)),
+                }
+            }
+        }
+
+        // 点击：连续落在同一 app＋窗口的合成一行
+        let mut click_lines: Vec<((String, String), Vec<String>, String)> = vec![];
+        for (hm, who, wh, role, n) in clicks {
+            let label = format!("{role}「{n}」");
+            match click_lines.last_mut() {
+                Some(last) if last.0 == (who.clone(), wh.clone()) => {
+                    if last.1.last() != Some(&label) {
+                        last.1.push(label); // 连点同一处只记一次
+                    }
+                }
+                _ => click_lines.push(((who, wh), vec![label], hm)),
+            }
+        }
+        for ((who, wh), its, hm) in click_lines {
+            items.push((hm, "", format!("[{who}] 点击 @{wh}：") + &its.iter().take(30).cloned().collect::<Vec<_>>().join("、")));
+        }
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let end = start + Duration::minutes(10);
+        let mut head = vec![
+            format!(
+                "时段：{}–{}（北京时间）",
+                start.with_timezone(&Local).format("%Y-%m-%d %H:%M"),
+                end.with_timezone(&Local).format("%H:%M")
+            ),
+            String::new(),
+            format!("前台时长（代码{how}）："),
+        ];
+        head.extend(rows.iter().map(|(k, v)| format!("- {k}：{} 秒", py_round(*v))));
+        if !others.is_empty() {
+            head.push(String::new());
+            head.push("其他事件计数：".to_string() + &others.iter().map(|(k, v)| format!("{k}×{v}")).collect::<Vec<_>>().join("，"));
+        }
+        head.push(String::new());
+        head.push("时间线（[人]＝用户本人键鼠，[代理]＝AI 等程序合成的键鼠；「界面」＝窗口里新出现的文字）：".into());
+
+        // 超预算先压界面文字，再压其他长行，最后丢中间
+        let mut timeline: Vec<String> = vec![];
+        let mut pack = String::new();
+        for (ui_cap, cap) in [(2000, 2000), (1000, 2000), (500, 600), (250, 300), (120, 300)] {
+            timeline = items.iter().map(|(hm, k, x)| format!("{hm} {}", cut(x, if *k == "ui" { ui_cap } else { cap }))).collect();
+            pack = head.iter().chain(timeline.iter()).cloned().collect::<Vec<_>>().join("\n");
+            if clen(&pack) <= PACK_CHARS {
+                break;
+            }
+        }
+        while clen(&pack) > PACK_CHARS && timeline.len() > 20 {
+            let mid = timeline.len() / 2;
+            timeline.drain(mid - 5..(mid + 5).min(timeline.len()));
+            let mut all = head.clone();
+            all.extend(timeline[..mid].iter().cloned());
+            all.push("……（中间略）".into());
+            all.extend(timeline[mid..].iter().cloned());
+            pack = all.join("\n");
+        }
+        for (k, _) in &rows {
+            if let Some(b) = bundles.get(k) {
+                if !b.is_empty() && !apps.contains(b) {
+                    apps.push(b.clone());
+                }
+            }
+        }
+        let active = rows.iter().filter(|(k, _)| !k.starts_with('（')).map(|(_, v)| v).sum::<f64>().round() as i64;
+        (pack, apps, active)
+    }
+
+    // ---------- 4. 调模型 ----------
+
+    fn settings(&self) -> (String, String) {
+        let raw: Map<String, Value> = fs::read_to_string(self.root.join("settings.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let get = |k: &str, d: &str| raw.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
+        (get("gateway", GATEWAY), get("summary_model", MODEL))
+    }
+
+    fn call_model(&self, pack: &str, prior: &str, known: &[String]) -> Result<(Map<String, Value>, Value), String> {
+        let mut user = String::new();
+        if !known.is_empty() {
+            user += &format!("已有的项目名（同一件事请沿用这里的写法）：{}\n\n", known.join("、"));
+        }
+        if !prior.is_empty() {
+            user += &format!("上一段摘要：{prior}\n\n");
+        }
+        user += pack;
+        self.chat(&format!("{PROMPT}{ACTIVITY_GUIDE}"), &user)
+    }
+
+    /// 给别处用：问一次模型，要一个 JSON 对象回来
+    pub fn ask(&self, system: &str, user: &str) -> Result<Map<String, Value>, String> {
+        self.chat(system, user).map(|x| x.0)
+    }
+
+    /// 调网关，要一个 JSON 对象回来；返回（对象，用量）
+    fn chat(&self, system: &str, user: &str) -> Result<(Map<String, Value>, Value), String> {
+        let (gateway, model) = self.settings();
+        if model.is_empty() {
+            return Err("还没设模型：到设置 → 高级 里填摘要用的模型".into());
+        }
+        let key = api_key()?;
+        let body = json!({"model": model, "temperature": 0.3, "messages": [
+            {"role": "system", "content": system}, {"role": "user", "content": user}]});
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .proxy(None)
+            .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            .build()
+            .into();
+        let url = format!("{}/chat/completions", gateway.trim_end_matches('/'));
+        let fence = Regex::new(r"^```(?:json)?\s*|\s*```$").unwrap();
+        let mut err = String::new();
+        for _ in 0..3 {
+            // 网关偶发 5xx、模型偶发不出 JSON：重试
+            let r = agent
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", UA)
+                .header("Authorization", &format!("Bearer {key}"))
+                .send_json(&body);
+            let r: Result<Value, String> = r.map_err(|e| e.to_string()).and_then(|mut resp| resp.body_mut().read_json::<Value>().map_err(|e| e.to_string()));
+            match r {
+                Ok(v) => {
+                    let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+                    let text = fence.replace_all(&text, "").to_string();
+                    let (Some(a), Some(b)) = (text.find('{'), text.rfind('}')) else {
+                        err = format!("模型没返回 JSON：{}", cut(&text, 200));
+                        continue;
+                    };
+                    match serde_json::from_str::<Value>(&text[a..=b]) {
+                        Ok(Value::Object(j)) => return Ok((j, v.get("usage").cloned().unwrap_or(json!({})))),
+                        Ok(_) => err = "模型返回的不是对象".into(),
+                        Err(e) => err = e.to_string(),
+                    }
+                }
+                Err(e) => err = e,
+            }
+        }
+        Err(format!("模型调用失败：{err}"))
+    }
+
+    // ---------- 5. 写 Markdown ----------
+
+    fn existing(&self, name: &str) -> Vec<PathBuf> {
+        let stamp = name.strip_suffix('Z').unwrap_or(name);
+        let prefix = format!("{stamp}-");
+        read_dir_sorted(&self.out_dir())
+            .into_iter()
+            .filter(|p| {
+                let f = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                f.starts_with(&prefix) && f.ends_with("-10min-memory-summary.md")
+            })
+            .collect()
+    }
+
+    fn prior_summary(&self, name: &str, names: &[String]) -> String {
+        let re = Regex::new(r"(?m)^description: (.*)$").unwrap();
+        if let Some(prev) = names.iter().filter(|n| n.as_str() < name).last() {
+            for p in self.existing(prev) {
+                if let Some(c) = fs::read_to_string(&p).ok().and_then(|t| re.captures(&t).map(|c| c[1].to_string())) {
+                    return c;
+                }
+            }
+        }
+        String::new()
+    }
+
+    fn render(&self, name: &str, j: &Map<String, Value>, apps: &[String], active: i64) -> String {
+        let one = |v: Option<&Value>| -> String {
+            let x = match v {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Null) | None => String::new(),
+                Some(o) => o.to_string(),
+            };
+            x.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        let mut md = vec![
+            "---".to_string(),
+            format!("title: {}", one(j.get("title"))),
+            format!("description: {}", one(j.get("description"))),
+            format!("applications: [{}]", apps.join(", ")),
+            format!("active_sec: {active}"),
+            format!("parts: {}", Value::Array(norm_parts(j.get("parts")))),
+            "---".into(),
+            String::new(),
+            "## Memory summary".into(),
+            String::new(),
+            match j.get("memory_summary") {
+                Some(Value::String(s)) => s.trim().to_string(),
+                Some(o) => o.to_string(),
+                None => String::new(),
+            },
+            String::new(),
+        ];
+        let prior = one(j.get("prior_context"));
+        if !prior.is_empty() {
+            md.extend(["### Relevant prior context".into(), String::new(), prior, String::new()]);
+        }
+        let ctx: Vec<String> = j.get("context").and_then(Value::as_array).map(|a| a.iter().map(|c| one(Some(c))).filter(|c| !c.is_empty()).collect()).unwrap_or_default();
+        if !ctx.is_empty() {
+            md.push("### Important non-obvious context about the user".into());
+            md.push(String::new());
+            md.extend(ctx.iter().map(|c| format!("- {c}")));
+            md.push(String::new());
+        }
+        md.push("## Recording summary".into());
+        md.push(String::new());
+        for sec in j.get("recording").and_then(Value::as_array).cloned().unwrap_or_default() {
+            md.push(format!("### {}", one(sec.get("heading"))));
+            md.push(String::new());
+            for b in sec.get("bullets").and_then(Value::as_array).cloned().unwrap_or_default() {
+                md.push(format!("- {}", one(Some(&b))));
+            }
+            md.push(String::new());
+        }
+        md.push("## Citations".into());
+        md.push(String::new());
+        md.extend(self.seg_files(name).iter().map(|p| format!("- {}", p.display())));
+        md.push(String::new());
+        md.join("\n")
+    }
+
+    /// 写一份「不在电脑前」的固定摘要（不调模型），换掉这一段已有的
+    fn write_idle(&self, name: &str) -> bool {
+        let j: Map<String, Value> = serde_json::from_value(json!({
+            "title": IDLE_TITLE, "description": IDLE_TEXT, "memory_summary": IDLE_TEXT,
+            "prior_context": "", "context": [], "recording": []
+        }))
+        .unwrap();
+        for p in self.existing(name) {
+            let _ = fs::remove_file(p);
+        }
+        let out = self.out_dir().join(format!("{}-{}-10min-memory-summary.md", name.trim_end_matches('Z'), suffix()));
+        fs::write(&out, self.render(name, &j, &[], 0)).is_ok()
+    }
+
+    /// 把已经写过、但整段不在电脑前的分段换成固定摘要（以前每段都调了模型）。返回换掉的段数
+    pub fn redo_idle(&self) -> usize {
+        let mut n = 0;
+        for name in self.segment_names() {
+            let old = self.existing(&name);
+            if old.is_empty() {
+                continue;
+            }
+            let already = old.iter().any(|p| fs::read_to_string(p).map(|t| t.contains(&format!("title: {IDLE_TITLE}\n"))).unwrap_or(false));
+            if !already && is_idle(&self.load(&name)) && self.write_idle(&name) {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// 某个分段拼好的包（调试用，不调模型）
+    pub fn dry_run(&self, name: &str) -> String {
+        let names = self.segment_names();
+        let events = self.load(name);
+        self.build_pack(name, &events, &names).0
+    }
+
+    /// 写摘要。`pick` 为空＝所有已结束、还没写过的分段；指定分段名时已写过的也重写。每段一行日志交给 `log`。
+    pub fn run(&self, pick: &[String], mut log: impl FnMut(String)) -> usize {
+        let names = self.segment_names();
+        let now = Utc::now();
+        let todo: Vec<String> = if pick.is_empty() {
+            names.iter().filter(|n| seg_start(n) + Duration::minutes(10) <= now && self.existing(n).is_empty()).cloned().collect()
+        } else {
+            pick.to_vec()
+        };
+        let _ = fs::create_dir_all(self.out_dir());
+        let known = self.known_projects();
+        let mut written = 0;
+        for name in todo {
+            let events = self.load(&name);
+            let (pack, apps, active) = self.build_pack(&name, &events, &names);
+            if !events.iter().any(|e| !NOISE.contains(&ty(e))) {
+                log(format!("{name}：没有活动事件，跳过"));
+                continue;
+            }
+            if is_idle(&events) {
+                if self.write_idle(&name) {
+                    written += 1;
+                    log(format!("{name}：不在电脑前，不调模型"));
+                }
+                continue;
+            }
+            match self.call_model(&pack, &self.prior_summary(&name, &names), &known) {
+                Ok((j, usage)) => {
+                    for p in self.existing(&name) {
+                        let _ = fs::remove_file(p); // 指定重写时换掉旧的
+                    }
+                    let out = self.out_dir().join(format!("{}-{}-10min-memory-summary.md", name.trim_end_matches('Z'), suffix()));
+                    match fs::write(&out, self.render(&name, &j, &apps, active)) {
+                        Ok(_) => {
+                            written += 1;
+                            let u = |k: &str| usage.get(k).map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+                            log(format!(
+                                "{name}：包 {} 字，用量 {}+{} token → {}",
+                                clen(&pack),
+                                u("prompt_tokens"),
+                                u("completion_tokens"),
+                                out.file_name().unwrap().to_string_lossy()
+                            ));
+                        }
+                        Err(e) => log(format!("{name}：写文件失败 {e}")),
+                    }
+                }
+                Err(e) => {
+                    // 和 Python 版一样：模型失败就停，下一轮再补
+                    log(format!("{name}：{e}"));
+                    break;
+                }
+            }
+        }
+        written
+    }
+}
+
+const PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上 10 分钟的活动记录：前台时长、输入与发送的原文、点到的界面元素、界面文字。
+请据此写这 10 分钟的摘要，全部用中文，description 里用第二人称「你」，正文用「用户」。
+要求：
+- 只写材料里看得到的事，不编造；看不到的就不写，不要写「材料未显示」「不确定」这类话。不写具体秒数和次数（数字由程序另列）。
+- [代理] 标的是 AI 或程序代为操作，要和用户本人的操作分开写。
+- 只返回一个 JSON 对象，不要代码块，字段：
+  title: 15 字以内的标题
+  description: 一两句，概括你这 10 分钟在做什么、有什么结果
+  memory_summary: 一段 80–150 字，写主线任务和进展
+  prior_context: 一两句，承接上一段的背景（没有上一段就空字符串）
+  context: 3–6 条字符串数组，每条「名称：说明」，写出现的文档、项目、会话、联系人这类以后回看需要的线索
+  recording: 1–3 个对象的数组，每个 {\"heading\": 小标题, \"bullets\": [2–5 条具体经过]}
+  parts: 1–3 个对象的数组，这 10 分钟的时间花在哪，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1
+";
+
+/// 类型（在做什么）：两级，互不重叠、合起来不遗漏。一级按「这段时间的主要产出」分，判定顺序见 ACTIVITY_GUIDE
+pub const ACTIVITY_TREE: &[(&str, &[&str])] = &[
+    ("创作", &["编码", "写作", "设计", "数据分析"]),
+    ("沟通", &["即时消息", "邮件", "会议通话"]),
+    ("获取", &["调研", "学习"]),
+    ("管理", &["规划", "事务", "整理"]),
+    ("休闲", &["影音", "游戏", "社交媒体"]),
+    ("其他", &["其他"]),
+];
+
+/// 项目的一级：领域（为了什么）。二级项目从内容里提取，每个项目只属于一个领域
+pub const DOMAINS: &[&str] = &["工作", "成长", "生活", "健康", "关系", "休闲"];
+
+/// 二级类型 → 一级
+pub fn activity_group(act: &str) -> &'static str {
+    ACTIVITY_TREE.iter().find(|(g, xs)| xs.contains(&act) || *g == act).map(|(g, _)| *g).unwrap_or("其他")
+}
+
+fn is_activity(act: &str) -> bool {
+    ACTIVITY_TREE.iter().any(|(_, xs)| xs.contains(&act))
+}
+
+/// 模型偶尔不照原词填（带编号、括号说明，或用旧叫法），尽量认出来；认不出才算「其他」
+pub fn canon_activity(raw: &str) -> String {
+    let s: String = raw.split(['（', '(']).next().unwrap_or("").trim().trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ').trim().to_string();
+    // 只给了一级（如「创作」）：按一级记，统计时显示成这一类下面的「未细分」
+    if is_activity(&s) || ACTIVITY_TREE.iter().any(|(g, _)| *g == s) {
+        return s;
+    }
+    if let Some(x) = ACTIVITY_TREE.iter().flat_map(|(_, xs)| xs.iter()).find(|x| **x != "其他" && s.contains(**x)) {
+        return x.to_string();
+    }
+    const OLD: &[(&str, &str)] = &[
+        ("开发", "编码"), ("代码", "编码"), ("调试", "编码"), ("部署", "编码"), ("数据", "数据分析"), ("会议", "会议通话"), ("通话", "会议通话"),
+        ("沟通", "即时消息"), ("聊天", "即时消息"), ("娱乐", "影音"), ("视频", "影音"), ("阅读", "调研"), ("浏览", "调研"), ("文档", "写作"),
+        ("配置", "整理"), ("安排", "规划"), ("测试", "编码"), ("审阅", "调研"), ("评审", "调研"),
+    ];
+    OLD.iter().find(|(k, _)| s.contains(k)).map(|(_, v)| v.to_string()).unwrap_or_else(|| "其他".into())
+}
+
+const ACTIVITY_GUIDE: &str = "    activity 只能填下面的二级类型（如「编码」，不要只填一级「创作」）。按这个顺序判断，落进第一个符合的：
+      1 创作——这段时间产出了东西：编码（写代码、调试、部署，包括让 AI 代写代码）、写作（文档、方案、报告、笔记）、设计（界面、图形、样式）、数据分析（报表、表格、算数据）
+      2 沟通——对象是具体的人、要对方回应：即时消息（微信、飞书等聊天）、邮件、会议通话
+      3 获取——只输入信息、没有产出：调研（为手头的事查资料、读网页）、学习（为长期能力：课程、读书、练习）
+      4 管理——安排和维护，不产出主体内容：规划（日程、任务、排期）、事务（行政、财务、购物、办手续）、整理（文件、系统、工具配置）
+      5 休闲——不为任何目的：影音、游戏、社交媒体（刷信息流）
+      都不是：其他
+    domain 是这件事为了什么，只能填：工作（为收入或职业：雇主、客户、自己的产品）、成长（为提升自己）、生活（家庭、财务、住行等个人事务）、健康（身体和心理）、关系（家人朋友、社交）、休闲（纯放松）
+    project 是这段在推进的具体项目、产品、客户或事情，用最短的常用叫法（如「官网改版」「张三的合同」）；不要拿聊天会话、文档、窗口的标题当项目名，要写这件事本身；同一件事优先沿用「已有的项目名」里的写法；看不出就写空字符串。
+";
+
+const ROLLUP_PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上一个小时里每 10 分钟的摘要。请把它们合成这一小时的摘要，全部用中文，用第二人称「你」。
+只写摘要里有的事，不编造，不要写「材料未显示」这类话，不写具体分钟数。
+只返回一个 JSON 对象，不要代码块，字段：
+  title: 15 字以内的标题，写这一小时的主线
+  description: 一两句，概括这一小时做了什么、推进到哪
+";
+
+const ALIAS_PROMPT: &str = "下面是一个人最近用过的项目名（括号里是出现次数和当时判断的领域）。
+1. 有些名字说的是同一件事（同一个产品、项目、客户），只是叫法不同。把它们合并，每组选一个最常用、最简短的作规范名。拿不准的不要合并。
+2. 给每个规范名定一个领域，只能填：工作、成长、生活、健康、关系、休闲。
+只返回一个 JSON 对象，不要代码块：{\"aliases\": {\"别名\": \"规范名\", ...}, \"domains\": {\"规范名\": \"领域\", ...}}。aliases 只列需要改名的。
+";
+
+const TAG_PROMPT: &str = "下面是用户电脑上一段 10 分钟活动的摘要。判断这段时间花在哪。只返回一个 JSON 对象，不要代码块，字段：
+  parts: 1–3 个对象的数组，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1
+";
+
+fn api_key() -> Result<String, String> {
+    api_key_with_source().map(|(k, _)| k)
+}
+
+/// 密钥从哪来：env／keychain／tools_md；都没有返回 None（设置页显示用）
+pub fn api_key_source() -> Option<&'static str> {
+    api_key_with_source().ok().map(|(_, s)| s)
+}
+
+fn api_key_with_source() -> Result<(String, &'static str), String> {
+    for var in ["BEAYY_API_KEY", "LIFE_RECORD_API_KEY"] {
+        if let Ok(k) = std::env::var(var) {
+            if !k.is_empty() {
+                return Ok((k, "env"));
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(o) = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", "api_key", "-w"])
+        .output()
+    {
+        let k = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if o.status.success() && !k.is_empty() {
+            return Ok((k, "keychain"));
+        }
+    }
+    Err("还没有模型密钥：到设置 → 高级 里存一把".to_string())
+}
+
+/// 文件名里的 4 个随机字母
+fn suffix() -> String {
+    let mut x = (Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64) ^ ((std::process::id() as u64) << 32);
+    (0..4)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let c = (x % 52) as u8;
+            (if c < 26 { b'a' + c } else { b'A' + c - 26 }) as char
+        })
+        .collect()
+}
+
+fn read_dir_sorted(p: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = fs::read_dir(p).map(|r| r.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    v.sort();
+    v
+}
+
+// ---------- 时间花在哪：活动类型＋项目（通用提取，不预设任何人的项目） ----------
+
+/// 模型给的 parts 规整一下：类型不在清单里算「其他」，项目去空白，占比归一，最多 3 条
+pub fn norm_parts(v: Option<&Value>) -> Vec<Value> {
+    let mut out: Vec<(String, String, String, f64)> = vec![];
+    for x in v.and_then(Value::as_array).cloned().unwrap_or_default() {
+        let act = canon_activity(x.get("activity").and_then(Value::as_str).unwrap_or(""));
+        let dom = x.get("domain").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let dom = if DOMAINS.contains(&dom.as_str()) { dom } else { "工作".to_string() };
+        let proj: String = x.get("project").and_then(Value::as_str).unwrap_or("").trim().chars().take(30).collect();
+        let share = x.get("share").and_then(Value::as_f64).unwrap_or(0.0).max(0.0);
+        match out.iter_mut().find(|(a, d, p, _)| *a == act && *d == dom && *p == proj) {
+            Some(o) => o.3 += share,
+            None => out.push((act, dom, proj, share)),
+        }
+    }
+    out.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
+    out.truncate(3);
+    let total: f64 = out.iter().map(|x| x.3).sum();
+    let n = out.len() as f64;
+    out.into_iter()
+        .map(|(a, d, p, sh)| {
+            let share = if total > 0.0 { sh / total } else { 1.0 / n };
+            json!({"activity": a, "domain": d, "project": p, "share": (share * 100.0).round() / 100.0})
+        })
+        .collect()
+}
+
+/// 摘要文件开头 --- 之间的「键: 值」
+pub fn front(md: &str) -> Map<String, Value> {
+    let mut m = Map::new();
+    let body = md.strip_prefix("---\n").unwrap_or("");
+    for line in body.lines() {
+        if line == "---" {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(": ") {
+            let v = v.trim();
+            let val = if k == "parts" || k == "active_sec" { serde_json::from_str(v).unwrap_or(Value::String(v.into())) } else { Value::String(v.into()) };
+            m.insert(k.to_string(), val);
+        }
+    }
+    m
+}
+
+impl Summarizer {
+    fn alias_path(&self) -> PathBuf {
+        self.root.join("project_aliases.json")
+    }
+
+    fn registry_raw(&self) -> Value {
+        fs::read_to_string(self.alias_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}))
+    }
+
+    fn str_map(v: &Value, key: &str) -> HashMap<String, String> {
+        v.get(key).and_then(Value::as_object).map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|x| (k.clone(), x.to_string()))).collect()).unwrap_or_default()
+    }
+
+    /// 项目登记表：每个规范名属于哪个领域（第一次出现时由模型定，之后固定；用户手动改的优先）
+    pub fn domains(&self) -> HashMap<String, String> {
+        let v = self.registry_raw();
+        let mut m = Self::str_map(&v, "domains");
+        m.extend(Self::str_map(&v, "manual_domains"));
+        m
+    }
+
+    /// 项目别名表 {别名: 规范名}（模型合并同一件事的不同叫法得来；用户手动合并的优先）。连环别名（A→B→C）解到底
+    pub fn aliases(&self) -> HashMap<String, String> {
+        let v = self.registry_raw();
+        let mut m = Self::str_map(&v, "aliases");
+        m.extend(Self::str_map(&v, "manual_aliases"));
+        let resolve = |k: &String| {
+            let mut cur = k.clone();
+            for _ in 0..10 {
+                match m.get(&cur) {
+                    Some(n) if n != &cur => cur = n.clone(),
+                    _ => break,
+                }
+            }
+            cur
+        };
+        m.keys().map(|k| (k.clone(), resolve(k))).collect()
+    }
+
+    /// 用户手动：把项目 from 合并到 into（into 可以是新名字，相当于改名）
+    pub fn merge_project(&self, from: &str, into: &str) -> Result<(), String> {
+        let (from, into) = (from.trim(), into.trim());
+        if from.is_empty() || into.is_empty() || from == into {
+            return Err("项目名不对".into());
+        }
+        self.edit_registry(|v| {
+            let m = v.as_object_mut().unwrap().entry("manual_aliases").or_insert(json!({}));
+            m[from] = json!(into);
+            // into 以前若被合并到别处，取消，免得绕成圈
+            if let Some(o) = m.as_object_mut() {
+                o.remove(into);
+            }
+        })
+    }
+
+    /// 用户手动：改项目所属领域
+    pub fn set_project_domain(&self, project: &str, domain: &str) -> Result<(), String> {
+        if !DOMAINS.contains(&domain) {
+            return Err("领域只能是：工作、成长、生活、健康、关系、休闲".into());
+        }
+        self.edit_registry(|v| {
+            v.as_object_mut().unwrap().entry("manual_domains").or_insert(json!({}))[project] = json!(domain);
+        })
+    }
+
+    fn edit_registry(&self, f: impl FnOnce(&mut Value)) -> Result<(), String> {
+        let mut v = self.registry_raw();
+        if !v.is_object() {
+            v = json!({});
+        }
+        f(&mut v);
+        fs::write(self.alias_path(), serde_json::to_string_pretty(&v).unwrap_or_default()).map_err(|e| e.to_string())
+    }
+
+    /// 出现了别名表没见过的项目名，就让模型把最近 30 天的项目名整体过一遍，合并同一件事的叫法
+    pub fn update_aliases(&self, mut log: impl FnMut(String)) {
+        let mut count: HashMap<String, usize> = HashMap::new();
+        let mut seen_dom: HashMap<String, String> = HashMap::new();
+        let cutoff = Utc::now() - Duration::days(30);
+        for p in read_dir_sorted(&self.out_dir()) {
+            let f = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if f.len() < 19 || NaiveDateTime::parse_from_str(&f[..19], "%Y-%m-%dT%H-%M-%S").map(|t| t.and_utc() < cutoff).unwrap_or(true) {
+                continue;
+            }
+            for x in front(&fs::read_to_string(&p).unwrap_or_default()).get("parts").and_then(Value::as_array).cloned().unwrap_or_default() {
+                if let Some(pj) = x["project"].as_str().filter(|s| !s.is_empty()) {
+                    *count.entry(pj.to_string()).or_default() += 1;
+                    if let Some(d) = x["domain"].as_str() {
+                        seen_dom.entry(pj.to_string()).or_insert_with(|| d.to_string());
+                    }
+                }
+            }
+        }
+        let raw: Value = fs::read_to_string(self.alias_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({}));
+        let seen: HashSet<String> = raw.get("seen").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        if count.len() < 2 || count.keys().all(|k| seen.contains(k)) {
+            return;
+        }
+        let mut names: Vec<(String, usize)> = count.into_iter().collect();
+        names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let list = names.iter().map(|(n, c)| format!("{n}（{c} 次，{}）", seen_dom.get(n).map(String::as_str).unwrap_or("未判断"))).collect::<Vec<_>>().join("\n");
+        match self.chat(ALIAS_PROMPT, &list) {
+            Ok((j, _)) => {
+                let valid: HashSet<&str> = names.iter().map(|x| x.0.as_str()).collect();
+                let aliases: Map<String, Value> = j
+                    .get("aliases")
+                    .and_then(Value::as_object)
+                    .map(|m| m.iter().filter(|(k, v)| valid.contains(k.as_str()) && v.as_str().map(|s| !s.is_empty() && s != k.as_str()).unwrap_or(false)).map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default();
+                // 领域：已经定过的不改（同一个项目前后一致），新的用模型给的
+                let mut domains: Map<String, Value> = raw.get("domains").and_then(Value::as_object).cloned().unwrap_or_default();
+                for (k, v) in j.get("domains").and_then(Value::as_object).cloned().unwrap_or_default() {
+                    if v.as_str().map(|d| DOMAINS.contains(&d)).unwrap_or(false) && !domains.contains_key(&k) {
+                        domains.insert(k, v);
+                    }
+                }
+                log(format!("项目名合并：{}；领域：{}", Value::Object(aliases.clone()), Value::Object(domains.clone())));
+                // 用户手动改的原样保留
+                let mut out = json!({"aliases": aliases, "domains": domains, "seen": names.iter().map(|x| x.0.clone()).collect::<Vec<_>>()});
+                for k in ["manual_aliases", "manual_domains"] {
+                    if let Some(m) = raw.get(k) {
+                        out[k] = m.clone();
+                    }
+                }
+                let _ = fs::write(self.alias_path(), serde_json::to_string_pretty(&out).unwrap_or_default());
+            }
+            Err(e) => log(format!("项目名合并：{e}")),
+        }
+    }
+
+    fn rollup_dir(&self) -> PathBuf {
+        self.root.join("summaries-1h")
+    }
+
+    /// 最近两周用过的项目名，按出现次数排，给模型沿用（同一件事前后叫法一致）
+    fn known_projects(&self) -> Vec<String> {
+        let cutoff = Utc::now() - Duration::days(14);
+        let mut count: HashMap<String, usize> = HashMap::new();
+        for p in read_dir_sorted(&self.out_dir()) {
+            let f = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if f.len() < 19 || NaiveDateTime::parse_from_str(&f[..19], "%Y-%m-%dT%H-%M-%S").map(|t| t.and_utc() < cutoff).unwrap_or(true) {
+                continue;
+            }
+            let fm = front(&fs::read_to_string(&p).unwrap_or_default());
+            for x in fm.get("parts").and_then(Value::as_array).cloned().unwrap_or_default() {
+                if let Some(pj) = x.get("project").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    *count.entry(pj.to_string()).or_default() += 1;
+                }
+            }
+        }
+        // 按别名表归到规范名
+        let al = self.aliases();
+        let mut canon: HashMap<String, usize> = HashMap::new();
+        for (k, c) in count {
+            *canon.entry(al.get(&k).cloned().unwrap_or(k)).or_default() += c;
+        }
+        let mut v: Vec<(String, usize)> = canon.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v.into_iter().take(30).map(|x| x.0).collect()
+    }
+
+    /// 给还没有 parts 的旧摘要补上（只用摘要文字问一次模型，便宜），顺带补 active_sec。返回补了几段
+    pub fn tag_backfill(&self, mut log: impl FnMut(String)) -> usize {
+        let names = self.segment_names();
+        let mut known = self.known_projects();
+        let mut n = 0;
+        for p in read_dir_sorted(&self.out_dir()) {
+            let f = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if !f.ends_with("-10min-memory-summary.md") || f.len() < 19 {
+                continue;
+            }
+            let md = fs::read_to_string(&p).unwrap_or_default();
+            let fm = front(&md);
+            if fm.contains_key("parts") {
+                continue;
+            }
+            let name = format!("{}Z", &f[..19]);
+            let idle = fm.get("title").and_then(Value::as_str) == Some(IDLE_TITLE);
+            let events = self.load(&name);
+            let active = if idle || events.is_empty() { 0 } else { self.build_pack(&name, &events, &names).2 };
+            let parts = if idle {
+                vec![]
+            } else {
+                let mut user = String::new();
+                if !known.is_empty() {
+                    user += &format!("已有的项目名（同一件事请沿用这里的写法）：{}\n\n", known.join("、"));
+                }
+                user += &md.split("## Citations").next().unwrap_or(&md).to_string();
+                match self.chat(&format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &user) {
+                    Ok((j, _)) => {
+                        let raw: Vec<String> = j.get("parts").and_then(Value::as_array).map(|a| a.iter().map(|x| x["activity"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+                        let n = norm_parts(j.get("parts"));
+                        if n.iter().any(|x| x["activity"] == "其他") {
+                            log(format!("{name}：模型给的类型 {raw:?}"));
+                        }
+                        n
+                    }
+                    Err(e) => {
+                        log(format!("{name}：{e}"));
+                        break;
+                    }
+                }
+            };
+            for x in &parts {
+                if let Some(pj) = x["project"].as_str().filter(|s| !s.is_empty()) {
+                    if !known.iter().any(|k| k == pj) {
+                        known.push(pj.to_string());
+                    }
+                }
+            }
+            let new = md.replacen("\n---\n", &format!("\nactive_sec: {active}\nparts: {}\n---\n", Value::Array(parts.clone())), 1);
+            if fs::write(&p, new).is_ok() {
+                n += 1;
+                log(format!("{name}：补标签 {}", Value::Array(parts)));
+            }
+        }
+        n
+    }
+
+    /// 小时摘要：一个小时结束、里面有活动的分段都写好了 10 分钟摘要，就把它们合成一段
+    /// （整小时都不在电脑前就不调模型）。写到 summaries-1h/<UTC 小时>-1h.md。返回写了几段
+    pub fn rollups(&self, mut log: impl FnMut(String)) -> usize {
+        let names = self.segment_names();
+        let now = Utc::now();
+        let mut hours: Vec<String> = names.iter().map(|n| n[..13].to_string()).collect();
+        hours.dedup();
+        let _ = fs::create_dir_all(self.rollup_dir());
+        let mut n = 0;
+        for h in hours {
+            let out = self.rollup_dir().join(format!("{h}-00-00-1h.md"));
+            let Ok(start) = NaiveDateTime::parse_from_str(&format!("{h}-00-00"), "%Y-%m-%dT%H-%M-%S").map(|t| t.and_utc()) else { continue };
+            if out.exists() || start + Duration::minutes(61) > now {
+                continue;
+            }
+            let segs: Vec<&String> = names.iter().filter(|x| x.starts_with(&h)).collect();
+            let mut rows = vec![];
+            let mut ready = true;
+            for seg in &segs {
+                match self.existing(seg).first() {
+                    Some(p) => rows.push((seg.to_string(), front(&fs::read_to_string(p).unwrap_or_default()))),
+                    None => {
+                        // 有活动却还没摘要：等下一轮（没活动的分段本来就不写摘要）
+                        if self.load(seg).iter().any(|e| !NOISE.contains(&ty(e))) {
+                            ready = false;
+                        }
+                    }
+                }
+            }
+            if !ready || rows.is_empty() {
+                continue;
+            }
+            // 按秒累计项目和类型
+            let mut agg: Vec<(String, String, f64)> = vec![];
+            let mut active = 0i64;
+            for (_, fm) in &rows {
+                let sec = fm.get("active_sec").and_then(Value::as_i64).unwrap_or(0);
+                active += sec;
+                for x in fm.get("parts").and_then(Value::as_array).cloned().unwrap_or_default() {
+                    let (a, p) = (x["activity"].as_str().unwrap_or("其他").to_string(), x["project"].as_str().unwrap_or("").to_string());
+                    let v = sec as f64 * x["share"].as_f64().unwrap_or(0.0);
+                    match agg.iter_mut().find(|y| y.0 == a && y.1 == p) {
+                        Some(y) => y.2 += v,
+                        None => agg.push((a, p, v)),
+                    }
+                }
+            }
+            agg.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+            let parts = Value::Array(agg.iter().map(|(a, p, v)| json!({"activity": a, "project": p, "sec": v.round() as i64})).collect());
+            let all_idle = rows.iter().all(|(_, fm)| fm.get("title").and_then(Value::as_str) == Some(IDLE_TITLE));
+            let (title, desc) = if all_idle {
+                (IDLE_TITLE.to_string(), "这一小时没有键鼠操作（离开、锁屏或睡眠）。".to_string())
+            } else {
+                let mut user = String::new();
+                for (seg, fm) in &rows {
+                    let t = seg_start(seg);
+                    let g = |k: &str| fm.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                    user += &format!("{}–{} 〔{}〕{}\n", hms(t)[..5].to_string(), hms(t + Duration::minutes(10))[..5].to_string(), g("title"), g("description"));
+                }
+                match self.chat(ROLLUP_PROMPT, &user) {
+                    Ok((j, _)) => (
+                        j.get("title").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "),
+                        j.get("description").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "),
+                    ),
+                    Err(e) => {
+                        log(format!("{h} 小时摘要：{e}"));
+                        break;
+                    }
+                }
+            };
+            let md = format!(
+                "---\ntitle: {title}\ndescription: {desc}\nactive_sec: {active}\nparts: {parts}\nsegments: [{}]\n---\n",
+                rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>().join(", ")
+            );
+            if fs::write(&out, md).is_ok() {
+                n += 1;
+                log(format!("{h} 小时摘要：{title}"));
+            }
+        }
+        n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splitlines_like_python() {
+        assert_eq!(split_lines("a\nb\r\nc\n"), vec!["a", "b", "c"]);
+        assert_eq!(split_lines(""), Vec::<&str>::new());
+        assert_eq!(split_lines("a\n\nb"), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn junk_and_round() {
+        assert!(JUNK.is_match("3.4k 个 token"));
+        assert!(JUNK.is_match("Claude 运行中"));
+        assert!(!JUNK.is_match("正常一行字"));
+        assert_eq!(py_round(2.5), 2);
+        assert_eq!(py_round(3.5), 4);
+    }
+}

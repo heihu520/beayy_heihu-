@@ -1,0 +1,12 @@
+// Beayy 同步服务：sync.beayy.com。只存端到端加密后的数据块（方案见 报告/方案_20261016_多设备同步.md）。
+// 部署：CLOUDFLARE_API_TOKEN=<主 token> npx wrangler@4 deploy；邀请码：npx wrangler@4 secret put INVITE
+{
+  "name": "beayy-sync",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "sync.beayy.com", "custom_domain": true }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "beayy-sync" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "beayy-sync", "database_id": "589ef894-add4-4b94-8800-ee4b26904b86" }]
+}

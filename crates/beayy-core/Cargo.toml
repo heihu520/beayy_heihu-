@@ -1,0 +1,11 @@
+[package]
+name = "beayy-core"
+description = "Beayy 事件格式与写入、设备名、数据目录、设置（各平台共用）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true

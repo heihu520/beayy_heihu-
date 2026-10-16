@@ -1,0 +1,25 @@
+[package]
+name = "beayy"
+description = "Beayy（Be Authentic. Your Yesterdays.）Tauri 2 外壳：菜单栏、主窗口、给网页的命令、定时任务"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+beayy-core.workspace = true
+beayy-phone.workspace = true
+beayy-capture.workspace = true
+beayy-summary.workspace = true
+beayy-sync.workspace = true
+regex = "1"
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"

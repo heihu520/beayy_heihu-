@@ -1,0 +1,19 @@
+[package]
+name = "beayy-sync"
+description = "多设备同步客户端：分段文件压缩、端到端加密后上传 sync.beayy.com，下载别的设备的分段（方案见 报告/方案_20261016_多设备同步.md）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+beayy-core.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+chacha20poly1305 = "0.10"
+miniz_oxide = "0.8"
+base64 = "0.22"
+getrandom = "0.2"
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
+argon2 = "0.5"
+hkdf = "0.12"
+sha2 = "0.10"

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Be Authentic. Your Yesterdays.</title>
+  <script>
+    // 主题和侧栏收起状态先于样式生效，免得闪一下
+    try {
+      const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t;
+      if (localStorage.getItem("side") === "collapsed") document.documentElement.dataset.side = "collapsed";
+    } catch (e) {}
+    if (window.__TAURI__) document.documentElement.classList.add("is-tauri");
+  </script>
+  <link rel="stylesheet" href="vendor/moxian/tokens.css">
+  <link rel="stylesheet" href="vendor/moxian/bundle.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="mx-side" id="side">
+      <!-- 顶上这一行只留给窗口按钮和工具条（照 Claude：红绿灯右边是 收起、后退、前进），可拖动窗口 -->
+      <div class="mx-side-head" data-tauri-drag-region></div>
+      <nav class="mx-nav" id="nav">
+        <a href="#/today" data-page="today" title="今天"><svg class="mx-ico lu" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><span>今天</span></a>
+        <a href="#/summary" data-page="summary" title="总结"><svg class="mx-ico lu" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><span>总结</span></a>
+        <a href="#/rules" data-page="rules" title="规矩"><svg class="mx-ico lu" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg><span>规矩</span></a>
+        <a href="#/devices" data-page="devices" title="设备"><svg class="mx-ico lu" viewBox="0 0 24 24"><path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/></svg><span>设备</span><i class="nav-dot" id="dev-dot" hidden></i></a>
+      </nav>
+      <div class="side-fill"></div>
+      <!-- 左下角照 Claude：头像＋名字·状态，点开向上弹出菜单（设置在这里，⌘, 直达） -->
+      <div class="mx-side-foot me-wrap">
+        <div class="mx-menu me-menu" role="menu" id="me-menu" hidden></div>
+        <button class="me" id="me" data-page="settings" aria-haspopup="menu" aria-expanded="false" title="账号与设置"><span class="avatar" id="me-avatar"></span><span class="me-name"><span id="me-name"></span><span class="me-sub" id="me-sub"></span></span><svg class="mx-ico lu me-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+      </div>
+    </aside>
+    <!-- 照 Claude：收起／展开侧栏、后退、前进，固定在红绿灯右边，侧栏收起时也在 -->
+    <div class="titlebar" data-tauri-drag-region></div>
+    <div class="win-tools">
+      <button class="mx-iconbtn" id="side-toggle" aria-label="收起侧栏" title="收起侧栏"><svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></button>
+      <button class="mx-iconbtn" id="go-back" aria-label="后退" title="后退"><svg class="mx-ico lu" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
+      <button class="mx-iconbtn" id="go-fwd" aria-label="前进" title="前进"><svg class="mx-ico lu" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>
+    </div>
+    <main class="body" id="main">
+      <div class="page" id="app"></div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
