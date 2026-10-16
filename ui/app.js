@@ -152,7 +152,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
     <div class="mx-dialog-foot">${cancel ? `<button class="mx-btn mx-btn--secondary" data-dlg="close">${esc(cancel)}</button>` : ""}${ok ? `<button class="mx-btn mx-btn--${okClass}" data-dlg="ok">${esc(ok)}</button>` : ""}</div></div>`;
   document.body.appendChild(root);
   const el = root.querySelector(".mx-dialog"), okBtn = root.querySelector('[data-dlg="ok"]'), err = root.querySelector('[data-dlg="err"]');
-  const d = (DLG = { root, el, busy: false, back: document.activeElement });
+  const d = (DLG = { root, el, closable, busy: false, back: document.activeElement });
   d.setErr = (m) => { err.hidden = !m; err.textContent = m || ""; };
   d.setOk = (text) => { if (okBtn) okBtn.textContent = text; };
   d.go = async () => {
@@ -192,7 +192,7 @@ function closeDialog() {
 }
 
 /** 弹层里的一项输入 */
-const dlgField = (id, label, { type = "text", ph = "", value = "", mono = type !== "text", help = "" } = {}) =>
+const dlgField = (id, label, { type = "text", ph = "", value = "", mono = false, help = "" } = {}) =>
   `<div class="mx-field"><label for="${id}">${label}</label><input class="mx-input${mono ? " mono" : ""}" id="${id}" type="${type}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(value)}">${help ? `<p class="note">${help}</p>` : ""}</div>`;
 const dlgVal = (el, id) => { const x = el.querySelector("#" + id); return x ? x.value.trim() : ""; };
 
@@ -710,7 +710,7 @@ async function renderDevices() {
   const [devs, st, sy] = await Promise.all([call("list_devices").catch(() => []), call("get_status"), call("sync_status").catch(() => ({}))]);
   // 登录着的设备：进页面取一次，失败（没网、令牌失效）就不显示
   if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices") renderDevices(); }).catch(() => {}); }
-  S.status = st; renderSide();
+  S.status = st; S.sync = sy; renderSide();
   const perm = st.permissions || {};
   const m = String(st.phone_sync || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
   const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
@@ -756,13 +756,13 @@ function syncCard(sy) {
   const msg = DS.err ? `<div class="mx-field-error">${esc(DS.err)}</div>` : DS.msg ? `<p class="note">${esc(DS.msg)}</p>` : "";
   if (!sy.configured) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status">没登录</span></div>
       <p class="note">登录账号后，这台电脑和 iPhone 的记录在本机加密后同步到云端，别的电脑登录同一个账号就能看到。服务器只存加密后的数据，读不到内容。</p>
-      <div class="btns sync-btns"><a class="mx-btn mx-btn--primary mx-btn--sm" href="#/settings">去登录或注册</a></div></section>`;
+      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></div></section>`;
   if (!sy.email) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--warn">要设账号</span></div>
       <p class="note">这台电脑用的是早期的配对码账号。到设置里设好邮箱和主密码，别的设备用邮箱登录就行，已经同步的数据不用重传。</p>
-      <div class="btns sync-btns"><a class="mx-btn mx-btn--primary mx-btn--sm" href="#/settings">去设置</a></div></section>`;
+      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button></div></section>`;
   if (sy.need_login) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--warn">要重新登录</span></div>
       <p class="note">这台电脑的登录已经失效（在别的设备上用恢复码重设了主密码，或者把这台移除了）。重新登录后接着同步。</p>
-      <div class="btns sync-btns"><a class="mx-btn mx-btn--primary mx-btn--sm" href="#/settings">重新登录</a></div></section>`;
+      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button></div></section>`;
   const sessions = (DS.account && DS.account.sessions) || [];
   const me = DS.account && DS.account.session;
   return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--${sy.last_error ? "warn" : "ok"}">${sy.running || DS.busy ? "同步中…" : sy.last_error ? "上次有错" : "已开"}</span></div>
@@ -777,6 +777,9 @@ function syncCard(sy) {
 
 function bindSync() {
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
+  on("ac-login", () => loginDialog("login"));
+  on("ac-signup", () => loginDialog("signup"));
+  on("ac-claim", claimDialog);
   on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = null; renderDevices(); try { const r = await call("sync_now"); DS.msg = `上传 ${r.uploaded} 段，下载 ${r.downloaded} 段${r.errors.length ? "，有错：" + r.errors.join("；") : ""}`; } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
   $app.querySelectorAll("[data-sess]").forEach((b) => (b.onclick = () => { DS.removing = b.dataset.sess; renderDevices(); }));
   $app.querySelectorAll("[data-sess-keep]").forEach((b) => (b.onclick = () => { DS.removing = null; renderDevices(); }));
@@ -794,21 +797,13 @@ const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.st
 const KEY_SOURCE = { keychain: "已存（钥匙串）", env: "在用环境变量里的" };
 const DELETES = [["15", "最近 15 分钟"], ["60", "最近 1 小时"], ["today", "今天全部"]];
 const SS = { deleting: null, deleted: null, advanced: false };
-/** 头像和名称：editing 时显示编辑框；draftAvatar＝选了还没保存的头像（null＝用首字母） */
-const PF = { editing: false, draftAvatar: undefined, err: null };
-/** 项目：merging＝{from, into} 等确认 */
-const PJ = { merging: null, err: null, list: null };
+/** 项目列表（设置页进来时取一次，改过后重取） */
+const PJ = { err: null, list: null };
 
 function profileRow() {
   const pf = S.profile || { name: "我" };
-  if (!PF.editing) return `<div class="mx-setting"><div class="profile"><span class="avatar big">${avatarHtml(pf)}</span><div><div class="mx-setting-name">${esc(pf.name)}</div><div class="mx-setting-desc">${pf.email ? esc(pf.email) : "显示在左下角"}</div></div></div>
+  return `<div class="mx-setting"><div class="profile"><span class="avatar big">${avatarHtml(pf)}</span><div><div class="mx-setting-name">${esc(pf.name)}</div><div class="mx-setting-desc">${pf.email ? esc(pf.email) : "显示在左下角"}</div></div></div>
       <button class="mx-btn mx-btn--secondary mx-btn--sm" id="pf-edit">编辑</button></div>`;
-  const shown = PF.draftAvatar === undefined ? pf : { ...pf, avatar: PF.draftAvatar };
-  return `<div class="acct pf-edit"><div class="profile"><span class="avatar big">${avatarHtml(shown)}</span>
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="pf-pick">换头像</button><button class="mx-btn mx-btn--text mx-btn--sm" id="pf-clear">用名字首字</button><input type="file" id="pf-file" accept="image/*" hidden></div></div>
-    <div class="mx-field"><label for="pf-name">名称</label><input class="mx-input" id="pf-name" value="${esc(pf.name)}" maxlength="40"></div>
-    ${PF.err ? `<div class="mx-field-error">${esc(PF.err)}</div>` : ""}
-    <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="pf-cancel">取消</button><button class="mx-btn mx-btn--primary" id="pf-save">保存</button></div></div>`;
 }
 
 /** 选的图片居中裁成方的、缩到 128 像素，转成 JPEG data URL */
@@ -826,21 +821,36 @@ function shrinkImage(file) {
   });
 }
 
-function bindProfile() {
-  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  on("pf-edit", () => { PF.editing = true; PF.draftAvatar = undefined; PF.err = null; renderSettings(); });
-  on("pf-cancel", () => { PF.editing = false; renderSettings(); });
-  on("pf-pick", () => document.getElementById("pf-file").click());
-  on("pf-clear", () => { PF.draftAvatar = null; renderSettings(); });
-  const file = document.getElementById("pf-file");
-  if (file) file.onchange = async () => { if (!file.files[0]) return; try { PF.draftAvatar = await shrinkImage(file.files[0]); } catch (x) { PF.err = String(x); } const n = document.getElementById("pf-name").value; renderSettings().then(() => { document.getElementById("pf-name").value = n; }); };
-  on("pf-save", async () => {
-    const name = document.getElementById("pf-name").value.trim();
-    if (!name) { PF.err = "名称不能空。"; return renderSettings(); }
-    const avatar = PF.draftAvatar === undefined ? (S.profile || {}).avatar || null : PF.draftAvatar;
-    try { await call("save_profile", { name, avatar }); S.profile = await call("get_profile"); PF.editing = false; PF.err = null; renderSide(); } catch (x) { PF.err = String(x); }
-    renderSettings();
+/** 编辑头像和名称（小弹层）。avatar：undefined＝没动，null＝改用名字首字 */
+function profileDialog() {
+  const pf = S.profile || { name: "我" };
+  let avatar;
+  openDialog({
+    title: "编辑个人资料", ok: "保存",
+    body: `<div class="profile"><span class="avatar big" id="pf-av">${avatarHtml(pf)}</span>
+        <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="pf-pick">换头像</button><button class="mx-btn mx-btn--text mx-btn--sm" id="pf-clear">用名字首字</button><input type="file" id="pf-file" accept="image/*" hidden></div></div>
+      ${dlgField("pf-name", "名称", { value: pf.name || "", help: pf.email ? "显示在左下角，换设备登录也是这个。" : "显示在左下角。" })}`,
+    onOpen: (el, d) => {
+      const av = el.querySelector("#pf-av"), file = el.querySelector("#pf-file"), name = el.querySelector("#pf-name");
+      name.maxLength = 40;
+      const show = () => (av.innerHTML = avatarHtml({ name: name.value.trim() || pf.name, avatar: avatar === undefined ? pf.avatar : avatar }));
+      name.oninput = show;
+      el.querySelector("#pf-pick").onclick = () => file.click();
+      el.querySelector("#pf-clear").onclick = () => { avatar = null; show(); };
+      file.onchange = async () => { if (!file.files[0]) return; try { avatar = await shrinkImage(file.files[0]); d.setErr(null); show(); } catch (x) { d.setErr(String(x)); } };
+    },
+    submit: async (el) => {
+      const name = dlgVal(el, "pf-name");
+      if (!name) throw "名称不能空。";
+      await call("save_profile", { name, avatar: avatar === undefined ? pf.avatar || null : avatar });
+      S.profile = await call("get_profile"); renderSide(); renderSettings();
+    },
   });
+}
+
+function bindProfile() {
+  const b = document.getElementById("pf-edit");
+  if (b) b.onclick = profileDialog;
 }
 
 const DOMAINS = ["工作", "成长", "生活", "健康", "关系", "休闲"];
@@ -852,91 +862,154 @@ function projectsSection() {
   const byDom = DOMAINS.map((d) => [d, list.filter((p) => p.domain === d)]).filter(([, xs]) => xs.length);
   const rows = byDom.map(([d, xs]) => `<div class="pj-group">${d}</div>` + xs.map((p) => `<div class="pj-row" data-p="${esc(p.name)}">
       <div class="pj-main"><div class="mx-setting-name">${esc(p.name)}</div><div class="mx-setting-desc">累计 ${dur(p.sec)}${p.aliases.length ? ` · 也叫 ${esc(p.aliases.join("、"))}` : ""}</div></div>
-      <select class="mx-input pj-dom" aria-label="领域">${DOMAINS.map((x) => `<option ${x === p.domain ? "selected" : ""}>${x}</option>`).join("")}</select>
-      <select class="mx-input pj-merge" aria-label="合并到"><option value="">合并到…</option>${list.filter((q) => q.name !== p.name).map((q) => `<option>${esc(q.name)}</option>`).join("")}</select></div>
-      ${PJ.merging && PJ.merging.from === p.name ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>把「${esc(p.name)}」合并到「${esc(PJ.merging.into)}」？</b><span>以前和以后记成「${esc(p.name)}」的时间都算到「${esc(PJ.merging.into)}」。之后还能在这里改。</span></div><button class="mx-btn mx-btn--secondary" id="pj-keep">取消</button><button class="mx-btn mx-btn--primary" id="pj-go">合并</button></div>` : ""}`).join("")).join("");
+      <button class="mx-btn mx-btn--text mx-btn--sm" data-pj-edit>编辑</button></div>`).join("")).join("");
   return section("项目", `<p class="note">项目和它属于哪个领域由摘要自动判断。判断错了在这里改：改领域、把同一件事的不同叫法合并。你改过的，自动判断不会再覆盖。</p><div class="pj">${rows}</div>${PJ.err ? `<div class="mx-field-error">${esc(PJ.err)}</div>` : ""}`);
 }
 
-function bindProjects() {
-  $app.querySelectorAll(".pj-dom").forEach((sel) => (sel.onchange = async () => {
-    try { await call("set_project_domain", { project: sel.closest("[data-p]").dataset.p, domain: sel.value }); PJ.list = await call("list_projects"); } catch (x) { PJ.err = String(x); }
-    renderSettings();
-  }));
-  $app.querySelectorAll(".pj-merge").forEach((sel) => (sel.onchange = () => { if (sel.value) { PJ.merging = { from: sel.closest("[data-p]").dataset.p, into: sel.value }; renderSettings(); } }));
-  const keep = document.getElementById("pj-keep"); if (keep) keep.onclick = () => { PJ.merging = null; renderSettings(); };
-  const go = document.getElementById("pj-go"); if (go) go.onclick = async () => {
-    try { await call("merge_project", PJ.merging); PJ.list = await call("list_projects"); } catch (x) { PJ.err = String(x); }
-    PJ.merging = null; renderSettings();
-  };
+/** 编辑一个项目（小弹层）：改领域，或者合并到另一个项目 */
+function projectDialog(p) {
+  const others = (PJ.list || []).filter((q) => q.name !== p.name);
+  const why = "同一件事有两个叫法时，把一个合并到另一个。";
+  let domain = p.domain, into = "";
+  openDialog({
+    title: `编辑「${p.name}」`, ok: "保存",
+    body: `<div class="mx-field" id="pj-dom-f"><label>领域</label><div class="mx-seg" role="tablist" id="pj-dom">${DOMAINS.map((x) => `<button role="tab" aria-selected="${x === domain}" class="${x === domain ? "is-on" : ""}" data-v="${x}">${x}</button>`).join("")}</div></div>
+      ${others.length ? `<div class="mx-field"><label>合并到</label><div class="pick-list" role="listbox" id="pj-into"><button role="option" aria-selected="true" data-v=""><span>不合并</span>${ICON.check}</button>${others.map((q) => `<button role="option" aria-selected="false" data-v="${esc(q.name)}"><span>${esc(q.name)}</span><span class="mx-menu-val">${esc(q.domain)}</span>${ICON.check}</button>`).join("")}</div>
+        <p class="note" id="pj-why">${why}</p></div>` : ""}`,
+    onOpen: (el, d) => {
+      el.querySelector("#pj-dom").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        domain = b.dataset.v;
+        el.querySelectorAll("#pj-dom button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+      };
+      const lst = el.querySelector("#pj-into"); if (!lst) return;
+      lst.onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        into = b.dataset.v;
+        lst.querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", x === b));
+        el.querySelector("#pj-why").textContent = into ? `以前和以后记成「${p.name}」的时间都算到「${into}」。之后还能在这里改。` : why;
+        el.querySelector("#pj-dom-f").hidden = !!into;
+        d.setOk(into ? `合并到「${into}」` : "保存");
+      };
+    },
+    submit: async () => {
+      if (into) await call("merge_project", { from: p.name, into });
+      else if (domain !== p.domain) await call("set_project_domain", { project: p.name, domain });
+      else return;
+      PJ.err = null; PJ.list = await call("list_projects"); renderSettings();
+    },
+  });
 }
 
-/** 账号：mode＝login／signup／recover／claim／password；code＝刚拿到、要给用户看的恢复码 */
-const AC = { mode: "login", busy: false, err: null, msg: null, code: null, showCode: false, confirmLogout: false };
+function bindProjects() {
+  $app.querySelectorAll("[data-pj-edit]").forEach((b) => (b.onclick = () => projectDialog(PJ.list.find((p) => p.name === b.closest("[data-p]").dataset.p))));
+}
+
+/** 账号：msg＝页面上留一句结果；confirmLogout＝退出登录等确认。登录、注册、改密码这些都在小弹层里 */
+const AC = { msg: null, confirmLogout: false };
 
 function accountSection(sy) {
   return section("账号", profileRow() + accountBody(sy));
 }
 
 function accountBody(sy) {
-  const err = AC.err ? `<div class="mx-field-error">${esc(AC.err)}</div>` : "";
-  const msg = AC.msg ? `<p class="note">${esc(AC.msg)}</p>` : "";
-  const f = (id, label, type = "text", ph = "") => `<div class="mx-field"><label for="${id}">${label}</label><input class="mx-input${type === "text" ? "" : " mono"}" id="${id}" type="${type}" autocomplete="off" placeholder="${ph}"></div>`;
-  const codeBox = (code) => `<div class="code-box"><code class="mono">${esc(code)}</code><button class="mx-btn mx-btn--secondary mx-btn--sm" id="copy-rc">复制</button></div>
-    <p class="note warn-text">恢复码是忘了主密码时找回数据的唯一办法：存进密码管理器或抄在纸上。主密码和恢复码都丢了，云端的数据就再也解不开，我们也帮不了。</p>`;
-  if (AC.code) return (`<div class="acct">${codeBox(AC.code)}<div class="btns sync-btns"><button class="mx-btn mx-btn--primary" id="code-done">我已存好</button></div></div>`);
-  if (sy.configured && sy.email && !sy.need_login) {
-    if (AC.mode === "password") return (`<div class="acct">${f("pw1", "新主密码", "password", "至少 8 位")}${f("pw2", "再输一次", "password")}${err}
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="ac-cancel">取消</button><button class="mx-btn mx-btn--primary" id="ac-password" ${AC.busy ? "disabled" : ""}>改主密码</button></div></div>`);
-    return (`<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${esc(sy.email)}</div><div class="mx-setting-desc">记录在这台电脑上加密后同步，别的设备用这个邮箱登录。</div></div>
-        ${AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">退出登录</button></div>` : `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-logout">退出登录</button>`}</div>
-      <div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">主密码</div><div class="mx-setting-desc">只在设备上用，不会发给服务器。</div></div><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-to-password">改主密码</button></div>
-      <div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">恢复码</div><div class="mx-setting-desc">忘了主密码时用它重设。</div></div><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-show-code">${AC.showCode ? "收起" : "显示"}</button></div>
-      ${AC.showCode ? codeBox(AC.showCode) : ""}${msg}${err}`);
-  }
-  if (sy.configured && !sy.email) return (`<div class="acct"><p class="note">这台电脑用的是早期的配对码账号。设好邮箱和主密码，别的设备用邮箱登录就行；已经同步的 ${numText(sy.uploaded)} 段数据不用重传。</p>
-      ${f("em", "邮箱", "text", "you@example.com")}${f("pw1", "主密码", "password", "至少 8 位，记得住又别人猜不到")}${f("pw2", "再输一次", "password")}${err}
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--primary" id="ac-claim" ${AC.busy ? "disabled" : ""}>${AC.busy ? "设置中…" : "设好账号"}</button></div></div>`);
-  const tabs = `<div class="tabs" role="tablist" id="ac-tabs">${[["login", "登录"], ["signup", "注册"], ["recover", "忘了主密码"]].map(([k, v]) => `<button role="tab" class="${AC.mode === k ? "is-on" : ""}" data-mode="${k}">${v}</button>`).join("")}</div>`;
+  const msg = AC.msg ? `<p class="note ac-msg">${esc(AC.msg)}</p>` : "";
+  const row = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>${right}</div>`;
+  const btn = (id, text) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}">${text}</button>`;
+  if (sy.configured && sy.email && !sy.need_login) return row(esc(sy.email), "记录在这台电脑上加密后同步，别的设备用这个邮箱登录。",
+      AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">退出登录</button></div>` : btn("ac-logout", "退出登录"))
+    + row("主密码", "只在设备上用，不会发给服务器。", btn("ac-password", "改主密码"))
+    + row("恢复码", "忘了主密码时用它重设。", btn("ac-show-code", "查看")) + msg;
+  if (sy.configured && !sy.email) return row("邮箱和主密码", `这台电脑用的是早期的配对码账号。设好邮箱和主密码，别的设备用邮箱登录就行；已经同步的 ${numText(sy.uploaded)} 段数据不用重传。`, btn("ac-claim", "设好账号")) + msg;
+  return row(sy.need_login ? "登录已失效" : "没登录",
+    sy.need_login ? "这台电脑的登录已经失效（在别的设备上重设了主密码，或者把这台移除了），重新登录后接着同步。" : "登录后，这台电脑的记录在本机加密后同步到云端，别的设备登录同一个账号就能看到。服务器读不到内容。",
+    `<div class="btns">${sy.need_login ? "" : btn("ac-signup", "注册")}${btn("ac-login", sy.need_login ? "重新登录" : "登录")}</div>`) + msg;
+}
+
+const checkEmail = (e) => { if (!/^[^\s@]+@[^\s@]+$/.test(e)) throw "邮箱格式不对。"; return e; };
+const checkPw = (el) => {
+  const a = el.querySelector("#pw1").value, b = el.querySelector("#pw2");
+  if (a.length < 8) throw "主密码至少 8 位。";
+  if (b && b.value !== a) throw "两次输入的主密码不一样。";
+  return a;
+};
+/** 账号变了：登录着的设备列表重取，当前页重画（设置页和设备页都能开这些弹层） */
+const accountChanged = () => { DS.account = null; return S.page === "devices" ? renderDevices() : renderSettings(); };
+
+/** 登录、注册、用恢复码重设（小弹层，底下可以互相切换） */
+function loginDialog(mode = "login", email = "") {
+  const sy = S.sync || {};
+  const em = dlgField("em", "邮箱", { ph: "you@example.com", value: email || sy.email || "" });
+  const pw2 = dlgField("pw2", "再输一次", { type: "password" });
   const forms = {
-    login: f("em", "邮箱", "text", "you@example.com") + f("pw1", "主密码", "password"),
-    signup: f("em", "邮箱", "text", "you@example.com") + f("pw1", "主密码", "password", "至少 8 位，记得住又别人猜不到") + f("pw2", "再输一次", "password") + f("inv", "邀请码", "password", "现在注册要邀请码"),
-    recover: f("em", "邮箱", "text", "you@example.com") + f("rc", "恢复码", "text", "XXXX-XXXX-…") + f("pw1", "新主密码", "password", "至少 8 位") + f("pw2", "再输一次", "password"),
+    login: ["登录", em + dlgField("pw1", "主密码", { type: "password" }), "登录", "登录中…"],
+    signup: ["注册", em + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + pw2 + dlgField("inv", "邀请码", { type: "password", ph: "现在注册要邀请码" }), "注册并登录", "注册中…"],
+    recover: ["用恢复码重设主密码", em + dlgField("rc", "恢复码", { ph: "XXXX-XXXX-…", mono: true }) + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + pw2, "重设并登录", "重设中…"],
   };
-  const go = { login: "登录", signup: "注册并登录", recover: "重设并登录" }[AC.mode];
-  return (`<div class="acct">${sy.need_login ? `<p class="note warn-text">这台电脑的登录已经失效，重新登录后接着同步。</p>` : `<p class="note">登录后，这台电脑的记录在本机加密后同步到云端，别的设备登录同一个账号就能看到。服务器读不到内容。</p>`}
-    ${tabs}${forms[AC.mode]}${err}<div class="btns sync-btns"><button class="mx-btn mx-btn--primary" id="ac-go" ${AC.busy ? "disabled" : ""}>${AC.busy ? "请稍候…" : go}</button></div></div>`);
+  const links = { login: [["signup", "没有账号？注册"], ["recover", "忘了主密码"]], signup: [["login", "已经有账号？登录"]], recover: [["login", "想起来了？登录"]] }[mode];
+  const [title, body, ok, busy] = forms[mode];
+  openDialog({
+    title, ok, busy,
+    body: (mode === "recover" ? `<p class="note">重设后，之前登录着的设备都要用新主密码重新登录。</p>` : "") + body
+      + `<div class="dlg-links">${links.map(([k, v]) => `<button class="mx-btn mx-btn--text mx-btn--sm" data-to="${k}">${v}</button>`).join("")}</div>`,
+    onOpen: (el) => el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => loginDialog(b.dataset.to, dlgVal(el, "em")))),
+    submit: async (el) => {
+      const email = checkEmail(dlgVal(el, "em"));
+      AC.msg = null;
+      if (mode === "login") await call("account_login", { email, password: el.querySelector("#pw1").value });
+      else if (mode === "signup") { const code = await call("account_signup", { invite: dlgVal(el, "inv"), email, password: checkPw(el) }); setTimeout(() => codeDialog(code, true)); }
+      else { await call("account_recover", { email, code: dlgVal(el, "rc"), password: checkPw(el) }); AC.msg = "已重设主密码并登录。其他设备要用新主密码重新登录。"; }
+      accountChanged();
+    },
+  });
+}
+
+/** 早期配对码账号设邮箱和主密码 */
+function claimDialog() {
+  openDialog({
+    title: "设邮箱和主密码", ok: "设好账号", busy: "设置中…",
+    body: `<p class="note">设好后，别的设备用邮箱和主密码登录。已经同步的数据不用重传。</p>`
+      + dlgField("em", "邮箱", { ph: "you@example.com" }) + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + dlgField("pw2", "再输一次", { type: "password" }),
+    submit: async (el) => {
+      const email = checkEmail(dlgVal(el, "em")), code = await call("account_claim", { email, password: checkPw(el) });
+      AC.msg = null; accountChanged(); setTimeout(() => codeDialog(code, true));
+    },
+  });
+}
+
+function passwordDialog() {
+  openDialog({
+    title: "改主密码", ok: "改主密码", busy: "改密码中…",
+    body: `<p class="note">数据不用重传，别的设备也不用重新登录。下次登录新设备用新主密码。</p>`
+      + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + dlgField("pw2", "再输一次", { type: "password" }),
+    submit: async (el) => { await call("account_password", { password: checkPw(el) }); AC.msg = "主密码已改。"; renderSettings(); },
+  });
+}
+
+/** 恢复码。fresh＝刚注册或刚设好账号：必须点「我已存好」才关 */
+function codeDialog(code, fresh) {
+  openDialog({
+    title: fresh ? "存好恢复码" : "恢复码", closable: !fresh, cancel: fresh ? false : "关闭", ok: fresh ? "我已存好" : "复制恢复码",
+    body: `<div class="code-box"><code class="mono">${esc(code)}</code>${fresh ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="copy-rc" autofocus>复制</button>` : ""}</div>
+      <p class="note warn-text">恢复码是忘了主密码时找回数据的唯一办法：存进密码管理器或抄在纸上。主密码和恢复码都丢了，云端的数据就再也解不开，我们也帮不了。</p>`,
+    onOpen: (el, d) => {
+      const b = el.querySelector("#copy-rc");
+      if (b) b.onclick = async () => { try { await navigator.clipboard.writeText(code); b.textContent = "已复制"; } catch (x) { d.setErr("复制不了，手动选中复制。"); } };
+    },
+    submit: async () => { if (!fresh) { try { await navigator.clipboard.writeText(code); } catch (x) { throw "复制不了，手动选中复制。"; } } },
+  });
 }
 
 function bindAccount() {
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
-  const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
-  const run = async (f) => { AC.busy = true; AC.err = AC.msg = null; renderSettings(); try { await f(); } catch (x) { AC.err = String(x); } AC.busy = false; renderSettings(); };
-  const pw = () => {
-    const a = document.getElementById("pw1").value, b = document.getElementById("pw2");
-    if (a.length < 8) throw "主密码至少 8 位。";
-    if (b && b.value !== a) throw "两次输入的主密码不一样。";
-    return a;
-  };
-  const email = () => { const e = val("em"); if (!/^[^\s@]+@[^\s@]+$/.test(e)) throw "邮箱格式不对。"; return e; };
-  const tabs = document.getElementById("ac-tabs");
-  if (tabs) tabs.onclick = (e) => { const b = e.target.closest("[data-mode]"); if (b) { AC.mode = b.dataset.mode; AC.err = null; renderSettings(); } };
-  on("ac-go", () => run(async () => {
-    if (AC.mode === "login") await call("account_login", { email: email(), password: document.getElementById("pw1").value });
-    else if (AC.mode === "signup") { const e = email(), p = pw(); AC.code = await call("account_signup", { invite: val("inv"), email: e, password: p }); }
-    else { const e = email(), p = pw(); await call("account_recover", { email: e, code: val("rc"), password: p }); AC.msg = "已重设主密码并登录。其他设备要用新主密码重新登录。"; }
-    DS.account = null;
-  }));
-  on("ac-claim", () => run(async () => { const e = email(), p = pw(); AC.code = await call("account_claim", { email: e, password: p }); DS.account = null; }));
-  on("code-done", () => { AC.code = null; AC.msg = null; renderSettings(); });
-  on("copy-rc", async () => { try { await navigator.clipboard.writeText(AC.code || AC.showCode); AC.msg = "恢复码已复制。"; } catch (x) { AC.err = "复制不了，手动选中复制。"; } renderSettings(); });
-  on("ac-to-password", () => { AC.mode = "password"; AC.err = null; renderSettings(); });
-  on("ac-cancel", () => { AC.mode = "login"; AC.err = null; renderSettings(); });
-  on("ac-password", () => run(async () => { const p = pw(); await call("account_password", { password: p }); AC.mode = "login"; AC.msg = "主密码已改。别的设备不受影响，下次登录新设备用新主密码。"; }));
-  on("ac-show-code", async () => { AC.showCode = AC.showCode ? false : await call("account_recovery_code"); renderSettings(); });
+  on("ac-login", () => loginDialog("login"));
+  on("ac-signup", () => loginDialog("signup"));
+  on("ac-claim", claimDialog);
+  on("ac-password", passwordDialog);
+  on("ac-show-code", async () => { try { codeDialog(await call("account_recovery_code"), false); } catch (x) { AC.msg = `取不到恢复码：${x}`; renderSettings(); } });
   on("ac-logout", () => { AC.confirmLogout = true; renderSettings(); });
   on("logout-keep", () => { AC.confirmLogout = false; renderSettings(); });
-  on("logout-go", async () => { await call("account_logout"); AC.confirmLogout = false; AC.mode = "login"; AC.msg = null; DS.account = null; renderSettings(); });
+  on("logout-go", async () => { await call("account_logout"); AC.confirmLogout = false; AC.msg = null; DS.account = null; renderSettings(); });
 }
 
 /** 到明早 8 点还有几分钟 */
@@ -986,11 +1059,8 @@ async function renderSettings() {
     <details class="adv" ${SS.advanced || gwBad ? "open" : ""} id="adv"><summary>高级：摘要用的网关、模型和密钥</summary><div class="stack">
         <div class="mx-field"><label for="gw">网关地址</label><input class="mx-input mono${gwBad ? " is-error" : ""}" id="gw" data-k="gateway" value="${esc(dr.gateway)}">${gwBad ? `<div class="mx-field-error">网关地址要以 https:// 开头，比如 https://api.openai.com/v1</div>` : ""}</div>
         <div class="mx-field"><label for="m1">10 分钟摘要的模型</label><input class="mx-input mono" id="m1" data-k="model_segment" value="${esc(dr.model_segment)}"></div>
-        <div><div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">网关密钥</div><div class="mx-setting-desc">按环境变量、钥匙串、TOOLS.md 的顺序找。存进钥匙串的只能写入，页面读不到。</div></div>
-          <span class="mx-status mx-status--${keySrc ? "ok" : "warn"}">${KEY_SOURCE[keySrc] || "还没有"}</span></div>
-          <div class="mx-field" style="padding-top:14px"><label for="key">${keySrc === "keychain" ? "换一把密钥" : "存一把密钥进钥匙串"}</label>
-            <div class="inline"><input class="mx-input mono" id="key" type="password" autocomplete="off" placeholder="sk-…"><button class="mx-btn mx-btn--secondary" id="key-save">存进钥匙串</button></div>
-            <div class="mx-field-error" id="key-err" hidden></div></div></div></div></details>
+        <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">网关密钥</div><div class="mx-setting-desc">先找环境变量，再找钥匙串。存进钥匙串的只能写入，页面读不到。</div></div>
+          <span class="mx-status mx-status--${keySrc ? "ok" : "warn"}">${KEY_SOURCE[keySrc] || "还没有"}</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="key-edit">${keySrc === "keychain" ? "换一把" : "存一把"}</button></div></div></details>
   </div>`;
 
   const rerender = () => { const f = document.activeElement && document.activeElement.id; renderSettings().then(() => { const el = f && document.getElementById(f); if (el) { el.focus(); if (el.setSelectionRange && el.value) el.setSelectionRange(el.value.length, el.value.length); } }); };
@@ -1034,12 +1104,16 @@ async function renderSettings() {
   document.getElementById("block-new").onkeydown = (e) => { if (e.key === "Enter") addBlock(); };
   const chips = document.getElementById("chips");
   if (chips) chips.onclick = (e) => { const b = e.target.closest("[data-i]"); if (b) { S.draft.blocklist.splice(+b.dataset.i, 1); renderSettings(); } };
-  document.getElementById("key-save").onclick = async () => {
-    const k = document.getElementById("key").value.trim(), err = document.getElementById("key-err");
-    if (!k) { err.hidden = false; err.textContent = "先把密钥粘进上面的框。"; return; }
-    try { await call("set_api_key", { key: k }); S.settings = await call("get_settings"); S.draft = { ...S.draft, has_api_key: true }; renderSettings(); }
-    catch (x) { err.hidden = false; err.textContent = `没存进钥匙串：${x}。再点一次；还不行就看钥匙串访问里同名条目是否被锁住。`; }
-  };
+  document.getElementById("key-edit").onclick = () => openDialog({
+    title: keySrc === "keychain" ? "换一把网关密钥" : "存一把网关密钥", ok: "存进钥匙串",
+    body: dlgField("key", "密钥", { type: "password", ph: "sk-…", mono: true, help: "存进这台电脑的钥匙串，只用来调你在上面填的网关。存好后页面读不到它。" }),
+    submit: async (el) => {
+      const k = dlgVal(el, "key");
+      if (!k) throw "先把密钥粘进上面的框。";
+      try { await call("set_api_key", { key: k }); } catch (x) { throw `没存进钥匙串：${x}。再点一次；还不行就看钥匙串访问里同名条目是否被锁住。`; }
+      S.settings = await call("get_settings"); S.draft = { ...S.draft, has_api_key: true }; renderSettings();
+    },
+  });
   document.getElementById("open-dir").onclick = () => call("open_data_dir");
   const discard = document.getElementById("discard");
   if (discard) {
@@ -1130,6 +1204,8 @@ async function renderOnboarding() {
 
 async function route() {
   const [page = "today", arg] = location.hash.replace(/^#\/?/, "").split("/");
+  // 换页就关掉弹层；刚拿到恢复码那个必须点「我已存好」才关
+  if (DLG && DLG.closable) closeDialog();
   S.page = ["today", "summary", "rules", "devices", "settings"].includes(page) ? page : "today";
   markNav(S.page);
   try {
