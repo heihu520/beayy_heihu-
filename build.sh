@@ -20,6 +20,8 @@ for a in "$@"; do
     --dmg) DMG=1 ;;
   esac
 done
+# 安装包永远是正式版（10-16 发出过带 BEAYY_SHADOW=1 的 0.2.6／0.2.7 Mac 包：装上的人写影子目录、也不检查更新）
+[ "$DMG" = 1 ] && MODE=release
 # 签名身份：环境变量 BEAYY_SIGN_ID 优先，其次 Developer ID Application，没有再用 Apple Development。
 # 系统授权（辅助功能、输入监控、完全磁盘访问）记在签名要求上：测试版和发布的正式版都用 Developer ID，bundle id 也相同，
 # 授权一次两边都有；换成别的证书就得重新授权。
