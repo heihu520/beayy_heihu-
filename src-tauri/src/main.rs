@@ -254,7 +254,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, data::set_api_key, data::delete_since, data::list_devices, icons::get_icons, daily::generate_daily, data::test_model,
+            data::get_settings, data::save_settings, data::set_api_key, data::delete_since, data::list_devices, data::rename_device, icons::get_icons, daily::generate_daily, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,

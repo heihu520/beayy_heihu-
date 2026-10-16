@@ -292,3 +292,4 @@ a.mx-btn { text-decoration: none; }
 .sync-prog { display: flex; flex-direction: column; gap: 6px; }
 .sync-prog-text { display: flex; justify-content: space-between; font-size: 12px; line-height: 16px; color: var(--ink-3); }
 .sync-prog .bar { height: 6px; }
+.dev-acts { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }

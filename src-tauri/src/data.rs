@@ -121,7 +121,7 @@ fn phone_events() -> std::sync::Arc<Vec<PhoneEv>> {
         }
     }
     let v = Arc::new(read_phone_events());
-    *g = Some((Instant::now(), v.clone()));
+    *g = Some((std::time::Instant::now(), v.clone()));
     v
 }
 
@@ -557,6 +557,7 @@ pub fn get_day(date: String) -> Value {
         "hours": hours,
         "segments": segs,
         "computers": computers,
+        "device_names": beayy_sync::device_names(&beayy_core::data_root()),
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
     })
 }
@@ -775,21 +776,29 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
 /// 数据目录里的每台设备（devices/<设备>/）：种类、是不是本机、记录从哪天开始、最近一条、条数、占用空间。缓存 60 秒
 #[tauri::command]
 pub fn list_devices() -> Vec<Value> {
-    use std::sync::{Mutex, OnceLock};
-    use std::time::Instant;
-    static CACHE: OnceLock<Mutex<Option<(Instant, Vec<Value>)>>> = OnceLock::new();
-    let mut g = CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    let mut g = DEV_CACHE.lock().unwrap();
     if let Some((t, v)) = g.as_ref() {
         if t.elapsed().as_secs() < 60 {
             return v.clone();
         }
     }
     let v = read_devices();
-    *g = Some((Instant::now(), v.clone()));
+    *g = Some((std::time::Instant::now(), v.clone()));
     v
 }
 
+static DEV_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
+
+/// 给设备改名（空＝改回默认名），会同步到别的设备
+#[tauri::command]
+pub fn rename_device(id: String, name: String) -> Result<(), String> {
+    beayy_sync::rename_device(&beayy_core::data_root(), &id, &name)?;
+    *DEV_CACHE.lock().unwrap() = None;
+    Ok(())
+}
+
 fn read_devices() -> Vec<Value> {
+    let custom = beayy_sync::device_names(&beayy_core::data_root());
     let me = beayy_core::local_device();
     let synced = beayy_sync::remote_set(&beayy_core::data_root());
     let mut out = vec![];
@@ -821,15 +830,16 @@ fn read_devices() -> Vec<Value> {
             first = ev.first().and_then(|x| Utc.timestamp_opt(x.t as i64, 0).single());
             last = ev.last().and_then(|x| Utc.timestamp_opt(x.t as i64, 0).single());
         }
-        let name = match kind.as_str() {
+        let default_name = match kind.as_str() {
             "mac" => format!("Mac · {}", &id[4..]),
             "iphone" => format!("iPhone · {}", &id[7..]),
             "win" => format!("Windows · {}", &id[4..]),
             _ => id.clone(),
         };
+        let name = custom.get(&id).cloned().unwrap_or_else(|| default_name.clone());
         out.push(json!({
             "synced": synced.contains(&id),
-            "id": id, "kind": kind, "name": name, "this": id == me,
+            "id": id, "kind": kind, "name": name, "default_name": default_name, "custom": custom.contains_key(&id), "this": id == me,
             "first": first.map(utc_iso), "last": last.map(utc_iso),
             "events": events, "bytes": bytes,
         }));

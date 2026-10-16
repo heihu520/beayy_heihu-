@@ -2,6 +2,8 @@
 //!
 //! - 同步单位是一个分段文件 `devices/<设备>/segments/<分段>/events.jsonl`；本机写的 10 分钟摘要也同步，
 //!   块名 `sum.<摘要文件名>`，别的设备下载到 `devices/<设备>/summaries/<摘要文件名>`（时间线显示是哪台电脑的）。
+//! - 设备改名：每台设备把自己改过的名字写在 `<数据根>/device_names.json`（{设备: {name, at}}），块名 `names.json`
+//!   同步；别的设备下载到 `devices/<设备>/device_names.json`，读取时按改名时刻取最新的。
 //! - 下载来的设备目录里放一个 `.synced` 标记：换账号、重登录清了状态以后，也不会把别人的数据当成自己的再传上去。
 //! - 上传前先 deflate 压缩，再用 XChaCha20-Poly1305 加密（随机 24 字节 nonce 放在密文前，AAD＝`<设备>/<分段>`）；
 //!   密钥只在设备上（钥匙串），服务器读不到内容。
@@ -485,6 +487,40 @@ pub fn remote_set(root: &Path) -> BTreeSet<String> {
 }
 
 const SYNCED: &str = ".synced";
+/// 设备改名的块名和本机文件名
+const NAMES: &str = "names.json";
+const NAMES_FILE: &str = "device_names.json";
+
+fn read_names(p: &Path) -> Map<String, Value> {
+    fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+}
+
+/// 各设备的自定义名字（所有设备上改过的，按改名时刻取最新；改回空＝用默认名，不出现在这里）
+pub fn device_names(root: &Path) -> BTreeMap<String, String> {
+    let mut best: BTreeMap<String, (i64, String)> = BTreeMap::new();
+    let mut files = vec![root.join(NAMES_FILE)];
+    if let Ok(it) = fs::read_dir(root.join("devices")) {
+        files.extend(it.flatten().map(|e| e.path().join(NAMES_FILE)));
+    }
+    for f in files {
+        for (id, v) in read_names(&f) {
+            let at = v["at"].as_i64().unwrap_or(0);
+            if best.get(&id).map(|b| at > b.0).unwrap_or(true) {
+                best.insert(id, (at, v["name"].as_str().unwrap_or("").to_string()));
+            }
+        }
+    }
+    best.into_iter().filter(|(_, (_, n))| !n.is_empty()).map(|(id, (_, n))| (id, n)).collect()
+}
+
+/// 给一台设备改名（空＝改回默认名）。写在本机的改名表里，下一轮同步给别的设备
+pub fn rename_device(root: &Path, id: &str, name: &str) -> Result<(), String> {
+    let name: String = name.trim().chars().take(40).collect();
+    let f = root.join(NAMES_FILE);
+    let mut m = read_names(&f);
+    m.insert(id.to_string(), json!({"name": name, "at": chrono::Utc::now().timestamp_millis()}));
+    fs::write(&f, serde_json::to_vec_pretty(&Value::Object(m)).unwrap_or_default()).map_err(|e| e.to_string())
+}
 /// 摘要块名的前缀（分段名都以年份开头，不会撞）
 const SUM: &str = "sum.";
 
@@ -569,6 +605,14 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         let sig = (meta.len(), mtime);
         if st.up.get(&format!("{local_device}/{name}")) != Some(&sig) {
             todo.push((local_device.to_string(), name, f.path(), sig));
+        }
+    }
+    // 本机的设备改名表
+    if let Ok(meta) = fs::metadata(root.join(NAMES_FILE)) {
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        let sig = (meta.len(), mtime);
+        if st.up.get(&format!("{local_device}/{NAMES}")) != Some(&sig) {
+            todo.push((local_device.to_string(), NAMES.to_string(), root.join(NAMES_FILE), sig));
         }
     }
     todo.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
@@ -730,6 +774,9 @@ fn store(root: &Path, d: &str, n: &str, plain: Vec<u8>) -> Result<(), String> {
     let dev = root.join("devices").join(d);
     fs::create_dir_all(&dev).map_err(|e| e.to_string())?;
     let _ = fs::write(dev.join(SYNCED), "");
+    if n == NAMES {
+        return fs::write(dev.join(NAMES_FILE), plain).map_err(|e| e.to_string());
+    }
     if let Some(file) = n.strip_prefix(SUM) {
         // 同一分段重写过的摘要只留最新的（文件名前 19 位是分段开始时刻）
         let dir = dev.join("summaries");

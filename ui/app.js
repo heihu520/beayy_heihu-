@@ -517,10 +517,11 @@ const localHour = (iso) => +hm(iso).slice(0, 2);
 /** 系统界面这类不是「在用的 app」，不画图标 */
 const NOT_APPS = new Set(["com.apple.dock", "com.apple.loginwindow", "com.apple.notificationcenterui", "com.apple.controlcenter", "com.apple.Spotlight", "com.apple.systemuiserver", "com.apple.WindowManager", "org.p0deje.Maccy"]);
 
-/** 这天有几台电脑的摘要；不止一台时，时间线每行标上是哪台 */
-let DAY_COMPUTERS = [];
-/** 设备名 → 简称：mac-… 叫 Mac，win-… 叫 Windows；同一种有两台时带上机器名 */
+/** 这天有摘要的电脑、设备页里改过的名字：时间线每行标上是哪台 */
+let DAY_COMPUTERS = [], DAY_NAMES = {};
+/** 设备 → 标签：改过名用改的名；没改过 mac-… 叫 Mac、win-… 叫 Windows，同一种有两台时带上机器名 */
 function devLabel(dev) {
+  if (DAY_NAMES[dev]) return DAY_NAMES[dev];
   const kind = (x) => (x.startsWith("win-") ? "Windows" : x.startsWith("mac-") ? "Mac" : x);
   const k = kind(dev || "");
   return DAY_COMPUTERS.filter((x) => kind(x) === k).length > 1 ? `${k} · ${dev.replace(/^(mac|win)-/, "")}` : k;
@@ -528,6 +529,7 @@ function devLabel(dev) {
 
 function timelineItems(d) {
   DAY_COMPUTERS = d.computers || [];
+  DAY_NAMES = d.device_names || {};
   const out = [];
   for (const s of d.segments || []) out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
@@ -564,7 +566,7 @@ function tlRow(x) {
     s.recording ? `<div><h4>经过</h4>${md(s.recording)}</div>` : s.memory ? `<div><h4>经过</h4>${md(s.memory)}</div>` : "",
   ].join("");
   const tag = (s.kind === "6h" ? `<span class="mx-tag">6 小时</span>` : s.source === "codex" ? `<span class="mx-tag">Codex</span>` : "")
-    + (DAY_COMPUTERS.length > 1 && s.device ? `<span class="mx-tag">${esc(devLabel(s.device))}</span>` : "");
+    + (s.device ? `<span class="mx-tag">${esc(devLabel(s.device))}</span>` : "");
   return `<details class="tl-row computer" ${h}><summary>${t}<span><span class="name">${esc(s.title || "（没有标题）")}${tag}</span>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ""}${icons(s.apps || [], false)}</span>${more ? `<span class="chev">${ICON.chevR}</span>` : "<span></span>"}</summary>${more ? `<div class="more">${more}</div>` : ""}</details>`;
 }
 
@@ -781,6 +783,8 @@ async function renderDevices() {
   // 登录着的设备：进页面取一次，失败（没网、令牌失效）就不显示
   if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices") renderDevices(); }).catch(() => {}); }
   S.status = st; S.sync = sy; renderSide();
+  // 登录着的设备列表也用改过的名字
+  DS.names = Object.fromEntries(devs.filter((d) => d.custom).map((d) => [d.id, d.name]));
   const perm = st.permissions || {};
   const m = String(st.phone_sync || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
   const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
@@ -796,7 +800,7 @@ async function renderDevices() {
     return `最近一条 ${mdhm(d.last)}`;
   };
   const detail = (d) => {
-    const base = `<dl class="kv"><dt>记录从</dt><dd>${mdhm(d.first)}</dd><dt>最近一条</dt><dd>${mdhm(d.last)}</dd><dt>共</dt><dd>${numText(d.events)} 条 · ${bytesText(d.bytes)}</dd><dt>设备编号</dt><dd class="mono">${esc(d.id)}</dd></dl>`;
+    const base = `<div class="dev-acts"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-rename="${esc(d.id)}">重命名</button></div><dl class="kv"><dt>记录从</dt><dd>${mdhm(d.first)}</dd><dt>最近一条</dt><dd>${mdhm(d.last)}</dd><dt>共</dt><dd>${numText(d.events)} 条 · ${bytesText(d.bytes)}</dd><dt>设备编号</dt><dd class="mono">${esc(d.id)}</dd></dl>`;
     if (d.this && IS_WIN) return base + `<div class="dev-sub">记什么：前台是哪个程序、窗口标题、在不在电脑前。每 10 分钟写一段摘要。打字内容和屏幕上的文字 Windows 版还不记。</div>`;
     if (d.this) return base + `<div class="dev-sub">记什么：切换 app 和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。</div>`
       + `<h4 class="dev-h">权限</h4>` + permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")
@@ -819,8 +823,20 @@ async function renderDevices() {
   document.getElementById("add-dev").onclick = () => openDialog({ title: "添加设备", body: adding, cancel: "关闭" });
   $app.querySelectorAll(".dev-head").forEach((b) => (b.onclick = () => { const id = b.closest(".dev").dataset.id; DS.open = DS.open === id ? null : id; renderDevices(); }));
   $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
+  $app.querySelectorAll("[data-rename]").forEach((b) => (b.onclick = () => renameDialog(devs.find((d) => d.id === b.dataset.rename))));
   bindSync();
   if (sy.running || DS.busy) pollSync();
+}
+
+/** 给设备改名（小弹层）。改的名字会同步到别的设备，时间线上的标签也用它；清空＝改回默认名 */
+function renameDialog(d) {
+  if (!d) return;
+  openDialog({
+    title: "重命名设备", ok: "保存",
+    body: dlgField("dev-name", "名称", { value: d.custom ? d.name : "", ph: d.default_name, help: "时间线上用这个名字标出是哪台。清空就改回默认的名字。会同步到你登录的其他设备。" }),
+    onOpen: (el) => { el.querySelector("#dev-name").maxLength = 40; },
+    submit: async (el) => { await call("rename_device", { id: d.id, name: dlgVal(el, "dev-name") }); renderDevices(); },
+  });
 }
 
 /** 同步进行中：每 2 秒只刷新同步卡片（进度条），同步完了整页重画一次（设备列表、最近一条会变） */
@@ -861,7 +877,7 @@ function syncCard(sy) {
   return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--${sy.last_error ? "warn" : "ok"}">${sy.running || DS.busy ? "同步中…" : sy.last_error ? "上次有错" : "已开"}</span></div>
       <p class="note">${esc(sy.email)} · ${sy.last ? `上次 ${mdhm(sy.last)}` : "还没同步过"} · 已传 ${numText(sy.uploaded)} 段 · 每 5 分钟一轮</p>${bar}
       ${sy.last_error ? `<div class="mx-field-error">${esc(sy.last_error)}</div>` : ""}
-      ${sessions.length ? `<div class="sess"><div class="sess-h">登录着这个账号的设备</div>${sessions.map((x) => `<div class="sess-row"><span>${esc(x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : DS.removing === x.id
+      ${sessions.length ? `<div class="sess"><div class="sess-h">登录着这个账号的设备</div>${sessions.map((x) => `<div class="sess-row"><span>${esc((DS.names || {})[x.device] || x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : DS.removing === x.id
         ? `<span class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" data-sess-keep>取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" data-sess-go="${esc(x.id)}">移除</button></span>`
         : `<button class="mx-btn mx-btn--text mx-btn--sm" data-sess="${esc(x.id)}">移除</button>`}</div>`).join("")}</div>` : ""}
       <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${DS.busy || sy.running ? "disabled" : ""}>立即同步</button></div>
