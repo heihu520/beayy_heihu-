@@ -7,7 +7,7 @@ use beayy_core::default_root;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -305,14 +305,23 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
                 .collect(),
         )
     };
-    let Ok(files) = fs::read_dir(default_root().join("summaries")) else { return out };
-    let mut files: Vec<PathBuf> = files.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    // 本机写的在 summaries/；别的电脑写的经同步落在 devices/<设备>/summaries/（带上是哪台）
+    let me = beayy_core::local_device();
+    let mut files: Vec<(PathBuf, String)> = vec![];
+    let list = |dir: PathBuf| -> Vec<PathBuf> { fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default() };
+    files.extend(list(default_root().join("summaries")).into_iter().map(|p| (p, me.clone())));
+    for dev in list(default_root().join("devices")) {
+        let d = dev.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if d != me && beayy_summary::is_computer(&d) {
+            files.extend(list(dev.join("summaries")).into_iter().map(|p| (p, d.clone())));
+        }
+    }
     files.sort();
     let front_re = Regex::new(r"(?m)^(title|description|applications): (.*)$").unwrap();
     let mem_re = Regex::new(r"(?ms)^## Memory summary\n+(.+?)(?:\n#|\z)").unwrap();
     let ctx_re = Regex::new(r"(?ms)^### Important non-obvious context about the user\n+(.+?)(?:\n#|\z)").unwrap();
     let rec_re = Regex::new(r"(?ms)^## Recording summary\n+(.+?)(?:\n## |\z)").unwrap();
-    for f in files {
+    for (f, device) in files {
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         if !name.ends_with("-memory-summary.md") || name.len() < 19 {
             continue;
@@ -333,7 +342,7 @@ fn self_segments() -> HashMap<String, Vec<Value>> {
         out.entry(date).or_default().push(json!({
             "active_sec": fm.get("active_sec").cloned().unwrap_or(Value::Null),
             "parts": canon(fm.get("parts")),
-            "start": utc_iso(start), "end": utc_iso(end), "kind": if six { "6h" } else { "10min" }, "source": "beayy",
+            "start": utc_iso(start), "end": utc_iso(end), "kind": if six { "6h" } else { "10min" }, "source": "beayy", "device": device,
             "title": front.get("title").cloned().unwrap_or_default(),
             "apps": front.get("applications").map(|a| a.trim_matches(|c| c == '[' || c == ']').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>()).unwrap_or_default(),
             "description": front.get("description").cloned().unwrap_or_default(),
@@ -534,6 +543,10 @@ pub fn get_day(date: String) -> Value {
     segs.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
     let work = work_of(&segs);
     let hours = rollups_of(nd);
+    // 别的电脑「不在电脑前」的段不显示（你在这台用着的时候，那台闲着不用列出来）；有几台电脑的摘要，页面就给每行标上是哪台
+    let me = beayy_core::local_device();
+    segs.retain(|s| s["device"].as_str().map(|d| d == me).unwrap_or(true) || s["title"] != beayy_summary::IDLE_TITLE);
+    let computers: BTreeSet<String> = segs.iter().filter_map(|s| s["device"].as_str().map(String::from)).collect();
     let segs = merge_idle(segs);
     json!({
         "date": date,
@@ -543,6 +556,7 @@ pub fn get_day(date: String) -> Value {
         "work": work,
         "hours": hours,
         "segments": segs,
+        "computers": computers,
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
     })
 }

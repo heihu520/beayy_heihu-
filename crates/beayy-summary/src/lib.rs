@@ -246,8 +246,18 @@ impl Summarizer {
 
     /// 各台电脑同一分段的事件合在一起，按解析后的时间排（旧事件带 +08:00、新的是 UTC）；坏行跳过
     fn load(&self, name: &str) -> Vec<Ev> {
+        self.load_files(self.seg_files(name))
+    }
+
+    /// 只读本机这台电脑的事件：写 10 分钟摘要用。同一个 10 分钟两台电脑都在用时，各写各的，时间线上分开显示
+    fn load_own(&self, name: &str) -> Vec<Ev> {
+        let f = self.devices().join(beayy_core::local_device()).join("segments").join(name).join("events.jsonl");
+        self.load_files(if f.is_file() { vec![f] } else { vec![] })
+    }
+
+    fn load_files(&self, files: Vec<PathBuf>) -> Vec<Ev> {
         let mut out = vec![];
-        for p in self.seg_files(name) {
+        for p in files {
             let bytes = fs::read(&p).unwrap_or_default();
             for line in String::from_utf8_lossy(&bytes).lines() {
                 if let Ok(Value::Object(e)) = serde_json::from_str::<Value>(line) {
@@ -379,7 +389,7 @@ impl Summarizer {
         let prev: Vec<&String> = names.iter().filter(|n| n.as_str() < name).collect();
         for p in prev.iter().rev().take(6) {
             // 往前最多找 1 小时
-            if let Some(a) = self.load(p).into_iter().filter(|e| ty(e) == "app.activated").last() {
+            if let Some(a) = self.load_own(p).into_iter().filter(|e| ty(e) == "app.activated").last() {
                 cur = Some(a);
                 break;
             }
@@ -417,7 +427,7 @@ impl Summarizer {
         let (rows, bundles, how) = self.durations(name, events, names);
         let mut dd = Dedup::default();
         if let Some(prev) = names.iter().filter(|n| n.as_str() < name).last() {
-            for e in self.load(prev) {
+            for e in self.load_own(prev) {
                 if is_text_event(&e) {
                     dd.feed(&e);
                 }
@@ -780,7 +790,7 @@ impl Summarizer {
         let known = self.known_projects();
         let mut written = 0;
         for name in todo {
-            let events = self.load(&name);
+            let events = self.load_own(&name);
             let (pack, apps, active) = self.build_pack(&name, &events, &names);
             if !events.iter().any(|e| !NOISE.contains(&ty(e))) {
                 log(format!("{name}：没有活动事件，跳过"));
@@ -1218,7 +1228,7 @@ impl Summarizer {
             }
             let name = format!("{}Z", &f[..19]);
             let idle = fm.get("title").and_then(Value::as_str) == Some(IDLE_TITLE);
-            let events = self.load(&name);
+            let events = self.load_own(&name);
             let active = if idle || events.is_empty() { 0 } else { self.build_pack(&name, &events, &names).2 };
             let parts = if idle {
                 vec![]

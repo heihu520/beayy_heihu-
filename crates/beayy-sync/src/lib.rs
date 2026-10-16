@@ -1,6 +1,8 @@
 //! 多设备同步客户端。协议见 报告/方案_20261016_多设备同步.md，服务端在 app/sync-server/。
 //!
-//! - 同步单位是一个分段文件 `devices/<设备>/segments/<分段>/events.jsonl`。
+//! - 同步单位是一个分段文件 `devices/<设备>/segments/<分段>/events.jsonl`；本机写的 10 分钟摘要也同步，
+//!   块名 `sum.<摘要文件名>`，别的设备下载到 `devices/<设备>/summaries/<摘要文件名>`（时间线显示是哪台电脑的）。
+//! - 下载来的设备目录里放一个 `.synced` 标记：换账号、重登录清了状态以后，也不会把别人的数据当成自己的再传上去。
 //! - 上传前先 deflate 压缩，再用 XChaCha20-Poly1305 加密（随机 24 字节 nonce 放在密文前，AAD＝`<设备>/<分段>`）；
 //!   密钥只在设备上（钥匙串），服务器读不到内容。
 //! - 本机写的设备（本机电脑、本机读到的 iPhone）只上传；别的设备只下载，写到同样的位置，读取方不用改。
@@ -449,13 +451,29 @@ pub fn status(root: &Path) -> Value {
         "last_error": s.raw.get("last_error"),
         "uploaded": s.up.len(),
         "need_login": s.raw.get("need_login").and_then(Value::as_bool).unwrap_or(false),
-        "remote_devices": s.remote,
+        "remote_devices": remote_set(root),
     })
 }
 
-/// 哪些设备是同步来的（设备页标「经同步」）
+/// 哪些设备是同步来的（设备页标「经同步」）：状态里记的，加上目录里有 .synced 标记的
 pub fn remote_set(root: &Path) -> BTreeSet<String> {
-    read_state(root).remote
+    let mut s = read_state(root).remote;
+    if let Ok(it) = fs::read_dir(root.join("devices")) {
+        for e in it.flatten() {
+            if e.path().join(SYNCED).is_file() {
+                s.insert(e.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+    s
+}
+
+const SYNCED: &str = ".synced";
+/// 摘要块名的前缀（分段名都以年份开头，不会撞）
+const SUM: &str = "sum.";
+
+fn is_remote(root: &Path, st: &State, d: &str) -> bool {
+    st.remote.contains(d) || root.join("devices").join(d).join(SYNCED).is_file()
 }
 
 // ---------- 一轮同步 ----------
@@ -481,7 +499,7 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
     let devs = fs::read_dir(root.join("devices")).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default();
     for dev in devs {
         let d = dev.file_name().to_string_lossy().to_string();
-        let mine = d == local_device || (d.starts_with("iphone-") && !st.remote.contains(&d));
+        let mine = d == local_device || (d.starts_with("iphone-") && !is_remote(root, &st, &d));
         if !mine || !safe_name(&d) || !dev.path().is_dir() {
             continue;
         }
@@ -498,6 +516,20 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
             if st.up.get(&format!("{d}/{name}")) != Some(&sig) {
                 todo.push((d.clone(), name, f, sig));
             }
+        }
+    }
+    // 本机写的 10 分钟摘要（<数据根>/summaries/），块名 sum.<文件名>
+    for f in fs::read_dir(root.join("summaries")).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
+        let file = f.file_name().to_string_lossy().to_string();
+        let name = format!("{SUM}{file}");
+        if !file.ends_with("-memory-summary.md") || !safe_name(&name) {
+            continue;
+        }
+        let Ok(meta) = f.metadata() else { continue };
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        let sig = (meta.len(), mtime);
+        if st.up.get(&format!("{local_device}/{name}")) != Some(&sig) {
+            todo.push((local_device.to_string(), name, f.path(), sig));
         }
     }
     todo.sort_by(|x, y| (&x.0, &x.1).cmp(&(&y.0, &y.1)));
@@ -572,7 +604,7 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
         for it in &items {
             let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
             let updated = it["updated"].as_i64().unwrap_or(0);
-            let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(d).exists() && !st.remote.contains(d));
+            let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(d).exists() && !is_remote(root, &st, d));
             if !mine && safe_name(d) && safe_name(n) {
                 let got = (|| {
                     let mut resp = ag.get(&format!("{}/v1/blob/{d}/{n}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
@@ -581,7 +613,24 @@ pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
                     }
                     let blob = resp.body_mut().with_config().limit(64 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())?;
                     let plain = open(&a, d, n, &blob)?;
-                    let dir = root.join("devices").join(d).join("segments").join(n);
+                    let dev = root.join("devices").join(d);
+                    fs::create_dir_all(&dev).map_err(|e| e.to_string())?;
+                    let _ = fs::write(dev.join(SYNCED), "");
+                    if let Some(file) = n.strip_prefix(SUM) {
+                        // 同一分段重写过的摘要只留最新的（文件名前 19 位是分段开始时刻）
+                        let dir = dev.join("summaries");
+                        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                        if file.len() >= 19 {
+                            for old in fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
+                                let o = old.file_name().to_string_lossy().to_string();
+                                if o != file && o.get(..19) == file.get(..19) {
+                                    let _ = fs::remove_file(old.path());
+                                }
+                            }
+                        }
+                        return fs::write(dir.join(file), plain).map_err(|e| e.to_string());
+                    }
+                    let dir = dev.join("segments").join(n);
                     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                     fs::write(dir.join("events.jsonl"), plain).map_err(|e| e.to_string())
                 })();

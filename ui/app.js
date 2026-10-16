@@ -516,7 +516,17 @@ const localHour = (iso) => +hm(iso).slice(0, 2);
 /** 系统界面这类不是「在用的 app」，不画图标 */
 const NOT_APPS = new Set(["com.apple.dock", "com.apple.loginwindow", "com.apple.notificationcenterui", "com.apple.controlcenter", "com.apple.Spotlight", "com.apple.systemuiserver", "com.apple.WindowManager", "org.p0deje.Maccy"]);
 
+/** 这天有几台电脑的摘要；不止一台时，时间线每行标上是哪台 */
+let DAY_COMPUTERS = [];
+/** 设备名 → 简称：mac-… 叫 Mac，win-… 叫 Windows；同一种有两台时带上机器名 */
+function devLabel(dev) {
+  const kind = (x) => (x.startsWith("win-") ? "Windows" : x.startsWith("mac-") ? "Mac" : x);
+  const k = kind(dev || "");
+  return DAY_COMPUTERS.filter((x) => kind(x) === k).length > 1 ? `${k} · ${dev.replace(/^(mac|win)-/, "")}` : k;
+}
+
 function timelineItems(d) {
+  DAY_COMPUTERS = d.computers || [];
   const out = [];
   for (const s of d.segments || []) out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
@@ -552,7 +562,8 @@ function tlRow(x) {
     ctx.length ? `<div><h4>涉及</h4>${md(ctx.map((y) => "- " + y).join("\n"))}</div>` : "",
     s.recording ? `<div><h4>经过</h4>${md(s.recording)}</div>` : s.memory ? `<div><h4>经过</h4>${md(s.memory)}</div>` : "",
   ].join("");
-  const tag = s.kind === "6h" ? `<span class="mx-tag">6 小时</span>` : s.source === "codex" ? `<span class="mx-tag">Codex</span>` : "";
+  const tag = (s.kind === "6h" ? `<span class="mx-tag">6 小时</span>` : s.source === "codex" ? `<span class="mx-tag">Codex</span>` : "")
+    + (DAY_COMPUTERS.length > 1 && s.device ? `<span class="mx-tag">${esc(devLabel(s.device))}</span>` : "");
   return `<details class="tl-row computer" ${h}><summary>${t}<span><span class="name">${esc(s.title || "（没有标题）")}${tag}</span>${s.description ? `<div class="desc">${esc(s.description)}</div>` : ""}${icons(s.apps || [], false)}</span>${more ? `<span class="chev">${ICON.chevR}</span>` : "<span></span>"}</summary>${more ? `<div class="more">${more}</div>` : ""}</details>`;
 }
 
@@ -779,7 +790,8 @@ async function renderDevices() {
       const [cls, text] = st.paused ? ["", st.paused_until ? `已暂停，${hm(st.paused_until)} 自动继续` : "已暂停"] : missing ? ["warn", "缺权限，展开去授权"] : st.capturing ? ["ok", "记录中"] : ["", "没在记录"];
       return `<span class="dot ${cls}"></span>${text} · 今天已记 ${numText(st.events_today)} 条`;
     }
-    if (d.kind === "iphone") return `<span class="dot ok"></span>经 iCloud 同步，记录到 ${mdhm(m ? m[0] : d.last)}`;
+    if (d.kind === "iphone" && !d.synced) return `<span class="dot ok"></span>经 iCloud 同步，记录到 ${mdhm(m ? m[0] : d.last)}`;
+    if (d.synced) return `从别的设备同步来，最近一条 ${mdhm(d.last)}`;
     return `最近一条 ${mdhm(d.last)}`;
   };
   const detail = (d) => {
