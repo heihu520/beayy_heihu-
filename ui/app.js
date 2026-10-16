@@ -746,6 +746,7 @@ async function renderDevices() {
   };
   const detail = (d) => {
     const base = `<dl class="kv"><dt>记录从</dt><dd>${mdhm(d.first)}</dd><dt>最近一条</dt><dd>${mdhm(d.last)}</dd><dt>共</dt><dd>${numText(d.events)} 条 · ${bytesText(d.bytes)}</dd><dt>设备编号</dt><dd class="mono">${esc(d.id)}</dd></dl>`;
+    if (d.this && IS_WIN) return base + `<div class="dev-sub">记什么：前台是哪个程序、窗口标题、在不在电脑前。每 10 分钟写一段摘要。打字内容和屏幕上的文字 Windows 版还不记。</div>`;
     if (d.this) return base + `<div class="dev-sub">记什么：切换 app 和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。</div>`
       + `<h4 class="dev-h">权限</h4>` + permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")
       + permRow("input_monitoring", "输入监控", "被动监听键盘和鼠标，只用来计时和判断是人还是代理在操作。")
@@ -756,7 +757,7 @@ async function renderDevices() {
   const adding = `<div class="add-dev">
       <div class="add-opt">${DEV_ICON.iphone}<div><b>iPhone</b><span>不用装 app。iPhone 上打开 设置 → 屏幕使用时间 →「跨设备共享」，用同一个 Apple 账号，这台 Mac 就能读到。</span></div></div>
       <div class="add-opt">${DEV_ICON.mac}<div><b>另一台 Mac</b><span>装上 Beayy，在设置里用同一个账号登录，记录就会同步过来，出现在下面的列表里。</span></div></div>
-      <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>Windows 版还没有安装包（代码能编译，没在真机上测过）。</span></div></div>
+      <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>装上 Windows 版，用同一个账号登录。Windows 版目前只记前台程序、窗口标题和在不在电脑前，还在试用。</span></div></div>
     </div>`;
   $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
     + `<div class="reading">${syncCard(sy)}<div class="devs">${devs.map((d) => `<div class="dev${DS.open === d.id ? " open" : ""}" data-id="${esc(d.id)}">
@@ -814,7 +815,10 @@ function bindSync() {
 const THEMES = [["", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
 const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist"];
 const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.stringify(SETTING_KEYS.map((k) => b[k]));
-const KEY_SOURCE = { keychain: "已存（钥匙串）", env: "在用环境变量里的" };
+/** Windows 版：没有钥匙串和系统授权，只记前台窗口和在不在电脑前 */
+const IS_WIN = /Windows/.test(navigator.userAgent);
+const KEY_SOURCE = { keychain: "已存（钥匙串）", file: "已存（数据目录）", env: "在用环境变量里的" };
+const KEY_STORE = IS_WIN ? "数据目录" : "钥匙串";
 const DELETES = [["15", "最近 15 分钟"], ["60", "最近 1 小时"], ["today", "今天全部"]];
 const SS = { deleting: null, deleted: null, advanced: false };
 /** 项目列表（设置页进来时取一次，改过后重取） */
@@ -1079,7 +1083,7 @@ async function renderSettings() {
     <details class="adv" ${SS.advanced || gwBad ? "open" : ""} id="adv"><summary>高级：摘要用的网关、模型和密钥</summary><div class="stack">
         <div class="mx-field"><label for="gw">网关地址</label><input class="mx-input mono${gwBad ? " is-error" : ""}" id="gw" data-k="gateway" value="${esc(dr.gateway)}">${gwBad ? `<div class="mx-field-error">网关地址要以 https:// 开头，比如 https://api.openai.com/v1</div>` : ""}</div>
         <div class="mx-field"><label for="m1">10 分钟摘要的模型</label><input class="mx-input mono" id="m1" data-k="model_segment" value="${esc(dr.model_segment)}"></div>
-        <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">网关密钥</div><div class="mx-setting-desc">先找环境变量，再找钥匙串。存进钥匙串的只能写入，页面读不到。</div></div>
+        <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">网关密钥</div><div class="mx-setting-desc">先找环境变量，再找${KEY_STORE}。存进${KEY_STORE}的只能写入，页面读不到。</div></div>
           <span class="mx-status mx-status--${keySrc ? "ok" : "warn"}">${KEY_SOURCE[keySrc] || "还没有"}</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="key-edit">${keySrc === "keychain" ? "换一把" : "存一把"}</button></div></div></details>
   </div>`;
 
@@ -1125,12 +1129,12 @@ async function renderSettings() {
   const chips = document.getElementById("chips");
   if (chips) chips.onclick = (e) => { const b = e.target.closest("[data-i]"); if (b) { S.draft.blocklist.splice(+b.dataset.i, 1); renderSettings(); } };
   document.getElementById("key-edit").onclick = () => openDialog({
-    title: keySrc === "keychain" ? "换一把网关密钥" : "存一把网关密钥", ok: "存进钥匙串",
-    body: dlgField("key", "密钥", { type: "password", ph: "sk-…", mono: true, help: "存进这台电脑的钥匙串，只用来调你在上面填的网关。存好后页面读不到它。" }),
+    title: keySrc === "keychain" ? "换一把网关密钥" : "存一把网关密钥", ok: `存进${KEY_STORE}`,
+    body: dlgField("key", "密钥", { type: "password", ph: "sk-…", mono: true, help: IS_WIN ? "存在这台电脑的 Beayy 数据目录里（没有加密），只用来调你在上面填的网关。存好后页面读不到它。" : "存进这台电脑的钥匙串，只用来调你在上面填的网关。存好后页面读不到它。" }),
     submit: async (el) => {
       const k = dlgVal(el, "key");
       if (!k) throw "先把密钥粘进上面的框。";
-      try { await call("set_api_key", { key: k }); } catch (x) { throw `没存进钥匙串：${x}。再点一次；还不行就看钥匙串访问里同名条目是否被锁住。`; }
+      try { await call("set_api_key", { key: k }); } catch (x) { throw IS_WIN ? `没存进去：${x}` : `没存进钥匙串：${x}。再点一次；还不行就看钥匙串访问里同名条目是否被锁住。`; }
       S.settings = await call("get_settings"); S.draft = { ...S.draft, has_api_key: true }; renderSettings();
     },
   });
@@ -1169,7 +1173,8 @@ async function renderOnboarding() {
        <div><b>记什么</b><span>电脑：切换了哪个 app 和窗口、打字和发出去的内容、点了什么、屏幕上的文字、在不在电脑前。手机：每个 app 用了多久（看不到 app 里的内容）。密码框不记；你可以指定某些 app 完全不记，也可以随时暂停或删掉最近的记录。</span></div>
        <div><b>存在哪</b><span>全部存在这台电脑上。写摘要时，会把那 10 分钟的记录发给你自己配置的模型服务。开启同步的话，记录在本机加密后再上传，服务器读不到内容。</span></div>
      </div>`,
-    `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。点「去授权」会打开系统设置，把 Beayy 的开关打开再回来。</p>
+    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权，直接下一步。</p><p class="ob-lead">Windows 版目前只记前台是哪个程序、窗口标题，以及你在不在电脑前；打字内容、屏幕上的文字、iPhone 记录还不支持。</p>`
+    : `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。点「去授权」会打开系统设置，把 Beayy 的开关打开再回来。</p>
      ${permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题和屏幕上的文字。")}
      ${permRow("input_monitoring", "输入监控", "知道什么时候在打字、点击，判断是你本人还是程序在操作。")}
      ${permRow("full_disk_access", "完全磁盘访问（可选）", "读 iPhone 经 iCloud 同步过来的屏幕使用时间。iPhone 上要打开 设置 → 屏幕使用时间 →「跨设备共享」。")}`,

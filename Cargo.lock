@@ -185,6 +185,7 @@ dependencies = [
 name = "beayy-summary"
 version = "0.2.0"
 dependencies = [
+ "beayy-core",
  "chrono",
  "regex",
  "serde_json",

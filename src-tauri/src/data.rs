@@ -692,15 +692,10 @@ pub fn save_settings(settings: Value) -> Result<(), String> {
     fs::write(settings_path(), serde_json::to_string_pretty(&Value::Object(s)).unwrap()).map_err(|e| e.to_string())
 }
 
-/// 密钥写进钥匙串（服务 com.fengli.beayy，账号 api_key），不落盘、不回传网页
+/// 存密钥：macOS 进钥匙串，Windows 写数据目录里的文件（见 beayy_summary::store_api_key）；不回传网页
 #[tauri::command]
 pub fn set_api_key(key: String) -> Result<(), String> {
-    let ok = std::process::Command::new("/usr/bin/security")
-        .args(["add-generic-password", "-U", "-s", "com.fengli.beayy", "-a", "api_key", "-w", &key])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if ok { Ok(()) } else { Err("写入钥匙串失败".into()) }
+    beayy_summary::store_api_key(key.trim())
 }
 
 // ---------- 删除记录 ----------

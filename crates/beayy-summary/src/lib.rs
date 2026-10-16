@@ -929,7 +929,39 @@ fn api_key_with_source() -> Result<(String, &'static str), String> {
             return Ok((k, "keychain"));
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(k) = fs::read_to_string(key_file()) {
+        let k = k.trim().to_string();
+        if !k.is_empty() {
+            return Ok((k, "file"));
+        }
+    }
     Err("还没有模型密钥：到设置 → 高级 里存一把".to_string())
+}
+
+/// 没有钥匙串的系统（Windows）上密钥存在数据目录里的这个文件，未加密（和同步账号的存法一样，标注未加固）
+#[cfg(not(target_os = "macos"))]
+fn key_file() -> PathBuf {
+    beayy_core::default_root().join("secrets").join("api_key")
+}
+
+/// 存一把模型密钥：macOS 进钥匙串（服务 com.fengli.beayy，账号 api_key），别的系统写数据目录里的文件
+pub fn store_api_key(key: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let ok = std::process::Command::new("/usr/bin/security")
+            .args(["add-generic-password", "-U", "-s", "com.fengli.beayy", "-a", "api_key", "-w", key])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok { Ok(()) } else { Err("写入钥匙串失败".into()) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let f = key_file();
+        fs::create_dir_all(f.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::write(&f, key).map_err(|e| e.to_string())
+    }
 }
 
 /// 文件名里的 4 个随机字母
