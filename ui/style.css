@@ -1,15 +1,16 @@
 /* Beayy 网页界面：壳和页面按墨线（vendor/moxian/，令牌和组件），作息图、一天的形状、读数按设计系统「人生记录」，
    实现取自 网站/static/style.css，变量加 rec- 前缀，免得和墨线同名。这里不写墨线已有的样式。 */
 
-/* 人生记录的数据颜色：只编码数据源（电脑、手机）和越界（熬夜） */
+/* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜） */
 :root {
   --rec-computer: #2b4cc2; --rec-phone: #e08a1e; --rec-night: #c42a50; --rec-track: #eceee9;
+  --rec-watch: #2f8a57; --rec-place: #d9cdb3; --rec-place-alt: #c4b48f;
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; }
+  :root:not([data-theme="light"]) { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #4d4436; --rec-place-alt: #62563f; }
 }
-:root[data-theme="dark"] { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; }
+:root[data-theme="dark"] { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #4d4436; --rec-place-alt: #62563f; }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
 html, body { height: 100%; }
@@ -53,6 +54,12 @@ body { padding: 0; overflow: hidden; }
 /* ---------- DayStrip 一天的形状、Actogram 作息图（人生记录） ---------- */
 .strip, .strip-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); column-gap: 2px; }
 .strip { row-gap: 3px; }
+/* 地点色带：每段停留按起止画在 0–24 点上，相邻两段交替深浅；地名写在上面 */
+.places { position: relative; height: 18px; margin-bottom: 4px; border-radius: 2px; background: var(--rec-track); overflow: hidden; }
+.places span { position: absolute; top: 0; bottom: 0; background: var(--rec-place); font: 11px/18px var(--font-sans); color: var(--ink); padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.places span.alt { background: var(--rec-place-alt); }
+.strip-rows { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: var(--space-2); align-items: center; row-gap: 3px; }
+.strip-rows > .k { font-size: 11px; line-height: 16px; color: var(--ink-4); white-space: nowrap; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
 .strip-axis, .acto-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
 .acto { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; row-gap: 6px; align-items: center; }
@@ -80,6 +87,17 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .tl-row .desc { margin-top: 2px; font-size: 13px; line-height: 17px; color: var(--ink-3); }
 .tl-row.idle, .tl-row.brief { padding-top: 8px; padding-bottom: 8px; color: var(--ink-4); font-size: 13px; line-height: 20px; }
 .tl-row.brief .name { font-weight: 400; }
+.tl-row .where { font-size: 12px; line-height: 17px; color: var(--ink-4); }
+.tl-row.place .name { font-weight: 400; }
+.tl-row .talk-line { margin-top: 2px; font-size: 13px; line-height: 17px; color: var(--ink-3); }
+.utts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 20px; }
+.utts li { display: grid; grid-template-columns: 64px 52px minmax(0, 1fr); gap: var(--space-2); }
+.utts .ut { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.utts .who { color: var(--ink-3); white-space: nowrap; }
+.utts .who.self { color: var(--ink); font-weight: 500; }
+.visits { display: flex; flex-direction: column; }
+.visits .v-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: var(--space-3); padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 20px; }
+.visits .v-row .t, .visits .v-row .d { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; }
 .tl-row .chev { margin-top: 2px; color: var(--ink-4); transition: transform .15s; }
 .tl-row[open] > summary .chev { transform: rotate(90deg); }
 .tl-row .more { padding: 0 12px var(--space-4) calc(92px + 36px); display: flex; flex-direction: column; gap: var(--space-4); }

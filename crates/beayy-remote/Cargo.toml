@@ -1,0 +1,12 @@
+[package]
+name = "beayy-remote"
+description = "手表录音的对话转写、iPhone 停留点：从录音服务器（HTTPS＋口令）拉回来，写成 speech.* / place.visit 事件"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+beayy-core.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }

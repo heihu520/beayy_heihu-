@@ -205,10 +205,54 @@ function readout(k, v, unit, caption = "", over = false) {
   return `<div class="ro${over ? " over" : ""}"><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div><div class="caption" title="${esc(caption)}">${esc(caption) || "&nbsp;"}</div></div>`;
 }
 
-function dayStrip(hc, hp, clickable = false) {
-  const cells = (arr, v, name) => arr.map((m, h) => `<span style="${shade(m, v)}" title="${h}:00 ${name} ${m} 分钟"${clickable ? ` data-h="${h}"` : ""}></span>`).join("");
-  return `<div role="img" aria-label="一天的形状：上排电脑，下排手机"><div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>
-    <div class="strip-axis" aria-hidden="true">${hc.map((_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div></div>`;
+/** 一天的形状。只给电脑、手机两排时照旧（上排电脑、下排手机）；给了 opt（手表说话的分钟数 hw、停留点 visits、日期 date）
+ *  就按设备一排一排、行首写设备名，最上面一条地点色带 */
+function dayStrip(hc, hp, clickable = false, opt = null) {
+  const cells = (arr, v, name, unit = "分钟") => arr.map((m, h) => `<span style="${shade(m, v)}" title="${h}:00 ${name} ${m} ${unit}"${clickable ? ` data-h="${h}"` : ""}></span>`).join("");
+  const axis = (n) => `<div class="strip-axis" aria-hidden="true">${Array.from({ length: n }, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div>`;
+  if (!opt) return `<div role="img" aria-label="一天的形状：上排电脑，下排手机"><div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>${axis(24)}</div>`;
+  const rows = [];
+  if (opt.visits && opt.visits.length) rows.push(["地点", placeBand(opt.visits, opt.date)]);
+  rows.push(["电脑", `<div class="strip">${cells(hc, "--rec-computer", "电脑")}</div>`]);
+  rows.push(["手机", `<div class="strip">${cells(hp, "--rec-phone", "手机")}</div>`]);
+  if (opt.hw) rows.push(["手表", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
+  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v]) => `<span class="k">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
+}
+
+/** 地点色带：每段停留按起止画在当天 0–24 点上，相邻两段交替深浅，够宽的写地名 */
+function placeBand(visits, date) {
+  const day0 = toDate(date).getTime(), now = Date.now();
+  const pos = (iso, dflt) => Math.max(0, Math.min(1, ((iso ? Date.parse(iso) : dflt) - day0) / 864e5));
+  return `<div class="places">${visits.map((v, i) => {
+    const a = pos(v.start), z = pos(v.end, Math.min(now, day0 + 864e5));
+    const name = v.name || "没有地名";
+    return `<span class="${i % 2 ? "alt" : ""}" style="left:${(a * 100).toFixed(2)}%;width:${(Math.max(z - a, 0.003) * 100).toFixed(2)}%" title="${esc(name)} ${hm(v.start)}–${v.end ? hm(v.end) : "现在"}">${(z - a) * 24 >= 1.2 ? esc(name) : ""}</span>`;
+  }).join("")}</div>`;
+}
+
+/** 某段时间里待得最久的地点名 */
+function placeAt(visits, a, z) {
+  let best = null, most = 0;
+  for (const v of visits || []) {
+    const o = Math.min(z, v.end ? Date.parse(v.end) : Date.now()) - Math.max(a, Date.parse(v.start));
+    if (o > most) { most = o; best = v; }
+  }
+  return best && (best.name || "没有地名");
+}
+
+/** 说话的时长：不到一小时写分钟 */
+const talkText = (sec) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} 分钟` : `${hh(sec)}h`);
+/** 说话的人：按说话时长排，本人排第一 */
+function speakers(talk, self) {
+  return [...talk].sort((a, b) => (b.speaker === self) - (a.speaker === self) || b.sec - a.sec).map((t) => t.speaker);
+}
+
+/** 概览里的「去了哪」：每个停留点一行，到、走、待了多久 */
+function placesSection(visits) {
+  if (!visits.length) return "";
+  const dur = (v) => { const s = Math.max(0, ((v.end ? Date.parse(v.end) : Date.now()) - Date.parse(v.start)) / 1000); return s < 3600 ? `${Math.round(s / 60)} 分钟` : `${hh(s)}h`; };
+  return section("去了哪", `<div class="visits">${visits.map((v) => `<div class="v-row"><span class="t">${hm(v.start)}–${v.end ? hm(v.end) : "现在"}</span><span>${esc(v.name || "没有地名")}</span><span class="d">${dur(v)}</span></div>`).join("")}</div>
+    <p class="note">iPhone 记下的停留点，路上不记。到达时刻不知道的（比如从前一天待过来）从 0 点算起。</p>`, { count: visits.length });
 }
 
 function actogram(rows, cur) {
@@ -368,13 +412,17 @@ async function renderToday() {
   const phoneCap = ph ? `同步至 ${mdhm(ph.synced_until)}` : fda === false ? "未授权完全磁盘访问" : "取不到";
   const hc = hourMinutes(c.active_hours || {});
   const hp = hourMinutes(ph ? ph.hours : (pack.phone || {}).hours);
+  const sp = d.speech, visits = (d.places && d.places.visits) || [];
+  // 说话按分钟画，不满 1 分钟的也算 1 分钟，免得零碎的几句看不见
+  const hw = sp ? Array.from({ length: 24 }, (_, i) => Math.min(60, Math.ceil(((sp.hours || {})[pad2(i)] || 0) / 60))) : null;
   const items = timelineItems(d);
   const counts = { all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone").length };
+  if (sp) counts.watch = items.filter((x) => x.dev === "watch").length;
   const tab = TL.tab in counts ? TL.tab : "all";
   const shown = items.filter((x) => tab === "all" || x.dev === tab);
   // 照 Claude：标题下一行，左边「概览｜时间线」纯文字页签；时间线后面接「全部／电脑／手机」切换块；右边放同步时刻
   const view = TL.view === "timeline" ? "timeline" : "overview";
-  const seg = `<div class="mx-seg" role="tablist" id="tl-tabs">${[["all", "全部"], ["computer", "电脑"], ["phone", "手机"]].map(([k, v]) =>
+  const seg = `<div class="mx-seg" role="tablist" id="tl-tabs">${[["all", "全部"], ["computer", "电脑"], ["phone", "手机"], ["watch", "手表"]].filter(([k]) => k in counts).map(([k, v]) =>
     `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "is-on" : ""}" data-tab="${k}">${v}<span class="n">${counts[k]}</span></button>`).join("")}</div>`;
   const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", "概览"], ["timeline", "时间线"]].map(([k, v]) =>
       `<button role="tab" aria-selected="${k === view}" class="${k === view ? "is-on" : ""}" data-view="${k}">${v}</button>`).join("")}</div>
@@ -383,13 +431,17 @@ async function renderToday() {
   const overview = `<div class="readouts">
         ${readout("在电脑前", hh(c.active_sec), "h", c.first ? `${c.first}–${c.last}` : "还没有记录")}
         ${readout("手机", ph || fda !== false ? hh(ph ? ph.total_sec : (pack.phone || {}).total_sec) : "—", "h", phoneCap)}
+        ${sp ? readout("说话", sp.talk_sec < 3600 ? mins(sp.talk_sec) : hh(sp.talk_sec), sp.talk_sec < 3600 ? "分钟" : "h", sp.first ? `录音 ${hm(sp.first)}–${hm(sp.last)}` : "今天还没有录音") : ""}
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
       </div>
       <div style="margin-top:var(--space-6)">`
-    + section("一天的形状", dayStrip(hc, hp, true) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑（上排）</span><span><i style="background:var(--rec-phone)"></i>手机（下排）</span><span>点某个小时，到时间线里看那一小时</span></div>`)
+    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>手表（说话）</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span>` : ""}<span>点某个小时，到时间线里看那一小时</span></div>`)
+    + placesSection(visits)
     + workSection(d.work) + `</div>`;
   const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : shown.map(tlRow).join("")}</div>`
-    : emptyInline(tab === "phone" ? "今天还没有手机记录。iPhone 的屏幕使用经 iCloud 同步过来，通常晚几个小时。" : "今天还没有记录。10 分钟摘要每个整 10 分过后 1 分钟写好。");
+    : emptyInline(tab === "phone" ? "今天还没有手机记录。iPhone 的屏幕使用经 iCloud 同步过来，通常晚几个小时。"
+      : tab === "watch" ? "今天还没有对话。手表录的音传到录音服务器、转写好以后，这里每 10 分钟拉一次，通常晚 20 分钟左右。"
+      : "今天还没有记录。10 分钟摘要每个整 10 分过后 1 分钟写好。");
 
   $app.innerHTML = header("今天", `<span class="note mono">${short(today)}</span>`) + toolbar
     + `<div class="reading">${view === "timeline" ? timeline : overview}</div>`;
@@ -467,12 +519,25 @@ function hourRows(d, items) {
   const hourOf = (iso) => { const t = new Date(iso); t.setMinutes(0, 0, 0); return t.getTime(); };
   const roll = Object.fromEntries((d.hours || []).map((h) => [hourOf(h.start), h]));
   const buckets = new Map();
+  const put = (k, x) => { if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(x); };
   for (const x of items) {
     if (x.dev === "computer" && x.seg.kind === "idle") continue; // 合并过的空段按小时摘要算
-    const k = hourOf(x.start);
-    if (!buckets.has(k)) buckets.set(k, []);
-    buckets.get(k).push(x);
+    if (x.visit) continue; // 停留点写在每小时行首
+    if (x.dev === "watch") {
+      // 对话按小时切开：每个小时只放这一小时里说的句子
+      const by = new Map();
+      for (const l of x.conv.lines || []) { const k = hourOf(l.start); if (!by.has(k)) by.set(k, []); by.get(k).push(l); }
+      for (const [k, lines] of by) {
+        const talk = {};
+        for (const l of lines) talk[l.speaker] = (talk[l.speaker] || 0) + (Date.parse(l.end) - Date.parse(l.start)) / 1000;
+        put(k, { dev: "watch", start: lines[0].start, end: lines[lines.length - 1].end, conv: { lines, talk: Object.entries(talk).map(([speaker, sec]) => ({ speaker, sec: Math.round(sec) })) } });
+      }
+      continue;
+    }
+    put(hourOf(x.start), x);
   }
+  const visits = (d.places && d.places.visits) || [];
+  const talkH = (d.speech && d.speech.hours) || {};
   for (const k of Object.keys(roll)) if (!buckets.has(+k)) buckets.set(+k, []);
   const keys = [...buckets.keys()].sort((a, b) => b - a);
   const now = Date.now();
@@ -481,9 +546,9 @@ function hourRows(d, items) {
   const flushIdle = () => { if (idleRun) { out.push(`<div class="tl-row computer idle" data-h="${new Date(idleRun[0]).getHours()}"><span class="t">${hm(new Date(idleRun[0]).toISOString())}–${hm(new Date(idleRun[1] + 3600e3).toISOString())}</span><span>不在电脑前</span></div>`); idleRun = null; } };
   for (const k of keys) {
     const xs = buckets.get(k), r = roll[k];
-    const comp = xs.filter((x) => x.dev === "computer"), ph = xs.filter((x) => x.dev === "phone");
+    const comp = xs.filter((x) => x.dev === "computer"), ph = xs.filter((x) => x.dev === "phone"), wt = xs.filter((x) => x.dev === "watch");
     const idle = !comp.length && (!r || r.title === "不在电脑前") && k + 3600e3 <= now;
-    if (idle && !ph.length) { idleRun = idleRun ? [k, idleRun[1]] : [k, k]; continue; }
+    if (idle && !ph.length && !wt.length) { idleRun = idleRun ? [k, idleRun[1]] : [k, k]; continue; }
     flushIdle();
     const phSec = ph.reduce((a, x) => a + x.ses.sec, 0);
     const phApps = {};
@@ -497,10 +562,15 @@ function hourRows(d, items) {
     for (const p of (r && r.parts) || []) if (p.project) pj[p.project] = (pj[p.project] || 0) + p.sec;
     if (!r) for (const x of comp) for (const p of x.seg.parts || []) if (p.project) pj[p.project] = (pj[p.project] || 0) + (x.seg.active_sec || 0) * p.share;
     const chips = Object.entries(pj).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `<span class="mx-tag">${esc(n)} ${Math.round(v / 60)}m</span>`).join("");
+    const where = placeAt(visits, k, k + 3600e3);
+    const talkSec = talkH[pad2(new Date(k).getHours())] || 0;
+    const talkWho = {};
+    for (const x of wt) for (const t of x.conv.talk) talkWho[t.speaker] = (talkWho[t.speaker] || 0) + t.sec;
+    const who = speakers(Object.entries(talkWho).map(([speaker, sec]) => ({ speaker, sec })), SELF);
     const inner = xs.sort((a, b) => (a.start < b.start ? 1 : -1)).map(tlRow).join("");
-    out.push(`<details class="tl-row hour" data-h="${new Date(k).getHours()}"><summary><span class="t">${hm(new Date(k).toISOString())}–${hm(new Date(k + 3600e3).toISOString())}</span><span>
+    out.push(`<details class="tl-row hour" data-h="${new Date(k).getHours()}"><summary><span class="t">${hm(new Date(k).toISOString())}–${hm(new Date(k + 3600e3).toISOString())}${where ? `<div class="where" title="${esc(where)}">${esc(where.length > 8 ? where.slice(0, 8) + "…" : where)}</div>` : ""}</span><span>
         <span class="name${title === "不在电脑前" ? " dim" : ""}">${esc(title)}</span>${desc ? `<div class="desc">${esc(desc)}</div>` : ""}
-        ${chips ? `<div class="chips">${chips}</div>` : ""}${phSec ? `<div class="ph-line">手机 ${minText(phSec)}${topPh ? ` · ${esc(topPh)}` : ""}</div>` : ""}</span>
+        ${chips ? `<div class="chips">${chips}</div>` : ""}${phSec ? `<div class="ph-line">手机 ${minText(phSec)}${topPh ? ` · ${esc(topPh)}` : ""}</div>` : ""}${wt.length ? `<div class="ph-line">对话 ${talkText(talkSec)} · ${esc(who.slice(0, 3).join("、"))}${who.length > 3 ? ` 等 ${who.length} 人` : ""}</div>` : ""}</span>
         ${inner ? `<span class="chev">${ICON.chevR}</span>` : "<span></span>"}</summary>${inner ? `<div class="hour-in">${inner}</div>` : ""}</details>`);
   }
   flushIdle();
@@ -533,6 +603,9 @@ function timelineItems(d) {
   const out = [];
   for (const s of d.segments || []) out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
+  for (const v of (d.places && d.places.visits) || []) out.push({ dev: "phone", start: v.start, end: v.end, visit: v });
+  SELF = (d.speech && d.speech.self) || null;
+  for (const c of (d.speech && d.speech.conversations) || []) out.push({ dev: "watch", start: c.start, end: c.end, conv: c });
   return out.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
 }
 
@@ -547,9 +620,24 @@ function icons(ids, phone, names = {}) {
   }).join("")}</div>`;
 }
 
+/** 本人在转写里的名字（录音服务器按声纹认出的那个） */
+let SELF = null;
+
+/** 一段对话：标题行写时长和谁在说，第一句做预览，点开看原文 */
+function convRow(c, h, t) {
+  const who = speakers(c.talk || [], SELF);
+  const sec = (c.talk || []).reduce((a, x) => a + x.sec, 0);
+  const first = (c.lines || []).find((l) => l.text.length >= 4) || (c.lines || [])[0];
+  const lines = (c.lines || []).map((l) => `<li><span class="ut">${hm(l.start)}${new Date(l.start).getSeconds() ? ":" + pad2(new Date(l.start).getSeconds()) : ":00"}</span><span class="who${l.speaker === SELF ? " self" : ""}">${esc(l.speaker)}</span><span>${esc(l.text)}</span></li>`).join("");
+  return `<details class="tl-row watch" ${h}><summary>${t}<span><span class="name">对话 · ${talkText(sec)}</span><div class="desc">${esc(who.slice(0, 4).join("、"))}${who.length > 4 ? ` 等 ${who.length} 人` : ""}</div>${first ? `<div class="talk-line">${esc(first.speaker)}：${esc(first.text.length > 60 ? first.text.slice(0, 60) + "…" : first.text)}</div>` : ""}</span><span class="chev">${ICON.chevR}</span></summary>
+    <div class="more"><ul class="utts">${lines}</ul><p class="note" style="margin:0">手表录音转写，可能有错字。「${esc(SELF || "本人")}」按声纹认出，「他人N」只在当天内是同一个人，「未辨」是太短认不出。</p></div></details>`;
+}
+
 function tlRow(x) {
-  const t = `<span class="t">${hm(x.start)}–${hm(x.end)}</span>`;
+  const t = `<span class="t">${hm(x.start)}–${x.end ? hm(x.end) : "现在"}</span>`;
   const h = `data-h="${localHour(x.start)}"`;
+  if (x.dev === "watch") return convRow(x.conv, h, t);
+  if (x.visit) return `<div class="tl-row phone place" ${h}>${t}<span><span class="name">在 ${esc(x.visit.name || "没有地名的地方")}</span></span></div>`;
   if (x.dev === "phone") {
     const s = x.ses;
     const names = Object.fromEntries(s.apps.map((a) => [a.bundle_id, a.name]));
@@ -774,6 +862,7 @@ const DEV_ICON = {
   mac: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   win: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   iphone: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>',
+  watch: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="12" height="12" x="6" y="6" rx="3"/><path d="M9 6l.6-3.5h4.8L15 6M9 18l.6 3.5h4.8L15 18"/></svg>',
 };
 const bytesText = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB");
 const numText = (n) => Number(n || 0).toLocaleString("en-US");
@@ -901,7 +990,7 @@ function bindSync() {
 // ---------- 设置 ----------
 
 const THEMES = [["", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
-const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist"];
+const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist", "relay_server"];
 const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.stringify(SETTING_KEYS.map((k) => b[k]));
 /** Windows 版：没有钥匙串和系统授权，只记前台窗口和在不在电脑前 */
 const IS_WIN = /Windows/.test(navigator.userAgent);
@@ -1150,6 +1239,7 @@ async function renderSettings() {
   const theme = document.documentElement.dataset.theme || "";
   const gwBad = dr.gateway && !/^https?:\/\//.test(dr.gateway.trim());
   const keySrc = S.settings.api_key_source;
+  const relayBad = dr.relay_server && !/^https?:\/\//.test(dr.relay_server.trim());
   const pauseRow = st.paused
     ? `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">已暂停</div><div class="mx-setting-desc">${st.paused_until ? `到 ${hm(st.paused_until)} 自动继续。` : "一直暂停，点继续才恢复。"}暂停时不记键盘、鼠标、界面文字和切换 app。</div></div>
         <button class="mx-btn mx-btn--primary" data-pause="off">继续记录</button></div>`
@@ -1161,7 +1251,7 @@ async function renderSettings() {
         <div class="btns">${DELETES.map(([k, v]) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-del="${k}">${v}</button>`).join("")}</div></div>`;
 
   $app.innerHTML = header("设置") + `<div class="form">
-    ${same(dr, S.settings) ? "" : `<div class="mx-confirm" id="dirty"><div class="mx-confirm-text"><b>设置改了还没保存</b><span>${gwBad ? "网关地址不对，改好才能保存。" : "保存后写进 settings.json，下一轮就按新设置记录和摘要。"}</span></div><button class="mx-btn mx-btn--secondary" id="discard">放弃改动</button><button class="mx-btn mx-btn--primary" id="save" ${gwBad ? "disabled" : ""}>保存设置</button></div>`}
+    ${same(dr, S.settings) ? "" : `<div class="mx-confirm" id="dirty"><div class="mx-confirm-text"><b>设置改了还没保存</b><span>${gwBad ? "网关地址不对，改好才能保存。" : "保存后写进 settings.json，下一轮就按新设置记录和摘要。"}</span></div><button class="mx-btn mx-btn--secondary" id="discard">放弃改动</button><button class="mx-btn mx-btn--primary" id="save" ${gwBad || relayBad ? "disabled" : ""}>保存设置</button></div>`}
     ${sy.shadow ? section("账号", profileRow()) : accountSection(sy)}
     ${projectsSection()}
     ${section("记录", pauseRow
@@ -1170,6 +1260,10 @@ async function renderSettings() {
       <div class="block"><div><div class="mx-setting-name">不记录的 app</div><div class="mx-setting-desc">写 app 名或 bundle id。这些 app 在前台时只记「在用它」和时长，窗口标题、输入、点击、界面文字都不记。</div></div>
         ${dr.blocklist.length ? `<div class="mx-chips" id="chips">${dr.blocklist.map((b, i) => `<button class="mx-chip" data-i="${i}" title="移出">${esc(b)}${ICON.close}</button>`).join("")}</div>` : ""}
         <div class="inline"><input class="mx-input mono" id="block-new" placeholder="比如 1Password 或 com.1password.1password" aria-label="不记录的 app"><button class="mx-btn mx-btn--secondary" id="block-add">加入</button></div></div>`)}
+    ${section("手表录音与位置", `<p class="note" style="margin:0 0 10px">手表录的对话（转写后的文字）和 iPhone 的停留点存在你自己的录音服务器上，这里每 10 分钟拉一次到本机。音频不经过这台电脑。</p>
+      <div class="mx-field"><label for="relay">录音服务器地址</label><input class="mx-input mono${relayBad ? " is-error" : ""}" id="relay" data-k="relay_server" placeholder="https://audio.example.com" value="${esc(dr.relay_server || "")}">${relayBad ? `<div class="mx-field-error">地址要以 https:// 开头</div>` : ""}</div>
+      <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">口令</div><div class="mx-setting-desc">${S.settings.relay_server && st.relay_sync ? esc(st.relay_sync) : `存进${KEY_STORE}，页面读不到。`}</div></div>
+        <span class="mx-status mx-status--${S.settings.has_relay_token ? "ok" : "warn"}">${S.settings.has_relay_token ? "已存" : "还没有"}</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="relay-key">${S.settings.has_relay_token ? "换一个" : "存一个"}</button></div>`)}
     ${section("数据", delRow + `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">数据目录</div><div class="mx-setting-desc mono">~/Library/Application Support/Beayy/</div></div><button class="mx-btn mx-btn--secondary" id="open-dir">在访达中打开</button></div>
       <div class="mx-field" style="padding-top:14px"><label for="repo">人生记录仓库（日数据包和日总结从这里读）</label><input class="mx-input mono" id="repo" data-k="repo_path" value="${esc(dr.repo_path)}"></div>`)}
     ${section("外观", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">主题</div></div>
@@ -1234,15 +1328,26 @@ async function renderSettings() {
       S.settings = await call("get_settings"); S.draft = { ...S.draft, has_api_key: true }; renderSettings();
     },
   });
+  document.getElementById("relay-key").onclick = () => openDialog({
+    title: "录音服务器口令", ok: `存进${KEY_STORE}`,
+    body: dlgField("rkey", "口令", { type: "password", mono: true, help: "录音服务器 .env 里的 BEAYY_AUDIO_TOKEN。只用来从上面那个地址读转写和停留点。" }),
+    submit: async (el) => {
+      const k = dlgVal(el, "rkey");
+      if (!k) throw "先把口令粘进上面的框。";
+      try { await call("set_relay_token", { token: k }); } catch (x) { throw `没存进去：${x}`; }
+      S.settings = { ...S.settings, has_relay_token: true }; renderSettings();
+    },
+  });
   document.getElementById("open-dir").onclick = () => call("open_data_dir");
   const discard = document.getElementById("discard");
   if (discard) {
     discard.onclick = () => { S.draft = JSON.parse(JSON.stringify(S.settings)); renderSettings(); };
     document.getElementById("save").onclick = async () => {
-      const { has_api_key, api_key_source, ...rest } = S.draft;
+      const { has_api_key, api_key_source, has_relay_token, ...rest } = S.draft;
       rest.gateway = rest.gateway.trim();
+      rest.relay_server = (rest.relay_server || "").trim();
       await call("save_settings", { settings: rest });
-      S.settings = { ...rest, has_api_key: S.settings.has_api_key, api_key_source: S.settings.api_key_source }; S.draft = JSON.parse(JSON.stringify(S.settings));
+      S.settings = { ...rest, has_api_key: S.settings.has_api_key, api_key_source: S.settings.api_key_source, has_relay_token: S.settings.has_relay_token }; S.draft = JSON.parse(JSON.stringify(S.settings));
       renderSettings();
     };
   }

@@ -25,6 +25,35 @@ WORK = [  # (标题, 描述, 类型, 领域, 项目)
     ("查报税资料", "你查了今年个税专项扣除的规则，下载了两份表格。", "事务", "生活", ""),
 ]
 
+TALK = [  # 虚构的对话：(说话人, 原文)
+    ("我", "那首页的改版今天能提交评审吗？"), ("他人1", "可以，导航那块下午就能改完。"), ("我", "好，图表的事我晚上补。"),
+    ("他人2", "午饭去楼下那家面馆吧。"), ("我", "行，十二点半下去。"), ("他人1", "报告第三节谁来写？"), ("我", "我来，周五前给你。"),
+]
+PLACES = [("家", 0, 8.6), ("公司 · 示例大厦", 9.1, 12.4), ("面馆", 12.5, 13.2), ("公司 · 示例大厦", 13.3, 18.4), ("家", 19.0, None)]
+
+def speech_places(d, rnd):
+    """虚构的手表对话和停留点（get_day 的 speech、places，格式见 COMMANDS.md）"""
+    convs, hours, by = [], {}, {}
+    for h, m in [(10, 5), (12, 35), (15, 20)]:
+        t = d + timedelta(hours=h, minutes=m)
+        lines = []
+        for who, text in rnd.sample(TALK, 4):
+            sec = max(2, len(text) // 3)
+            lines.append({"start": iso(t), "end": iso(t + timedelta(seconds=sec)), "speaker": who, "text": text})
+            hours[f"{h:02d}"] = hours.get(f"{h:02d}", 0) + sec
+            by[who] = by.get(who, 0) + sec
+            t += timedelta(seconds=sec + rnd.randint(3, 40))
+        talk = {}
+        for l in lines:
+            talk[l["speaker"]] = talk.get(l["speaker"], 0) + (datetime.fromisoformat(l["end"].replace("Z", "+00:00")) - datetime.fromisoformat(l["start"].replace("Z", "+00:00"))).seconds
+        convs.append({"start": lines[0]["start"], "end": lines[-1]["end"], "talk": [{"speaker": k, "sec": v} for k, v in talk.items()], "lines": lines})
+    speech = {"recorded_sec": 9 * 3600, "talk_sec": sum(by.values()), "self": "我", "self_sec": by.get("我", 0), "speakers_sec": by, "hours": hours,
+              "first": iso(d + timedelta(hours=8, minutes=50)), "last": iso(d + timedelta(hours=18)), "recorded": [[iso(d + timedelta(hours=8, minutes=50)), iso(d + timedelta(hours=18))]],
+              "gaps": [], "battery": [1.0, 0.42], "segments": 55, "conversations": convs}
+    visits = [{"id": f"visit-{i}", "start": iso(d + timedelta(hours=a)), "end": iso(d + timedelta(hours=z)) if z else None, "arrive_known": a > 0,
+               "name": n, "lat": None, "lon": None, "acc": 50, "source": "visit"} for i, (n, a, z) in enumerate(PLACES)]
+    return speech, {"visits": visits}
+
 def day_data(d, n_hours):
     start = d + timedelta(hours=9)
     segs, hours, spans = [], [], []
@@ -74,6 +103,9 @@ def day_data(d, n_hours):
 
 days = [today - timedelta(days=i) for i in range(14)]
 get_day = {d.strftime("%Y-%m-%d"): day_data(d, 3 if i == 0 else random.randint(4, 9)) for i, d in enumerate(days)}
+rnd = random.Random(16)
+for d in days:
+    get_day[d.strftime("%Y-%m-%d")]["speech"], get_day[d.strftime("%Y-%m-%d")]["places"] = speech_places(d, rnd)
 for k, v in list(get_day.items())[1:]:
     v["summary_md"] = "# 样例\n\n## 今天的一句话\n\n你把官网改版推进到了评审，报告还差两张图。\n\n## 做成了什么\n\n- 首页改版提交评审\n- 季度报告写完第二节\n\n## 偏离\n\n- 21:00 以后用了 30 分钟手机\n\n## 明天\n\n- 补完报告的图表\n"
 mock = {
@@ -81,13 +113,15 @@ mock = {
                    "hc": v["live"]["active_hours"], "hp": v["phone"]["hours"]} for k, v in get_day.items()],
     "get_day": get_day,
     "get_status": {"permissions": {"accessibility": True, "input_monitoring": True, "full_disk_access": True}, "capturing": True, "paused": False,
-                   "paused_until": None, "events_today": 1234, "phone_sync": "iphone-1A2B3C4D 新增 0 条", "device": "mac-Demo-MacBook",
+                   "paused_until": None, "events_today": 1234, "phone_sync": "iphone-1A2B3C4D 新增 0 条", "relay_sync": "新增 0 条，服务器最近一天 —", "device": "mac-Demo-MacBook",
                    "version": "0.2.0", "shadow": False, "login_item": True},
     "get_settings": {"gateway": "https://api.openai.com/v1", "model_segment": "gpt-4.1-mini", "model_daily": "gpt-4.1-mini", "repo_path": "",
-                     "blocklist": ["com.1password.1password"], "has_api_key": True, "api_key_source": "keychain", "onboarded": True},
+                     "blocklist": ["com.1password.1password"], "has_api_key": True, "api_key_source": "keychain", "onboarded": True,
+                     "relay_server": "https://audio.example.com", "has_relay_token": True},
     "get_rules": [{"id": "r1", "text": "22:00 以后不开电脑", "enabled": True}, {"id": "r2", "text": "手机每天不超过 3 小时", "enabled": True}],
     "list_devices": [{"id": "mac-Demo-MacBook", "kind": "mac", "name": "Mac · Demo-MacBook", "this": True, "synced": False, "first": iso(days[-1]), "last": iso(datetime.now(LOCAL)), "events": 42000, "bytes": 30_000_000},
-                     {"id": "iphone-1A2B3C4D", "kind": "iphone", "name": "iPhone · 1A2B3C4D", "this": False, "synced": False, "first": iso(days[-1]), "last": iso(datetime.now(LOCAL)), "events": 9000, "bytes": 3_000_000}],
+                     {"id": "iphone-1A2B3C4D", "kind": "iphone", "name": "iPhone · 1A2B3C4D", "this": False, "synced": False, "first": iso(days[-1]), "last": iso(datetime.now(LOCAL)), "events": 9000, "bytes": 3_000_000},
+                     {"id": "watch-0a1b2c3d", "kind": "watch", "name": "Apple Watch · 0a1b2c3d", "this": False, "synced": False, "first": iso(days[-1]), "last": iso(datetime.now(LOCAL)), "events": 2400, "bytes": 800_000}],
     "sync_status": {"configured": True, "email": "demo@example.com", "server": "https://sync.example.com", "user": "demo", "last": iso(datetime.now(LOCAL)),
                     "last_error": None, "uploaded": 1800, "need_login": False, "running": False, "shadow": False},
     "get_profile": {"name": "Demo", "avatar": None, "email": "demo@example.com"},

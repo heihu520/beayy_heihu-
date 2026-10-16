@@ -1,7 +1,7 @@
 # Beayy（Be Authentic. Your Yesterdays.）Rust workspace。结构见 报告/方案_20261015_Rust与Tauri迁移.md
 [workspace]
 resolver = "2"
-members = ["crates/beayy-core", "crates/beayy-phone", "crates/beayy-capture", "crates/beayy-summary", "crates/beayy-sync", "src-tauri"]
+members = ["crates/beayy-core", "crates/beayy-phone", "crates/beayy-capture", "crates/beayy-summary", "crates/beayy-sync", "crates/beayy-remote", "src-tauri"]
 
 [workspace.package]
 version = "0.2.5"
@@ -18,6 +18,7 @@ beayy-phone = { path = "crates/beayy-phone" }
 beayy-capture = { path = "crates/beayy-capture" }
 beayy-summary = { path = "crates/beayy-summary" }
 beayy-sync = { path = "crates/beayy-sync" }
+beayy-remote = { path = "crates/beayy-remote" }
 
 [profile.release]
 lto = "thin"

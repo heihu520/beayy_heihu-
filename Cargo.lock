@@ -135,6 +135,7 @@ dependencies = [
  "beayy-capture",
  "beayy-core",
  "beayy-phone",
+ "beayy-remote",
  "beayy-summary",
  "beayy-sync",
  "chrono",
@@ -180,6 +181,16 @@ dependencies = [
  "beayy-core",
  "chrono",
  "serde_json",
+]
+
+[[package]]
+name = "beayy-remote"
+version = "0.2.5"
+dependencies = [
+ "beayy-core",
+ "chrono",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

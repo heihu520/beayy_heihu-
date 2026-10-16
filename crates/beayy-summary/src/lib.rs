@@ -9,6 +9,8 @@
 //!   2. 去重：同一「app＋窗口」的文字只留比上一次（含上一分段）新增的行；
 //!   3. 拼包：时长表＋新增文字＋键盘输入/发送（操作者、按键原文）＋点击元素，压到约 1 万字以内；
 //!   4. 调网关（chat.completions）只写描述，数字和 applications 由代码填。
+//!   有手表录音、iPhone 停留点（beayy-remote 拉来的 devices/watch-*、iphone-* 里的 speech.utterance、place.visit）时，
+//!   这 10 分钟的对话原文和所在地点也拼进包，标明来源；手表在录时等这一段的转写拉回来再写（最多等 40 分钟）。
 //!
 //! 设置：`<数据根>/settings.json` 的 gateway（任何 OpenAI 兼容接口，默认 https://api.openai.com/v1）、summary_model（没填就不写摘要）。
 //! 密钥：环境变量 BEAYY_API_KEY（或旧名 LIFE_RECORD_API_KEY）＞ 钥匙串（服务 com.fengli.beayy，账户 api_key）。
@@ -26,10 +28,16 @@ const MODEL: &str = "";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /// 中文约 0.7 token/字，1 万字约 7 千 token，加提示词和输出约 8 千
 const PACK_CHARS: usize = 10000;
+/// 对话原文另算，最多这么多字
+const SPEECH_CHARS: usize = 3000;
+/// 同一个人 20 秒内接着说的并成一行（同 脚本/日数据包.py）
+const SPEECH_MERGE: i64 = 20;
+/// 手表在录时，分段结束后最多等这么久转写（录音服务器每 10 分钟转一轮、这边每 10 分钟拉一次）
+const SPEECH_WAIT_MIN: i64 = 40;
 /// 整段都不在电脑前的固定标题：不调模型，直接写；界面把连续的这种段合成一行
 pub const IDLE_TITLE: &str = "不在电脑前";
 const IDLE_TEXT: &str = "这 10 分钟没有键鼠操作（离开、锁屏或睡眠）。";
-const NOISE: &[&str] = &["app.launch", "permission.changed", "permission.requested", "tap.started", "app.quit", "app.paused", "app.resumed"];
+const NOISE: &[&str] = &["app.launch", "permission.changed", "permission.requested", "tap.started", "app.quit", "app.paused", "app.resumed", "relay.sync", "relay.error"];
 // 时长（同 脚本/beayy时长.py）
 const IDLE_THRESHOLD: i64 = 180;
 const MAX_GAP: i64 = 180;
@@ -551,9 +559,10 @@ impl Summarizer {
         // 超预算先压界面文字，再压其他长行，最后丢中间
         let mut timeline: Vec<String> = vec![];
         let mut pack = String::new();
+        let tail = self.speech_and_place(start, start + Duration::minutes(10));
         for (ui_cap, cap) in [(2000, 2000), (1000, 2000), (500, 600), (250, 300), (120, 300)] {
             timeline = items.iter().map(|(hm, k, x)| format!("{hm} {}", cut(x, if *k == "ui" { ui_cap } else { cap }))).collect();
-            pack = head.iter().chain(timeline.iter()).cloned().collect::<Vec<_>>().join("\n");
+            pack = head.iter().chain(timeline.iter()).chain(tail.iter()).cloned().collect::<Vec<_>>().join("\n");
             if clen(&pack) <= PACK_CHARS {
                 break;
             }
@@ -565,6 +574,7 @@ impl Summarizer {
             all.extend(timeline[..mid].iter().cloned());
             all.push("……（中间略）".into());
             all.extend(timeline[mid..].iter().cloned());
+            all.extend(tail.iter().cloned());
             pack = all.join("\n");
         }
         for (k, _) in &rows {
@@ -576,6 +586,116 @@ impl Summarizer {
         }
         let active = rows.iter().filter(|(k, _)| !k.starts_with('（')).map(|(_, v)| v).sum::<f64>().round() as i64;
         (pack, apps, active)
+    }
+
+    /// 某种设备（watch-、iphone-）在 [from, to] 这几个分段里的某类事件
+    fn device_events(&self, prefix: &str, ty_: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<Ev> {
+        let (lo, hi) = (beayy_core::segment_key(from), beayy_core::segment_key(to));
+        let mut out = vec![];
+        for dev in read_dir_sorted(&self.devices()) {
+            if !dev.file_name().map(|x| x.to_string_lossy().starts_with(prefix)).unwrap_or(false) {
+                continue;
+            }
+            for seg in read_dir_sorted(&dev.join("segments")) {
+                let n = seg.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                if n < lo || n > hi {
+                    continue;
+                }
+                let bytes = fs::read(seg.join("events.jsonl")).unwrap_or_default();
+                for line in String::from_utf8_lossy(&bytes).lines().filter(|l| l.contains(ty_)) {
+                    if let Ok(Value::Object(e)) = serde_json::from_str::<Value>(line) {
+                        if ty(&e) == ty_ {
+                            out.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_by_key(ts);
+        out
+    }
+
+    /// 摘要包末尾：这段时间在哪（iPhone 停留点）、手表录到的对话原文（同一个人连着说的并成一行）
+    fn speech_and_place(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<String> {
+        let mut out = vec![];
+        let t = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|x| DateTime::parse_from_rfc3339(x).ok()).map(|x| x.with_timezone(&Utc));
+        // 地点：同一个停留点取最后一版，和这 10 分钟有重叠的
+        let mut visits: Vec<(DateTime<Utc>, Option<DateTime<Utc>>, String)> = vec![];
+        let mut latest: HashMap<String, Ev> = HashMap::new();
+        for e in self.device_events("iphone-", "place.visit", start - Duration::days(2), end) {
+            latest.insert(s(&e, "place_id").to_string(), e);
+        }
+        for e in latest.values() {
+            let (a, z) = (t(e.get("arrive")).or(t(e.get("depart"))), t(e.get("depart")));
+            let Some(a) = a else { continue };
+            if a < end && z.map(|z| z > start).unwrap_or(true) {
+                let name = [s(e, "label"), s(e, "name")].into_iter().find(|x| !x.is_empty()).unwrap_or("某处（没有地名）").to_string();
+                visits.push((a, z, name));
+            }
+        }
+        visits.sort_by_key(|v| v.0);
+        if !visits.is_empty() {
+            out.push(String::new());
+            let hm = |x: DateTime<Utc>| x.with_timezone(&Local).format("%H:%M").to_string();
+            let what = visits.iter().map(|(a, z, n)| format!("「{n}」（{} 起{}）", hm(*a), z.map(|z| format!("，{} 离开", hm(z))).unwrap_or_default())).collect::<Vec<_>>().join("、");
+            out.push(format!("地点（iPhone 停留点）：{what}"));
+        }
+        // 对话：开口时刻在这 10 分钟里的
+        let mut lines: Vec<(DateTime<Utc>, DateTime<Utc>, String, String)> = vec![];
+        let mut seen = HashSet::new();
+        for e in self.device_events("watch-", "speech.utterance", start, end) {
+            let Some(a) = t(e.get("start")).filter(|a| *a >= start && *a < end) else { continue };
+            let z = t(e.get("end")).unwrap_or(a);
+            let (who, text) = (s(&e, "speaker").to_string(), s(&e, "text").to_string());
+            if !seen.insert((a, text.clone())) {
+                continue; // 两台设备录到同一句
+            }
+            match lines.last_mut() {
+                Some(l) if l.2 == who && (a - l.1).num_seconds() <= SPEECH_MERGE => {
+                    l.3 += &text;
+                    l.1 = z;
+                }
+                _ => lines.push((a, z, who, text)),
+            }
+        }
+        if !lines.is_empty() {
+            let me: Vec<String> = lines.iter().map(|l| l.2.clone()).filter(|w| !w.starts_with("他人") && w != "未辨").collect::<BTreeSet<_>>().into_iter().collect();
+            let legend = if me.is_empty() { String::new() } else { format!("「{}」是用户本人，", me.join("」「")) };
+            out.push(String::new());
+            out.push(format!("对话（手表录音转写，可能有错字和同音字；{legend}「他人N」是当天编号的别人，「未辨」是太短没认出）："));
+            let mut body: Vec<String> = lines.iter().map(|(a, _, w, x)| format!("{} [{w}] {x}", hms(*a))).collect();
+            for cap in [400, 200, 100] {
+                if body.iter().map(|x| clen(x)).sum::<usize>() <= SPEECH_CHARS {
+                    break;
+                }
+                body = lines.iter().map(|(a, _, w, x)| format!("{} [{w}] {}", hms(*a), cut(x, cap))).collect();
+            }
+            let mut cut_at = None;
+            while body.iter().map(|x| clen(x)).sum::<usize>() > SPEECH_CHARS && body.len() > 10 {
+                let mid = body.len() / 2;
+                body.drain(mid - 2..mid + 2);
+                cut_at = Some(mid - 2);
+            }
+            if let Some(i) = cut_at {
+                body.insert(i, "……（中间略）".into());
+            }
+            out.extend(body);
+        }
+        out
+    }
+
+    /// 手表在录、这一段的转写还没拉回来：先不写摘要。最近 3 小时没有录音（没戴、没开）就不等
+    fn speech_pending(&self, slot_end: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        if now - slot_end > Duration::minutes(SPEECH_WAIT_MIN) {
+            return false;
+        }
+        let covered = self
+            .device_events("watch-", "speech.segment", now - Duration::hours(3), now)
+            .iter()
+            .filter_map(|e| e.get("end").and_then(Value::as_str).and_then(|x| DateTime::parse_from_rfc3339(x).ok()))
+            .map(|x| x.with_timezone(&Utc))
+            .max();
+        covered.map(|c| c < slot_end).unwrap_or(false)
     }
 
     // ---------- 4. 调模型 ----------
@@ -781,6 +901,7 @@ impl Summarizer {
             names
                 .iter()
                 .filter(|n| seg_start(n) + Duration::minutes(10) <= now && self.existing(n).is_empty() && mine.join(n.as_str()).join("events.jsonl").is_file())
+                .filter(|n| !self.speech_pending(seg_start(n) + Duration::minutes(10), now))
                 .cloned()
                 .collect()
         } else {
@@ -840,6 +961,7 @@ const PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上 10 
 要求：
 - 只写材料里看得到的事，不编造；看不到的就不写，不要写「材料未显示」「不确定」这类话。不写具体秒数和次数（数字由程序另列）。
 - [代理] 标的是 AI 或程序代为操作，要和用户本人的操作分开写。
+- 材料末尾如有「地点」（iPhone 停留点）和「对话」（手表录音转写），也写进摘要，并注明来源，如「（录音）」「（位置）」；转写有错字，意思不明的不硬猜、不逐字引用。没有电脑操作、只有对话的，就写这段对话。
 - 只返回一个 JSON 对象，不要代码块，字段：
   title: 15 字以内的标题
   description: 一两句，概括你这 10 分钟在做什么、有什么结果

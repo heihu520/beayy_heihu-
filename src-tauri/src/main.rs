@@ -16,6 +16,7 @@ mod devhook;
 
 use beayy_core::{data_root, fields, local_device, shadow_mode, EventLog};
 use beayy_phone::PhoneSync;
+use beayy_remote::Relay;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,10 +28,13 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const PRODUCT: &str = "Be Authentic. Your Yesterdays.";
 const PHONE_EVERY: Duration = Duration::from_secs(300);
+/// 手表对话、iPhone 停留点：录音服务器每 10 分钟转写一轮，这边也每 10 分钟拉一次
+const RELAY_EVERY: Duration = Duration::from_secs(600);
 
 struct AppState {
     log: Arc<EventLog>,
     phone: Mutex<PhoneSync>,
+    relay: Mutex<Relay>,
     paused: Arc<AtomicBool>,
     /// 定时暂停到这个时刻自动继续；None＝一直暂停（或没暂停）
     paused_until: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
@@ -70,6 +74,7 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
         "events_today": events_today(&state),
         "login_item": login_item(),
         "phone_sync": state.phone.lock().unwrap().last_summary.clone(),
+        "relay_sync": state.relay.lock().unwrap().last_summary.clone(),
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
@@ -236,6 +241,34 @@ fn main() {
         }
         return;
     }
+    if args.get(1).map(|a| a == "--relay-pull").unwrap_or(false) {
+        // 调试用：从录音服务器拉一轮手表对话和停留点
+        let mut r = Relay::default();
+        match r.pull(&data_root()) {
+            Ok(n) => println!("拉了 {} 天，新增 {} 条（{}）", n.days, n.added, r.last_summary),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
+    if args.get(1).map(|a| a == "--relay-import").unwrap_or(false) {
+        // 调试用：beayy --relay-import transcripts|places <文件>，把本地 jsonl 当成服务器上的数据写进去
+        let (kind, file) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default());
+        match Relay::default().import_file(&data_root(), &kind, std::path::Path::new(&file)) {
+            Ok(n) => println!("新增 {n} 条"),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
+    if args.get(1).map(|a| a == "--set-relay-token").unwrap_or(false) {
+        // 从标准输入读录音服务器口令存进钥匙串（不经命令行参数，免得留在 shell 历史里）
+        let mut t = String::new();
+        let _ = std::io::stdin().read_line(&mut t);
+        match beayy_core::secret_set(beayy_remote::SECRET, t.trim()) {
+            Ok(()) => println!("已存"),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
     if args.get(1).map(|a| a == "--dump").unwrap_or(false) {
         let out = match args.get(2).map(String::as_str) {
             Some("list_days") => json!(data::list_days()),
@@ -254,7 +287,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, data::set_api_key, data::delete_since, data::list_devices, data::rename_device, icons::get_icons, daily::generate_daily, data::test_model,
+            data::get_settings, data::save_settings, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, icons::get_icons, daily::generate_daily, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
@@ -266,7 +299,7 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let root = data_root();
-            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
+            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), relay: Mutex::new(Relay::default()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
             #[allow(unused_mut)]
             let mut launch = fields! {
                 "version" => env!("CARGO_PKG_VERSION"),
@@ -380,6 +413,30 @@ fn main() {
                 while waited < PHONE_EVERY && !phone_now2.swap(false, Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_secs(1));
                     waited += Duration::from_secs(1);
+                }
+            });
+            // 后台：手表对话、iPhone 停留点每 10 分钟从录音服务器拉一次（没设置服务器就什么都不做）
+            let st = state.clone();
+            let relay_root = data_root();
+            std::thread::spawn(move || {
+                let mut last_err = String::new();
+                loop {
+                    let r = st.relay.lock().unwrap().pull(&relay_root);
+                    match r {
+                        Ok(n) => {
+                            last_err.clear();
+                            if n.added > 0 {
+                                st.log.write("relay.sync", fields! {"added" => n.added, "days" => n.days}, None);
+                            }
+                        }
+                        // 同一个错误只记一次
+                        Err(e) if e != last_err => {
+                            st.log.write("relay.error", fields! {"error" => e.clone()}, None);
+                            last_err = e;
+                        }
+                        Err(_) => {}
+                    }
+                    std::thread::sleep(RELAY_EVERY);
                 }
             });
             let st = state.clone();

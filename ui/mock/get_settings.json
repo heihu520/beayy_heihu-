@@ -1,1 +1,1 @@
-{"gateway": "https://api.openai.com/v1", "model_segment": "gpt-4.1-mini", "model_daily": "gpt-4.1-mini", "repo_path": "", "blocklist": ["com.1password.1password"], "has_api_key": true, "api_key_source": "keychain", "onboarded": true}
+{"gateway": "https://api.openai.com/v1", "model_segment": "gpt-4.1-mini", "model_daily": "gpt-4.1-mini", "repo_path": "", "blocklist": ["com.1password.1password"], "has_api_key": true, "api_key_source": "keychain", "onboarded": true, "relay_server": "https://audio.example.com", "has_relay_token": true}

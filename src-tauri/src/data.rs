@@ -450,6 +450,264 @@ fn compute_live(date: NaiveDate) -> Option<Value> {
     }))
 }
 
+// ---------- 手表对话、iPhone 停留点（beayy-remote 从录音服务器拉来的） ----------
+
+/// 两句之间空档超过 3 分钟算另一段对话（同 脚本/日数据包.py 的 section_audio）
+const CONV_GAP: f64 = 180.0;
+/// 同一个人 20 秒内接着说的并成一行
+const MERGE_GAP: f64 = 20.0;
+/// 录音分段之间空档超过 5 分钟记为断档
+const REC_GAP: f64 = 300.0;
+
+/// 某种设备（watch-、iphone-）在 [from, to) 里的事件：只读这段时间的分段目录
+fn device_events(prefix: &str, types: &[&str], from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<Value> {
+    let mut out = vec![];
+    let (lo, hi) = (beayy_core::segment_key(from), beayy_core::segment_key(to));
+    let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return out };
+    for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(prefix)) {
+        let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
+        for seg in segs.filter_map(|e| e.ok()) {
+            let n = seg.file_name().to_string_lossy().to_string();
+            if n < lo || n > hi {
+                continue;
+            }
+            let Ok(bytes) = fs::read(seg.path().join("events.jsonl")) else { continue };
+            for line in String::from_utf8_lossy(&bytes).lines() {
+                if !types.iter().any(|t| line.contains(t)) {
+                    continue;
+                }
+                if let Ok(e) = serde_json::from_str::<Value>(line) {
+                    if types.iter().any(|t| e["event_type"] == *t) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn has_device(prefix: &str) -> bool {
+    fs::read_dir(default_root().join("devices")).map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with(prefix))).unwrap_or(false)
+}
+
+fn ts_of(v: &Value) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(v.as_str()?).ok().map(|t| t.with_timezone(&Utc))
+}
+
+/// 本人：服务器按声纹认出的名字（不是「他人N」「未辨」的那个）
+fn is_self(speaker: &str) -> bool {
+    !speaker.starts_with("他人") && speaker != "未辨"
+}
+
+/// 某天的对话（手表录音转写）。没有任何手表设备时返回 None
+pub fn speech_day(date: NaiveDate) -> Option<Value> {
+    if !has_device("watch-") {
+        return None;
+    }
+    let (s, e) = day_bounds(date);
+    let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
+    let ev = device_events("watch-", &["speech.segment", "speech.utterance"], s - Duration::minutes(10), e);
+    let inday = |x: &Value| ts_of(&x["start"]).map(|t| t >= s && t < e).unwrap_or(false);
+    let mut segs: Vec<&Value> = ev.iter().filter(|x| x["event_type"] == "speech.segment" && inday(x)).collect();
+    segs.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
+    segs.dedup_by(|a, b| a["seg_id"] == b["seg_id"]);
+    // 以后同一段话被两台设备都录到：开口时刻＋原文相同的只留一句
+    let mut seen = HashSet::new();
+    let mut utts: Vec<(DateTime<Utc>, DateTime<Utc>, String, String)> = ev
+        .iter()
+        .filter(|x| x["event_type"] == "speech.utterance" && inday(x))
+        .filter_map(|x| {
+            let a = ts_of(&x["start"])?;
+            let z = ts_of(&x["end"]).unwrap_or(a).max(a);
+            Some((a, z, x["speaker"].as_str().unwrap_or("未辨").to_string(), x["text"].as_str().unwrap_or("").to_string()))
+        })
+        .filter(|u| seen.insert((u.0, u.3.clone())))
+        .collect();
+    utts.sort_by(|a, b| a.0.cmp(&b.0));
+    let secs = |a: DateTime<Utc>, b: DateTime<Utc>| (b - a).num_milliseconds() as f64 / 1000.0;
+    let mut by_spk: BTreeMap<String, f64> = BTreeMap::new();
+    let mut hours: BTreeMap<String, f64> = BTreeMap::new();
+    for (a, z, who, _) in &utts {
+        *by_spk.entry(who.clone()).or_default() += secs(*a, *z);
+        *hours.entry(format!("{:02}", a.with_timezone(&Local).hour())).or_default() += secs(*a, *z);
+    }
+    // 分成一段段对话；同一个人连着说的并成一行
+    struct Line { a: DateTime<Utc>, z: DateTime<Utc>, who: String, text: String }
+    struct Conv { a: DateTime<Utc>, z: DateTime<Utc>, lines: Vec<Line>, talk: BTreeMap<String, f64> }
+    let mut convs: Vec<Conv> = vec![];
+    for (a, z, who, text) in utts {
+        if convs.last().map(|c| secs(c.z, a) > CONV_GAP).unwrap_or(true) {
+            convs.push(Conv { a, z: a, lines: vec![], talk: BTreeMap::new() });
+        }
+        let c = convs.last_mut().unwrap();
+        *c.talk.entry(who.clone()).or_default() += secs(a, z);
+        match c.lines.last_mut() {
+            Some(l) if l.who == who && secs(l.z, a) <= MERGE_GAP => {
+                l.text += &text;
+                l.z = z;
+            }
+            _ => c.lines.push(Line { a, z, who, text }),
+        }
+        c.z = c.z.max(z);
+    }
+    let rec: f64 = segs.iter().map(|x| x["audio_sec"].as_f64().unwrap_or(0.0)).sum();
+    let mut gaps = vec![];
+    let mut spans: Vec<(DateTime<Utc>, DateTime<Utc>)> = vec![];
+    for x in &segs {
+        let (Some(a), Some(z)) = (ts_of(&x["start"]), ts_of(&x["end"])) else { continue };
+        if let Some(l) = spans.last_mut() {
+            if secs(l.1, a) <= REC_GAP {
+                l.1 = l.1.max(z);
+                continue;
+            }
+            gaps.push(json!([utc_iso(l.1), utc_iso(a)]));
+        }
+        spans.push((a, z));
+    }
+    let batt: Vec<f64> = segs.iter().filter_map(|x| x["battery"].as_f64()).collect();
+    let self_name = by_spk.keys().find(|k| is_self(k)).cloned();
+    let round = |m: BTreeMap<String, f64>| m.into_iter().map(|(k, v)| (k, json!(v.round() as i64))).collect::<Map<_, _>>();
+    let talk: f64 = by_spk.values().sum();
+    Some(json!({
+        "recorded_sec": rec.round() as i64,
+        "talk_sec": talk.round() as i64,
+        "self": self_name,
+        "self_sec": self_name.as_ref().and_then(|n| by_spk.get(n)).map(|v| v.round() as i64).unwrap_or(0),
+        "speakers_sec": round(by_spk),
+        "hours": round(hours),
+        "first": segs.first().and_then(|x| x["start"].as_str().and_then(|t| ts_of(&json!(t)))).map(utc_iso),
+        "last": segs.iter().filter_map(|x| ts_of(&x["end"])).max().map(utc_iso),
+        "recorded": spans.iter().map(|(a, z)| json!([utc_iso(*a), utc_iso(*z)])).collect::<Vec<_>>(),
+        "gaps": gaps,
+        "battery": if batt.is_empty() { Value::Null } else { json!([batt[0], batt[batt.len() - 1]]) },
+        "segments": segs.len(),
+        "conversations": convs.into_iter().map(|c| json!({
+            "start": utc_iso(c.a), "end": utc_iso(c.z),
+            "talk": c.talk.iter().map(|(k, v)| json!({"speaker": k, "sec": v.round() as i64})).collect::<Vec<_>>(),
+            "lines": c.lines.iter().map(|l| json!({"start": utc_iso(l.a), "end": utc_iso(l.z), "speaker": l.who, "text": l.text})).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// 同一地点两段之间隔不到 15 分钟并成一段（同 脚本/日数据包.py 的 load_stays）
+const MERGE_PLACE: i64 = 15 * 60;
+/// 地点标签默认半径（米）
+const PLACE_R: f64 = 150.0;
+
+fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let h = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * ((lon2 - lon1).to_radians() / 2.0).sin().powi(2);
+    2.0 * 6_371_000.0 * h.sqrt().asin()
+}
+
+/// 自己起的地点名（家、公司……）：[{label, type, lat, lon, r}]。先读 Beayy/places/labels.json，没有再读外部数据目录的 raw/places/labels.json
+fn place_labels() -> Vec<Value> {
+    let mut paths = vec![default_root().join("places").join("labels.json")];
+    if let Some(r) = repo_path() {
+        paths.push(r.join("raw").join("places").join("labels.json"));
+    }
+    paths.iter().find_map(|p| fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())).unwrap_or_default()
+}
+
+/// 某天的停留点（iPhone 位置），读法同 脚本/日数据包.py 的 read_places／load_stays：
+/// 同一个停留点取最新一版（rev 大的）；显著位置变化补的短停留（slc）和 CLVisit 重叠超过自身一半的丢掉；
+/// 还没离开的算到下一个到达或现在；同一地点 15 分钟内并成一段，重叠的前一段截到后一段开始。没有任何停留点记录时返回 None
+pub fn places_day(date: NaiveDate) -> Option<Value> {
+    let (s, e) = day_bounds(date);
+    let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
+    // 到达在前一天的也读（在家过夜）
+    let ev = device_events("iphone-", &["place.visit"], s - Duration::days(2), e);
+    if ev.is_empty() {
+        return None;
+    }
+    let mut last: BTreeMap<String, &Value> = BTreeMap::new();
+    for x in &ev {
+        let id = x["place_id"].as_str().unwrap_or("").to_string();
+        let key = |v: &Value| (v["rev"].as_i64().unwrap_or(1), v["recorded_at"].as_str().unwrap_or("").to_string());
+        if last.get(&id).map(|o| key(x) >= key(o)).unwrap_or(true) {
+            last.insert(id, x);
+        }
+    }
+    let now = Utc::now();
+    let span = |v: &Value, open: DateTime<Utc>| -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let (a, d) = (ts_of(&v["arrive"]), ts_of(&v["depart"]));
+        Some((a.or(d.map(|d| d - Duration::minutes(1)))?, d.unwrap_or(open)))
+    };
+    let rows: Vec<&Value> = last.values().copied().collect();
+    let visits: Vec<(DateTime<Utc>, DateTime<Utc>)> = rows.iter().filter(|r| r["place_source"] != "slc").filter_map(|r| span(r, now)).collect();
+    let mut rows: Vec<&Value> = rows
+        .into_iter()
+        .filter(|r| {
+            if r["place_source"] != "slc" {
+                return true;
+            }
+            let Some((a, d)) = span(r, now) else { return false };
+            let dur = ((d - a).num_seconds() as f64).max(1.0);
+            !visits.iter().any(|(va, vd)| ((*vd).min(d) - (*va).max(a)).num_seconds() as f64 > dur / 2.0)
+        })
+        .collect();
+    rows.sort_by_key(|r| ts_of(&r["arrive"]).or(ts_of(&r["depart"])));
+    let labels = place_labels();
+    let mut out: Vec<Map<String, Value>> = vec![];
+    for (i, r) in rows.iter().enumerate() {
+        let a = ts_of(&r["arrive"]).unwrap_or(s);
+        let next = rows[i + 1..].iter().find_map(|x| ts_of(&x["arrive"]));
+        // 还在那儿：没离开、后面也没有新的到达
+        let open = ts_of(&r["depart"]).is_none() && next.is_none();
+        let d = ts_of(&r["depart"]).unwrap_or_else(|| next.map(|n| n.min(now)).unwrap_or(now));
+        let (a, d) = (a.max(s), d.min(e));
+        if d <= a {
+            continue;
+        }
+        let (lat, lon) = (r["lat"].as_f64().unwrap_or(0.0), r["lon"].as_f64().unwrap_or(0.0));
+        let lab = labels
+            .iter()
+            .map(|x| (haversine(lat, lon, x["lat"].as_f64().unwrap_or(0.0), x["lon"].as_f64().unwrap_or(0.0)), x))
+            .filter(|(m, x)| *m <= x["r"].as_f64().unwrap_or(PLACE_R))
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let label = lab.and_then(|(_, x)| x["label"].as_str()).map(String::from);
+        let name = r["name"].as_str().unwrap_or("").to_string();
+        let show = label.clone().unwrap_or_else(|| name.clone());
+        if let Some(prev) = out.last_mut() {
+            let pd = ts_of(&prev["end_t"]).unwrap();
+            if prev["name"] == show.as_str() && (a - pd).num_seconds() <= MERGE_PLACE {
+                prev.insert("end_t".into(), json!(utc_iso(pd.max(d))));
+                prev.insert("open".into(), json!(open));
+                continue;
+            }
+            if a < pd {
+                prev.insert("end_t".into(), json!(utc_iso(a)));
+            }
+        }
+        let mut m = Map::new();
+        m.insert("id".into(), r["place_id"].clone());
+        m.insert("start".into(), json!(utc_iso(a)));
+        m.insert("end_t".into(), json!(utc_iso(d)));
+        m.insert("open".into(), json!(open));
+        m.insert("arrive_known".into(), json!(ts_of(&r["arrive"]).map(|x| x >= s).unwrap_or(false)));
+        m.insert("name".into(), json!(show));
+        m.insert("place_name".into(), json!(name));
+        m.insert("label".into(), json!(label));
+        m.insert("type".into(), lab.and_then(|(_, x)| x["type"].as_str()).map(|t| json!(t)).unwrap_or(Value::Null));
+        m.insert("source".into(), r["place_source"].clone());
+        out.push(m);
+    }
+    // end：还在那儿（没离开、后面也没有新的到达）给 null，页面算到现在
+    let visits: Vec<Value> = out
+        .into_iter()
+        .filter(|m| ts_of(&m["end_t"]) > ts_of(&m["start"]))
+        .map(|mut m| {
+            let end = if m["open"] == true { Value::Null } else { m["end_t"].clone() };
+            m.remove("end_t");
+            m.remove("open");
+            m.insert("end".into(), end);
+            Value::Object(m)
+        })
+        .collect();
+    Some(json!({ "visits": visits }))
+}
+
 // ---------- 命令 ----------
 
 fn pack_of(repo: &Option<PathBuf>, date: &str) -> Option<Value> {
@@ -559,6 +817,8 @@ pub fn get_day(date: String) -> Value {
         "computers": computers,
         "device_names": beayy_sync::device_names(&beayy_core::data_root()),
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
+        "speech": speech_day(nd),
+        "places": places_day(nd),
     })
 }
 
@@ -691,13 +951,15 @@ pub fn get_settings() -> Value {
         "blocklist": s.get("blacklist").cloned().unwrap_or(json!(["com.1password.1password"])),
         "has_api_key": beayy_summary::api_key_source().is_some(),
         "api_key_source": beayy_summary::api_key_source(),
+        "relay_server": get("relay_server", ""),
+        "has_relay_token": beayy_core::secret_get(beayy_remote::SECRET).is_some(),
     })
 }
 
 #[tauri::command]
 pub fn save_settings(settings: Value) -> Result<(), String> {
     let mut s = read_settings_raw();
-    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded")];
+    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server")];
     for (from, to) in map {
         if let Some(v) = settings.get(from) {
             s.insert(to.into(), v.clone());
@@ -711,6 +973,12 @@ pub fn save_settings(settings: Value) -> Result<(), String> {
 #[tauri::command]
 pub fn set_api_key(key: String) -> Result<(), String> {
     beayy_summary::store_api_key(key.trim())
+}
+
+/// 存录音服务器（手表对话、iPhone 停留点）的口令：macOS 进钥匙串，Windows 写数据目录；不回传网页。空字符串＝删掉
+#[tauri::command]
+pub fn set_relay_token(token: String) -> Result<(), String> {
+    beayy_core::secret_set(beayy_remote::SECRET, token.trim())
 }
 
 // ---------- 删除记录 ----------
@@ -834,6 +1102,7 @@ fn read_devices() -> Vec<Value> {
             "mac" => format!("Mac · {}", &id[4..]),
             "iphone" => format!("iPhone · {}", &id[7..]),
             "win" => format!("Windows · {}", &id[4..]),
+            "watch" => format!("Apple Watch · {}", &id[6..]),
             _ => id.clone(),
         };
         let name = custom.get(&id).cloned().unwrap_or_else(|| default_name.clone());

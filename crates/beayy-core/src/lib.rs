@@ -45,6 +45,44 @@ pub fn shadow_mode() -> bool {
     std::env::var("BEAYY_SHADOW").map(|v| v == "1").unwrap_or(false)
 }
 
+/// 存在系统钥匙串里的一项（服务 com.fengli.beayy，账号 `account`）；没有钥匙串的系统（Windows）存在数据目录 secrets/<账号>，未加密
+pub fn secret_get(account: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let v = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "com.fengli.beayy", "-a", account, "-w"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    #[cfg(not(target_os = "macos"))]
+    let v = fs::read_to_string(default_root().join("secrets").join(account)).ok().map(|s| s.trim().to_string());
+    v.filter(|s| !s.is_empty())
+}
+
+/// 存一项；`value` 为空＝删掉
+pub fn secret_set(account: &str, value: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let args: Vec<&str> = if value.is_empty() {
+            vec!["delete-generic-password", "-s", "com.fengli.beayy", "-a", account]
+        } else {
+            vec!["add-generic-password", "-U", "-s", "com.fengli.beayy", "-a", account, "-w", value]
+        };
+        let ok = std::process::Command::new("/usr/bin/security").args(args).output().map(|o| o.status.success()).unwrap_or(false);
+        if ok || value.is_empty() { Ok(()) } else { Err("写入钥匙串失败".into()) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let f = default_root().join("secrets").join(account);
+        if value.is_empty() {
+            let _ = fs::remove_file(&f);
+            return Ok(());
+        }
+        fs::create_dir_all(f.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::write(&f, value).map_err(|e| e.to_string())
+    }
+}
+
 /// 本机设备名：mac-<本地主机名>／win-<计算机名>。环境变量 BEAYY_DEVICE 可以改（测多设备同步时在同一台电脑上模拟第二台）
 pub fn local_device() -> String {
     if let Ok(d) = std::env::var("BEAYY_DEVICE") {
