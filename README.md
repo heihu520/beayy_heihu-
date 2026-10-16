@@ -28,6 +28,16 @@
 
 要求 macOS 14 以上。Windows 版在做（目前只记前台 app 和在不在电脑前，没在真机上充分测试）。
 
+## 让 AI 读你的记录（MCP）
+
+Beayy 自带一个本机 MCP 服务，Claude Code、Claude 桌面版这类本机 AI 可以直接查你的记录，数据不出这台电脑（只读）：
+
+```bash
+claude mcp add beayy -- ~/Applications/Beayy.app/Contents/MacOS/beayy --mcp
+```
+
+工具：`list_days`（最近每天概况）、`get_day`（某天的时长、每小时在做什么、时间花在哪、日总结）、`search`（在 10 分钟摘要里搜关键词）、`get_rules_and_projects`。
+
 ## 从源码编译
 
 ```bash
@@ -35,6 +45,7 @@
 git clone https://github.com/hengfengliya/beayy && cd beayy
 ./build.sh            # 编译、签名（有 Developer ID 证书就用，没有就本机临时签名）、装到 ~/Applications/Beayy.app 并启动
 ./build.sh --shadow   # 测试版：装成 Beayy-rs.app，写独立的影子目录，可以和正式版同时跑
+./build.sh --dmg      # 打安装包 target/Beayy-<版本>.dmg；用 Developer ID 签名并给了公证凭据就自动公证
 ```
 
 只看界面：用浏览器打开 `ui/index.html`，读 `ui/mock/` 里的虚构样例数据（`python3 ui/mock/make_mock.py` 重新生成）。
