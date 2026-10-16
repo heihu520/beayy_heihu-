@@ -161,7 +161,7 @@ fn open_main(app: &AppHandle) {
         return;
     }
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title(PRODUCT)
+        .title(if shadow_mode() { "Beayy 测试版" } else { PRODUCT })
         .inner_size(1180.0, 760.0)
         .min_inner_size(760.0, 520.0);
     // 墨线约定：标题栏并进侧栏顶部，系统窗口按钮叠在侧栏左上角（页面让出 72 像素）
@@ -339,7 +339,7 @@ fn main() {
             }
 
             // 菜单栏：标志模板图（系统按深浅色菜单栏自动反色）＋菜单
-            let title = MenuItem::with_id(app, "title", if shadow_mode() { format!("{PRODUCT}（并跑版）") } else { PRODUCT.into() }, false, None::<&str>)?;
+            let title = MenuItem::with_id(app, "title", if shadow_mode() { "Beayy 测试版（数据写影子目录，不算正式记录）".to_string() } else { PRODUCT.into() }, false, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "打开 Beayy", true, None::<&str>)?;
             let perm = MenuItem::with_id(app, "perm", permission_line(), true, None::<&str>)?;
             let tap = MenuItem::with_id(app, "tap", "键鼠监听：启动中", false, None::<&str>)?;
@@ -359,7 +359,7 @@ fn main() {
             TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .icon_as_template(true)
-                .tooltip(PRODUCT)
+                .tooltip(if shadow_mode() { "Beayy 测试版" } else { PRODUCT })
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(move |app, e| match e.id.as_ref() {

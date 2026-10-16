@@ -45,14 +45,16 @@ mkdir -p "$DIST/Contents/MacOS" "$DIST/Contents/Resources"
 cp "$BIN" "$DIST/Contents/MacOS/beayy"
 cp Resources/AppIcon.icns "$DIST/Contents/Resources/"
 ENV_BLOCK=""
-[ "$MODE" = shadow ] && ENV_BLOCK="<key>LSEnvironment</key><dict><key>BEAYY_SHADOW</key><string>1</string></dict>"
+DISPLAY_NAME="Be Authentic. Your Yesterdays."
+# 测试版显示名单独起（Dock、⌘Tab、聚焦搜索、系统设置的授权列表里都看得出来），免得和正式版点混
+[ "$MODE" = shadow ] && ENV_BLOCK="<key>LSEnvironment</key><dict><key>BEAYY_SHADOW</key><string>1</string></dict>" && DISPLAY_NAME="Beayy 测试版"
 cat > "$DIST/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>com.fengli.beayy</string>
-  <key>CFBundleName</key><string>Be Authentic. Your Yesterdays.</string>
-  <key>CFBundleDisplayName</key><string>Be Authentic. Your Yesterdays.</string>
+  <key>CFBundleName</key><string>$DISPLAY_NAME</string>
+  <key>CFBundleDisplayName</key><string>$DISPLAY_NAME</string>
   <key>CFBundleExecutable</key><string>beayy</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
