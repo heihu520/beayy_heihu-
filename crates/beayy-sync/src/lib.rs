@@ -26,6 +26,8 @@ use std::time::{Duration, UNIX_EPOCH};
 pub const DEFAULT_SERVER: &str = "https://sync.beayy.com";
 const CODE_PREFIX: &str = "beayy-sync-1:";
 const PARALLEL: usize = 8;
+/// 下载并发：每块都要过一次鉴权查库，单次慢，多开几路
+const PARALLEL_DOWN: usize = 16;
 
 /// 一个同步账号：服务器、账号、邮箱（v1 迁移前没有）、这台设备的令牌（只管能不能存取）、数据密钥（加解密，只在设备上）
 #[derive(Clone)]
@@ -652,61 +654,99 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         };
         let want: Vec<bool> = items.iter().map(wanted).collect();
         set_phase("download", want.iter().filter(|w| **w).count());
-        for (it, want) in items.iter().zip(want) {
-            let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
-            let updated = it["updated"].as_i64().unwrap_or(0);
-            if want {
-                let got = (|| {
-                    let mut resp = ag.get(&format!("{}/v1/blob/{d}/{n}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
-                    if !resp.status().is_success() {
-                        return Err(err_of(resp));
-                    }
-                    let blob = resp.body_mut().with_config().limit(64 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())?;
-                    let plain = open(&a, d, n, &blob)?;
-                    let dev = root.join("devices").join(d);
-                    fs::create_dir_all(&dev).map_err(|e| e.to_string())?;
-                    let _ = fs::write(dev.join(SYNCED), "");
-                    if let Some(file) = n.strip_prefix(SUM) {
-                        // 同一分段重写过的摘要只留最新的（文件名前 19 位是分段开始时刻）
-                        let dir = dev.join("summaries");
-                        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                        if file.len() >= 19 {
-                            for old in fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
-                                let o = old.file_name().to_string_lossy().to_string();
-                                if o != file && o.get(..19) == file.get(..19) {
-                                    let _ = fs::remove_file(old.path());
-                                }
-                            }
-                        }
-                        return fs::write(dir.join(file), plain).map_err(|e| e.to_string());
-                    }
-                    let dir = dev.join("segments").join(n);
-                    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                    fs::write(dir.join("events.jsonl"), plain).map_err(|e| e.to_string())
-                })();
-                match got {
-                    Ok(_) => {
-                        DONE.fetch_add(1, Ordering::Relaxed);
-                        st.remote.insert(d.to_string());
-                        downloaded += 1;
-                    }
-                    Err(e) => {
-                        if errors.len() < 10 {
-                            errors.push(format!("下载 {d}/{n}：{e}"));
-                        }
-                        // 下载失败就停在这里，下一轮从这块重来
-                        write_state(root, &st);
-                        return Some(finish(root, st, uploaded, downloaded, errors));
+        // 64 段一批：8 路并行下载、解密，再按顺序写盘、推进游标（遇到失败停在那一段，下一轮从那里接着下），每批记一次进度
+        let rows: Vec<(&Value, bool)> = items.iter().zip(want).collect();
+        for batch in rows.chunks(64) {
+            let fetched: Vec<Option<Result<Vec<u8>, String>>> = std::thread::scope(|s| {
+                let lanes: Vec<_> = (0..PARALLEL_DOWN)
+                    .map(|lane| {
+                        let (a, ag) = (&a, &ag);
+                        s.spawn(move || {
+                            batch
+                                .iter()
+                                .enumerate()
+                                .skip(lane)
+                                .step_by(PARALLEL_DOWN)
+                                .map(|(i, (it, want))| {
+                                    let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
+                                    let r = want.then(|| fetch(a, ag, d, n));
+                                    if r.as_ref().map(|x| x.is_ok()).unwrap_or(false) {
+                                        DONE.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    (i, r)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                let mut out: Vec<Option<Result<Vec<u8>, String>>> = (0..batch.len()).map(|_| None).collect();
+                for h in lanes {
+                    for (i, r) in h.join().unwrap_or_default() {
+                        out[i] = r;
                     }
                 }
+                out
+            });
+            for ((it, _), got) in batch.iter().zip(fetched) {
+                let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
+                if let Some(got) = got {
+                    match got.and_then(|plain| store(root, d, n, plain)) {
+                        Ok(_) => {
+                            st.remote.insert(d.to_string());
+                            downloaded += 1;
+                        }
+                        Err(e) => {
+                            if errors.len() < 10 {
+                                errors.push(format!("下载 {d}/{n}：{e}"));
+                            }
+                            write_state(root, &st);
+                            return Some(finish(root, st, uploaded, downloaded, errors));
+                        }
+                    }
+                }
+                st.since = st.since.max(it["updated"].as_i64().unwrap_or(0));
             }
-            st.since = st.since.max(updated);
+            write_state(root, &st);
         }
         if !full {
             break;
         }
     }
     Some(finish(root, st, uploaded, downloaded, errors))
+}
+
+/// 取一块密文并解开
+fn fetch(a: &Account, ag: &ureq::Agent, d: &str, n: &str) -> Result<Vec<u8>, String> {
+    let mut resp = ag.get(&format!("{}/v1/blob/{d}/{n}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(err_of(resp));
+    }
+    let blob = resp.body_mut().with_config().limit(64 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())?;
+    open(a, d, n, &blob)
+}
+
+/// 下载来的块写到和本机写的同样的位置：分段 → devices/<设备>/segments/<分段>/events.jsonl，摘要 → devices/<设备>/summaries/<文件名>
+fn store(root: &Path, d: &str, n: &str, plain: Vec<u8>) -> Result<(), String> {
+    let dev = root.join("devices").join(d);
+    fs::create_dir_all(&dev).map_err(|e| e.to_string())?;
+    let _ = fs::write(dev.join(SYNCED), "");
+    if let Some(file) = n.strip_prefix(SUM) {
+        // 同一分段重写过的摘要只留最新的（文件名前 19 位是分段开始时刻）
+        let dir = dev.join("summaries");
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        if file.len() >= 19 {
+            for old in fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
+                let o = old.file_name().to_string_lossy().to_string();
+                if o != file && o.get(..19) == file.get(..19) {
+                    let _ = fs::remove_file(old.path());
+                }
+            }
+        }
+        return fs::write(dir.join(file), plain).map_err(|e| e.to_string());
+    }
+    let dir = dev.join("segments").join(n);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("events.jsonl"), plain).map_err(|e| e.to_string())
 }
 
 fn finish(root: &Path, mut st: State, uploaded: usize, downloaded: usize, errors: Vec<String>) -> Report {
