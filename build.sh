@@ -3,20 +3,23 @@
 # 用法：app/build.sh            正式版：装成 ~/Applications/Beayy.app，写正式数据目录
 #       app/build.sh --shadow   测试版：装成 ~/Applications/Beayy-rs.app，写影子目录（BEAYY_SHADOW=1），不碰正式数据，可与正式版同时跑
 #       加 --no-run 只装不启动
+#       app/build.sh --dmg      打安装包 target/Beayy-<版本>.dmg（不装到本机）。签名身份是 Developer ID 时，
+#                               有公证凭据（BEAYY_NOTARY_KEY＝.p8 路径、BEAYY_NOTARY_KEY_ID、BEAYY_NOTARY_ISSUER）就交苹果公证并钉上票据
 # bundle id、签名证书固定（com.fengli.beayy，团队 8R7XUVNM53），系统给的权限按「标识＋团队」认，重新编译不掉。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 # 签名身份：环境变量 BEAYY_SIGN_ID ＞ 本机的 Developer ID Application 证书 ＞ Apple Development 证书 ＞ 临时签名（-，只能本机用）
-SIGN_ID="${BEAYY_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')}"
-[ -n "$SIGN_ID" ] || SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Apple Development[^"]*"' | head -1 | tr -d '"')"
+SIGN_ID="${BEAYY_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"' || true)}"
+[ -n "$SIGN_ID" ] || SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Apple Development[^"]*"' | head -1 | tr -d '"' || true)"
 [ -n "$SIGN_ID" ] || SIGN_ID="-"
-MODE=release; RUN=1
+MODE=release; RUN=1; DMG=0
 for a in "$@"; do
   case "$a" in
     --shadow) MODE=shadow ;;
     --no-run) RUN=0 ;;
+    --dmg) DMG=1 ;;
   esac
 done
 NAME=$([ "$MODE" = release ] && echo Beayy || echo Beayy-rs)
@@ -58,6 +61,31 @@ EOF
 TS="--timestamp=none"; case "$SIGN_ID" in "Developer ID"*) TS="--timestamp" ;; esac
 codesign --force --options runtime $TS --sign "$SIGN_ID" "$DIST"
 codesign --verify --strict "$DIST"
+
+if [ "$DMG" = 1 ]; then
+  VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+  OUT="$HERE/target/Beayy-$VER.dmg"
+  STAGE="$HERE/target/dmg"
+  rm -rf "$STAGE" "$OUT" && mkdir -p "$STAGE"
+  cp -R "$DIST" "$STAGE/Beayy.app"
+  ln -s /Applications "$STAGE/Applications"
+  hdiutil create -quiet -volname "Beayy" -srcfolder "$STAGE" -ov -format UDZO "$OUT"
+  rm -rf "$STAGE" "$DIST"
+  case "$SIGN_ID" in
+    "Developer ID"*)
+      codesign --force --timestamp --sign "$SIGN_ID" "$OUT"
+      if [ -n "${BEAYY_NOTARY_KEY:-}" ]; then
+        xcrun notarytool submit "$OUT" --key "$BEAYY_NOTARY_KEY" --key-id "$BEAYY_NOTARY_KEY_ID" --issuer "$BEAYY_NOTARY_ISSUER" --wait
+        xcrun stapler staple "$OUT"
+        echo "已公证"
+      else
+        echo "没给公证凭据：这个 DMG 签了名但没公证，别的电脑打开会被拦"
+      fi ;;
+    *) echo "签名身份不是 Developer ID（${SIGN_ID}）：这个 DMG 只适合自己用，别的电脑打开会被拦" ;;
+  esac
+  echo "安装包 $OUT"
+  exit 0
+fi
 
 pkill -f "$DEST/Contents/MacOS/beayy" 2>/dev/null && sleep 1 || true
 mkdir -p "$HOME/Applications"

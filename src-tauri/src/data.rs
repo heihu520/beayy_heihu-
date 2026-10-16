@@ -929,3 +929,8 @@ pub async fn test_model() -> Result<(), String> {
 pub fn needs_onboarding() -> bool {
     !read_settings_raw().get("onboarded").and_then(Value::as_bool).unwrap_or(false)
 }
+
+/// 给 MCP 搜索用：全部 10 分钟摘要，按本地日期分组
+pub fn self_segments_pub() -> HashMap<String, Vec<Value>> {
+    self_segments()
+}

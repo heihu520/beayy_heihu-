@@ -7,6 +7,7 @@
 mod daily;
 mod data;
 mod icons;
+mod mcp;
 mod summarizer;
 mod sync;
 #[cfg(target_os = "macos")]
@@ -192,6 +193,11 @@ fn main() {
     if args.get(1).map(|a| a == "--summarize-once").unwrap_or(false) {
         // 调试用：立刻跑一次 10 分钟摘要调度（同定时任务，含锁文件），完成后退出
         summarizer::run_once(&EventLog::new(data_root(), local_device()));
+        return;
+    }
+    if args.get(1).map(|a| a == "--mcp").unwrap_or(false) {
+        // 本机 MCP 服务（标准输入输出），给本机 AI 读记录
+        mcp::serve();
         return;
     }
     if let Some(code) = sync::cli(&args) {
