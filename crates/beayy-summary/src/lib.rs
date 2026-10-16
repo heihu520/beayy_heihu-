@@ -607,7 +607,7 @@ impl Summarizer {
             {"role": "system", "content": system}, {"role": "user", "content": user}]});
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .proxy(None)
-            .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+            .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
             .timeout_global(Some(std::time::Duration::from_secs(120)))
             .build()
             .into();

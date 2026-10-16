@@ -115,9 +115,10 @@ pub fn forget(root: &Path) {
 // ---------- HTTP ----------
 
 fn agent() -> ureq::Agent {
+    // 根证书用系统的（macOS 钥匙串、Windows 证书库）：ureq 默认的内置清单会关掉系统根证书，Windows 上验不过 Cloudflare 的证书链
     ureq::Agent::config_builder()
         .proxy(None)
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
+        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .timeout_global(Some(Duration::from_secs(60)))
         .http_status_as_error(false)
         .build()
