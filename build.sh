@@ -30,6 +30,8 @@ NAME=$([ "$MODE" = release ] && echo Beayy || echo Beayy-rs)
 DIST="$HERE/target/dist/$NAME.app"
 DEST="$HOME/Applications/$NAME.app"
 BUILD_NUMBER="$(date +%Y%m%d%H%M%S)"
+# 版本号只在 Cargo.toml（workspace.package.version）改一处，Info.plist 跟着它
+APP_VERSION=$(grep -m1 '^version' "$HERE/Cargo.toml" | cut -d'"' -f2)
 
 cd "$HERE"
 cargo build --release -p beayy 2>&1 | grep -E "^error|warning: unused|Finished" || true
@@ -52,7 +54,7 @@ cat > "$DIST/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key><string>beayy</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>

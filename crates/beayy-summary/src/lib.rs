@@ -761,12 +761,18 @@ impl Summarizer {
         self.build_pack(name, &events, &names).0
     }
 
-    /// 写摘要。`pick` 为空＝所有已结束、还没写过的分段；指定分段名时已写过的也重写。每段一行日志交给 `log`。
+    /// 写摘要。`pick` 为空＝本机记过、已结束、还没写过的分段（同步来的别的电脑的分段由那台自己写，免得重复调模型）；
+    /// 指定分段名时已写过的也重写。每段一行日志交给 `log`。
     pub fn run(&self, pick: &[String], mut log: impl FnMut(String)) -> usize {
         let names = self.segment_names();
         let now = Utc::now();
+        let mine = self.devices().join(beayy_core::local_device()).join("segments");
         let todo: Vec<String> = if pick.is_empty() {
-            names.iter().filter(|n| seg_start(n) + Duration::minutes(10) <= now && self.existing(n).is_empty()).cloned().collect()
+            names
+                .iter()
+                .filter(|n| seg_start(n) + Duration::minutes(10) <= now && self.existing(n).is_empty() && mine.join(n.as_str()).join("events.jsonl").is_file())
+                .cloned()
+                .collect()
         } else {
             pick.to_vec()
         };

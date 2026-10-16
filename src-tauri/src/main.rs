@@ -10,6 +10,7 @@ mod icons;
 mod mcp;
 mod summarizer;
 mod sync;
+mod update;
 #[cfg(target_os = "macos")]
 mod devhook;
 
@@ -257,7 +258,8 @@ fn main() {
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
-            sync::account_info, sync::account_remove_device, sync::account_logout, sync::account_recovery_code
+            sync::account_info, sync::account_remove_device, sync::account_logout, sync::account_recovery_code,
+            update::update_status, update::update_check, update::update_apply
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -295,6 +297,10 @@ fn main() {
             daily::start(state.paused.clone());
             // 多设备同步：每 5 分钟一轮（没开同步就什么都不做；测试版不同步）
             sync::start(state.log.clone());
+            // 自动更新：启动 1 分钟后查，之后每 6 小时；下好了由用户点「重启更新」（测试版不查）
+            if !shadow_mode() {
+                update::start();
+            }
 
             // 菜单栏：标志模板图（系统按深浅色菜单栏自动反色）＋菜单
             let title = MenuItem::with_id(app, "title", if shadow_mode() { format!("{PRODUCT}（并跑版）") } else { PRODUCT.into() }, false, None::<&str>)?;

@@ -1,12 +1,11 @@
-# Windows 版：发布新版（Releases）时，或手动触发时，在 GitHub 的 Windows 机器上编译，打成 zip 附到这一版上。
+# Windows 版：手动触发（发版脚本 脚本/发布安装包.sh 会触发它），在 GitHub 的 Windows 机器上编译，打成 zip 留作构建产物；
+# 发版脚本把它下载下来，和 Mac 的 DMG 一起传到自动更新的服务器和 Releases。
 # 没有代码签名证书，第一次运行 Windows 会提示「已保护你的电脑」，点「仍要运行」。
 name: windows
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
   build:
     runs-on: windows-latest
@@ -27,8 +26,3 @@ jobs:
         with:
           name: Beayy-windows-x64
           path: Beayy-windows-x64.zip
-      - name: 附到这一版
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" Beayy-windows-x64.zip --clobber

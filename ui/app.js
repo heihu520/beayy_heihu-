@@ -237,6 +237,8 @@ const S = { days: [], status: null, page: "today", rules: null, settings: null, 
 async function boot() {
   [S.days, S.status, S.sync, S.profile] = await Promise.all([call("list_days"), call("get_status"), call("sync_status").catch(() => ({})), call("get_profile").catch(() => ({ name: "我" }))]);
   renderSide();
+  loadUpdate();
+  setInterval(loadUpdate, 10 * 60 * 1000);
 }
 
 function renderSide() {
@@ -270,8 +272,43 @@ const MI = {
   devices: lu('<path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/>'),
   folder: lu('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
   info: lu('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+  update: lu('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
   quit: lu('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>'),
 };
+
+// ---------- 自动更新：后台下好了，菜单和设置里出「重启更新」 ----------
+
+/** 左下角菜单里的一行：下好了可以点；还在下就只显示 */
+function updateItem() {
+  const u = S.update || {};
+  if (!u.newer || u.updatable) return "";
+  return u.ready ? `<button role="menuitem" data-me="update">${MI.update}重启更新到 ${esc(u.latest)}</button>` : `<button role="menuitem" disabled>${MI.update}正在下载 ${esc(u.latest)}</button>`;
+}
+
+async function loadUpdate() {
+  if (!TAURI) return;
+  try { S.update = await call("update_status"); renderSide(); } catch (e) {}
+}
+
+async function applyUpdate() {
+  try { await call("update_apply"); } catch (x) { alert(`没更新成功：${x}`); }
+}
+
+function aboutSection() {
+  const u = S.update || {}, st = S.status || {};
+  const state = u.checking ? "正在检查…" : u.updatable ? u.updatable : u.error ? u.error
+    : u.newer ? (u.ready ? `${u.latest} 已经下好，重启就能用。` : `正在下载 ${u.latest}…`)
+    : u.checked ? `已是最新版本（${mdhm(u.checked)} 检查过）` : "每 6 小时自动检查一次。";
+  const btn = u.newer && u.ready && !u.updatable ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-go">重启更新</button>` : `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-check" ${u.checking ? "disabled" : ""}>检查更新</button>`;
+  return section("关于", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">版本 ${esc(u.current || st.version || "")}</div><div class="mx-setting-desc">${esc(state)}</div>${u.newer && u.notes ? `<div class="mx-setting-desc">${esc(u.notes)}</div>` : ""}</div>${TAURI ? btn : ""}</div>`);
+}
+
+function bindAbout() {
+  const c = document.getElementById("up-check");
+  if (c) c.onclick = async () => { S.update = { ...(S.update || {}), checking: true }; renderSettings(); try { S.update = await call("update_check"); } catch (x) {} renderSide(); renderSettings(); };
+  const g = document.getElementById("up-go");
+  if (g) g.onclick = applyUpdate;
+}
 
 function renderMeMenu() {
   const menu = document.getElementById("me-menu");
@@ -285,7 +322,7 @@ function renderMeMenu() {
     <button role="menuitem" data-me="devices">${MI.devices}设备与同步</button>
     <button role="menuitem" data-me="data">${MI.folder}打开数据目录</button>
     <hr>
-    <button role="menuitem" disabled>${MI.info}版本<span class="mx-menu-val">${esc(st.version || "")}</span></button>
+    ${updateItem()}<button role="menuitem" disabled>${MI.info}版本<span class="mx-menu-val">${esc(st.version || "")}</span></button>
     <hr>
     <button role="menuitem" data-me="quit">${MI.quit}退出 Beayy</button>`;
 }
@@ -306,6 +343,7 @@ document.getElementById("me-menu").onclick = async (e) => {
   else if (k === "devices") location.hash = "#/devices";
   else if (k === "data") call("open_data_dir");
   else if (k === "quit") call("quit_app");
+  else if (k === "update") applyUpdate();
   else { await call("set_paused", k === "pause" ? { paused: true, minutes: 60 } : { paused: false }); S.status = await call("get_status"); renderSide(); if (S.page === "settings" || S.page === "devices") route(); }
 };
 document.addEventListener("click", (e) => { if (!e.target.closest(".me-wrap")) toggleMe(false); });
@@ -950,7 +988,12 @@ function accountBody(sy) {
     `<div class="btns">${sy.need_login ? "" : btn("ac-signup", "注册")}${btn("ac-login", sy.need_login ? "重新登录" : "登录")}</div>`) + msg;
 }
 
-const checkEmail = (e) => { if (!/^[^\s@]+@[^\s@]+$/.test(e)) throw "邮箱格式不对。"; return e; };
+const checkEmail = (e) => {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw "邮箱格式不对。";
+  // 常见手滑：.con、gmial 这类，邮箱错了以后登录不上
+  if (/\.(con|cmo|cm|comm|om|vom|xom)$/i.test(e) || /@(gmial|gamil|gmai|gmal|gmaill|qq\.con)\b/i.test(e)) throw "邮箱像是拼错了（比如 .com 打成了 .con），检查一下再提交。";
+  return e;
+};
 const checkPw = (el) => {
   const a = el.querySelector("#pw1").value, b = el.querySelector("#pw2");
   if (a.length < 8) throw "主密码至少 8 位。";
@@ -1051,6 +1094,7 @@ async function renderSettings() {
   if (!PJ.list) PJ.list = await call("list_projects").catch(() => []);
   S.profile = await call("get_profile").catch(() => S.profile);
   S.status = await call("get_status");
+  if (TAURI) S.update = await call("update_status").catch(() => S.update);
   renderSide();
   const st = S.status, dr = S.draft;
   const theme = document.documentElement.dataset.theme || "";
@@ -1080,6 +1124,7 @@ async function renderSettings() {
       <div class="mx-field" style="padding-top:14px"><label for="repo">人生记录仓库（日数据包和日总结从这里读）</label><input class="mx-input mono" id="repo" data-k="repo_path" value="${esc(dr.repo_path)}"></div>`)}
     ${section("外观", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">主题</div></div>
       <div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div></div>`)}
+    ${aboutSection()}
     <details class="adv" ${SS.advanced || gwBad ? "open" : ""} id="adv"><summary>高级：摘要用的网关、模型和密钥</summary><div class="stack">
         <div class="mx-field"><label for="gw">网关地址</label><input class="mx-input mono${gwBad ? " is-error" : ""}" id="gw" data-k="gateway" value="${esc(dr.gateway)}">${gwBad ? `<div class="mx-field-error">网关地址要以 https:// 开头，比如 https://api.openai.com/v1</div>` : ""}</div>
         <div class="mx-field"><label for="m1">10 分钟摘要的模型</label><input class="mx-input mono" id="m1" data-k="model_segment" value="${esc(dr.model_segment)}"></div>
@@ -1095,6 +1140,7 @@ async function renderSettings() {
   bindAccount();
   bindProfile();
   bindProjects();
+  bindAbout();
   document.getElementById("adv").ontoggle = (e) => { SS.advanced = e.target.open; };
   document.getElementById("theme").onclick = (e) => {
     const b = e.target.closest("button"); if (!b) return;

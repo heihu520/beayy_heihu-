@@ -25,6 +25,18 @@ async function route(req, env) {
   const url = new URL(req.url);
   const p = url.pathname.split("/").filter(Boolean);
   if (p[0] === "v2") return v2(req, env, p.slice(1), url);
+  // 自动更新：公开只读，R2 里 update/ 下的 latest.json 和安装包（放这里不放 GitHub，国内不翻墙也能下）
+  if (p[0] === "update" && p.length === 2 && NAME.test(p[1]) && (req.method === "GET" || req.method === "HEAD")) {
+    const o = await env.BUCKET.get("update/" + p[1]);
+    if (!o) return json({ error: "没有这个文件" }, 404);
+    return new Response(req.method === "HEAD" ? null : o.body, {
+      headers: {
+        "content-type": p[1].endsWith(".json") ? "application/json; charset=utf-8" : "application/octet-stream",
+        "content-length": String(o.size),
+        "cache-control": p[1] === "latest.json" ? "no-cache" : "public, max-age=86400",
+      },
+    });
+  }
   if (p[0] !== "v1") return json({ error: "没有这个接口" }, 404);
 
   if (p[1] === "register" && req.method === "POST") {
