@@ -3,6 +3,7 @@
 
 use super::ffi::*;
 use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+pub use crate::common::{merge, num, truncate};
 use serde_json::{json, Map, Value};
 
 /// 读元素的一个属性，原样返回 CF 对象
@@ -47,14 +48,6 @@ pub fn focused_window(app: &CF) -> Option<CF> {
 
 pub fn is_focused_secure(app: &CF) -> bool {
     focused_element(app).map(|e| is_secure(&e)).unwrap_or(false)
-}
-
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        s.chars().take(max).collect::<String>() + "…"
-    }
 }
 
 /// 读元素的值；密码框返回 [REDACTED]
@@ -119,20 +112,4 @@ pub fn window_title(pid: Pid) -> String {
         return "[REDACTED]".into();
     }
     focused_window(&app).and_then(|w| ax_string(&w, "AXTitle")).unwrap_or_default()
-}
-
-/// 并进一组字段（已有的键不覆盖，同 Swift 的 merge { a, _ in a }）
-pub fn merge(into: &mut Map<String, Value>, from: Map<String, Value>) {
-    for (k, v) in from {
-        into.entry(k).or_insert(v);
-    }
-}
-
-/// 坐标这类浮点数：整数值写成整数，和 Swift 的 JSONSerialization 一致
-pub fn num(x: f64) -> Value {
-    if x.fract() == 0.0 && x.abs() < 1e15 {
-        json!(x as i64)
-    } else {
-        json!(x)
-    }
 }

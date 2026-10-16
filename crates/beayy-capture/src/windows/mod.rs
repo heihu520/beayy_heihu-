@@ -1,15 +1,56 @@
-//! Windows 实现。范围（10-15 定）：前台 app 与窗口、在不在电脑前；界面文字只有接口和桩、不开启；
-//! 不含键盘与输入内容。**未实机验证**：目前只在 Mac 上用 `cargo check --target x86_64-pc-windows-msvc` 检查能编译，
-//! 等有 Windows 电脑再测。过渡期 Windows 的时长照旧用 ActivityWatch 的 Windows 版。
+//! Windows 实现。10-16 起记的和 macOS 一样全，事件名和字段一致（见 app/INTERNAL.md 的事件表和对照）：
+//! 键鼠（点击带元素、滚动、快捷键、打字与发送、人还是程序）、界面文字、切 app 与窗口变化、在场与心跳、
+//! 睡眠唤醒锁屏熄屏、不记录的 app、暂停。
+//!
+//! - `hooks`：消息线程——低级键鼠钩子、前台切换、电源和会话通知；回调只收原始字段
+//! - `sys`：进程和窗口（前台、程序路径和显示名、窗口标题、空闲）
+//! - `uia`：UI Automation——焦点输入框的值、点中的元素、界面文字遍历
+//! - `capture`：采集线程（判断逻辑同 macOS，共用 `common`）和 UIA 工作线程
+//!
+//! 已知限制：以管理员身份运行的窗口受 UIPI 限制，Beayy 不提权运行，读不到它的界面、也收不到它前台时的键鼠；
+//! 部分 UWP、游戏窗口的 UIA 信息很少；分不出注入键鼠的是哪个进程（actor 只有人／程序两类）。
+
+mod capture;
+mod hooks;
+mod sys;
+mod uia;
 
 use crate::PermissionStatus;
-use windows_sys::Win32::Foundation::{CloseHandle, HWND};
-use windows_sys::Win32::System::SystemInformation::GetTickCount;
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
+use beayy_core::EventLog;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+pub use sys::idle_seconds;
+
+/// 键鼠事件的来源标记：是不是程序注入的、注入方是不是更低权限、注入方留的附加信息
+#[derive(Clone, Copy)]
+pub(crate) struct ActorRaw {
+    pub injected: bool,
+    pub lower_il: bool,
+    pub extra: usize,
+}
+
+/// 发给采集线程的消息
+pub(crate) enum Ev {
+    Key { vk: u32, mods: u8, actor: ActorRaw },
+    Mouse { button: &'static str, x: i32, y: i32, actor: ActorRaw },
+    Scroll { actor: ActorRaw },
+    /// 前台窗口换了（窗口句柄）
+    Foreground(sys::Hwnd),
+    /// 睡眠、唤醒、锁屏、解锁、熄屏、亮屏（system.sleep 等事件名）
+    System(&'static str),
+    /// 钩子装上／装失败／重装
+    Hooks { ok: bool, error: String, reinstall: bool },
+    /// 安排一次界面文字读取（工作线程记完点击后）
+    ScheduleUi(&'static str, f64),
+    /// 退出前把正在打的字落盘，完成后回一声
+    Quit(Sender<()>),
+}
+
+static HANDLE: OnceLock<Mutex<Sender<Ev>>> = OnceLock::new();
+static SHUT: AtomicBool = AtomicBool::new(false);
 
 pub fn permissions() -> PermissionStatus {
     // Windows 没有对应的系统授权
@@ -18,109 +59,27 @@ pub fn permissions() -> PermissionStatus {
 
 pub fn open_permission(_kind: &str) {}
 
-/// 距上次键鼠输入的秒数（只取时刻，不读内容）
-pub fn idle_seconds() -> f64 {
-    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-    unsafe {
-        if GetLastInputInfo(&mut info) == 0 {
-            return 0.0;
-        }
-        GetTickCount().wrapping_sub(info.dwTime) as f64 / 1000.0
+/// 键鼠钩子装上了没有
+pub fn capturing() -> bool {
+    hooks::HOOKS_OK.load(Ordering::Relaxed)
+}
+
+/// 启动采集。`paused` 由界面和菜单改，采集线程自己发现变化、记暂停事件。
+pub fn start(log: Arc<EventLog>, paused: Arc<AtomicBool>) {
+    let tx = capture::spawn(log, paused);
+    hooks::spawn(tx.clone());
+    let _ = HANDLE.set(Mutex::new(tx));
+}
+
+/// 退出前调用：把正在打的字落盘（最多等 1 秒）。关机时消息线程也会调，只做一次
+pub fn shutdown() {
+    if SHUT.swap(true, Ordering::Relaxed) {
+        return;
     }
-}
-
-/// 前台窗口：进程号、程序名（exe 文件名，不含扩展名）、程序完整路径、窗口标题
-pub struct Foreground {
-    pub pid: u32,
-    pub app_name: String,
-    pub exe_path: String,
-    pub window_title: String,
-}
-
-pub fn foreground() -> Option<Foreground> {
-    unsafe {
-        let hwnd: HWND = GetForegroundWindow();
-        if hwnd.is_null() {
-            return None;
-        }
-        let mut title = [0u16; 512];
-        let n = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32);
-        let window_title = String::from_utf16_lossy(&title[..n.max(0) as usize]);
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        let mut exe_path = String::new();
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if !h.is_null() {
-            let mut buf = [0u16; 1024];
-            let mut len = buf.len() as u32;
-            if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0 {
-                exe_path = String::from_utf16_lossy(&buf[..len as usize]);
-            }
-            CloseHandle(h);
-        }
-        let app_name = std::path::Path::new(&exe_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        Some(Foreground { pid, app_name, exe_path, window_title })
+    let Some(h) = HANDLE.get() else { return };
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Ok(h) = h.lock() {
+        let _ = h.send(Ev::Quit(tx));
     }
-}
-
-/// 界面文字（UI Automation）：接口先定下来，桩实现返回空，不开启实际采集——
-/// 那台电脑是不是公司电脑还没定。
-pub fn ui_text(_pid: u32) -> Option<String> {
-    None
-}
-
-/// 时长与在场：每秒看一次前台窗口，每 10 秒看一次空闲，事件名和字段与 macOS 版一致
-/// （app.activated、window.changed、presence、heartbeat；Windows 上 bundle_id 填程序完整路径）。
-pub fn start_tracking(log: std::sync::Arc<beayy_core::EventLog>, paused: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    use beayy_core::fields;
-    use std::sync::atomic::Ordering;
-    use std::time::{Duration, Instant};
-    const IDLE_THRESHOLD: f64 = 180.0;
-    std::thread::spawn(move || {
-        let mut last: Option<(u32, String)> = None;
-        let mut active: Option<bool> = None;
-        let mut last_presence = Instant::now() - Duration::from_secs(60);
-        let mut last_heartbeat = Instant::now() - Duration::from_secs(120);
-        loop {
-            std::thread::sleep(Duration::from_secs(1));
-            if paused.load(Ordering::Relaxed) {
-                continue;
-            }
-            let fg = foreground();
-            if let Some(f) = &fg {
-                let info = || fields! {"pid" => f.pid, "app_name" => f.app_name, "bundle_id" => f.exe_path, "window_title" => f.window_title};
-                match &last {
-                    Some((pid, _)) if *pid != f.pid => log.write("app.activated", info(), None),
-                    Some((_, title)) if *title != f.window_title => {
-                        let mut m = info();
-                        m.insert("change".into(), serde_json::json!("title"));
-                        log.write("window.changed", m, None);
-                    }
-                    None => log.write("app.activated", info(), None),
-                    _ => {}
-                }
-                last = Some((f.pid, f.window_title.clone()));
-            }
-            if last_presence.elapsed() >= Duration::from_secs(10) {
-                last_presence = Instant::now();
-                let idle = idle_seconds();
-                let now_active = idle < IDLE_THRESHOLD;
-                if Some(now_active) != active {
-                    log.write("presence", fields! {"state" => if now_active { "active" } else { "idle" }, "idle_seconds" => idle as i64}, None);
-                    active = Some(now_active);
-                }
-                if last_heartbeat.elapsed() >= Duration::from_secs(60) {
-                    last_heartbeat = Instant::now();
-                    let mut m = fields! {"idle_seconds" => idle as i64, "state" => if now_active { "active" } else { "idle" }};
-                    if let Some(f) = &fg {
-                        m.extend(fields! {"pid" => f.pid, "app_name" => f.app_name, "bundle_id" => f.exe_path, "window_title" => f.window_title});
-                    }
-                    log.write("heartbeat", m, None);
-                }
-            }
-        }
-    });
+    let _ = rx.recv_timeout(Duration::from_secs(1));
 }

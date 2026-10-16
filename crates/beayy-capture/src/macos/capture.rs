@@ -13,31 +13,16 @@
 use super::ax::*;
 use super::ffi::*;
 use super::uitext::UiReader;
+use crate::common::*;
 use beayy_core::{fields, EventLog};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-/// 停顿多久算「打完一段」
-const TEXT_DEBOUNCE: f64 = 5.0;
-/// 连续打字的上限，超过就先落一条
-const TEXT_MAX_CONTINUOUS: f64 = 60.0;
-/// 每次按键后多久读一次输入框，用来在回车清空输入框之前留住原文
-const SNAPSHOT_DELAY: f64 = 0.2;
-/// 回车后多久再读一次，判断是「发送」（输入框被清空）还是换行 / 输入法上屏
-const SUBMIT_CHECK_DELAY: f64 = 0.35;
-/// 在场：超过 3 分钟没有键鼠算离开（和 ActivityWatch 默认一致），每 60 秒一条心跳，每 10 秒看一次
-const IDLE_THRESHOLD: f64 = 180.0;
-const HEARTBEAT_EVERY: f64 = 60.0;
-const PRESENCE_EVERY: f64 = 10.0;
-/// 有人在操作时，界面内容没变化也每隔多久补读一次（消息滚动进来、页面自己刷新）
-const UI_REFRESH: f64 = 30.0;
-const PERMISSION_EVERY: f64 = 5.0;
+use std::time::Instant;
 
 pub static TAP_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -122,26 +107,6 @@ fn actor_info(a: ActorRaw) -> Value {
     json!({"kind": kind, "source_pid": pid, "source_proc": name, "state_id": a.state_id, "user_data": a.user_data, "rule": "v0"})
 }
 
-/// 去掉零宽字符和首尾空白（飞书等富文本输入框会在段落里塞 \u{200B}）
-fn clean_text(s: &str) -> String {
-    s.replace(['\u{200B}', '\u{FEFF}'], "").trim().to_string()
-}
-
-/// 「刚打的字还在不在输入框里」。中文输入法组字时，回车会把拼音字母原样上屏（`liu'b` → `liub`），
-/// 原文比较会误判成发送；所以先去掉 ASCII 字母、拼音分隔符和空白，只比汉字等其余部分。
-/// 原文全是英文（去掉后为空）时，退回原样比较。
-fn still_contains(after: &str, before: &str) -> bool {
-    let core = |s: &str| -> String {
-        s.chars().filter(|c| !(c.is_ascii_alphabetic() || *c == '\'' || c.is_ascii_whitespace() || *c == '\u{0B}')).collect()
-    };
-    let b = core(before);
-    if b.is_empty() {
-        after.contains(before)
-    } else {
-        core(after).contains(&b)
-    }
-}
-
 // ---------- 监听回调：只收原始字段 ----------
 
 enum Raw {
@@ -209,50 +174,6 @@ extern "C" fn keepalive(_t: CFRunLoopTimerRef, _c: *mut c_void) {}
 
 // ---------- 定时任务 ----------
 
-type Task = Box<dyn FnOnce(&mut Capture)>;
-
-struct Timer {
-    at: Instant,
-    key: Option<&'static str>,
-    task: Task,
-}
-
-#[derive(Default)]
-struct Scheduler {
-    timers: Vec<Timer>,
-}
-
-impl Scheduler {
-    /// 安排一个任务；带 key 的同名任务只留最新一个（相当于 DispatchWorkItem 先 cancel 再排）
-    fn after(&mut self, secs: f64, key: Option<&'static str>, task: Task) {
-        if key.is_some() {
-            self.cancel(key.unwrap());
-        }
-        self.timers.push(Timer { at: Instant::now() + Duration::from_secs_f64(secs.max(0.0)), key, task });
-    }
-    fn cancel(&mut self, key: &str) {
-        self.timers.retain(|t| t.key != Some(key));
-    }
-    fn next_in(&self) -> f64 {
-        let now = Instant::now();
-        self.timers.iter().map(|t| t.at.saturating_duration_since(now).as_secs_f64()).fold(f64::MAX, f64::min)
-    }
-    fn take_due(&mut self) -> Vec<Task> {
-        let now = Instant::now();
-        let mut due: Vec<Timer> = vec![];
-        let mut i = 0;
-        while i < self.timers.len() {
-            if self.timers[i].at <= now {
-                due.push(self.timers.remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        due.sort_by_key(|t| t.at);
-        due.into_iter().map(|t| t.task).collect()
-    }
-}
-
 // ---------- 采集线程的状态 ----------
 
 struct Capture {
@@ -260,7 +181,7 @@ struct Capture {
     paused: Arc<AtomicBool>,
     paused_seen: bool,
     worker: Sender<Work>,
-    sched: Scheduler,
+    sched: Scheduler<Capture>,
     rl: CFRunLoopRef,
 
     tap: Option<CF>,
@@ -273,8 +194,7 @@ struct Capture {
     burst_element: Option<CF>,
     burst_app: Map<String, Value>,
     burst_window: String,
-    burst_keys: BTreeMap<String, i64>,
-    burst_agents: BTreeSet<String>,
+    burst_stats: KeyStats,
     last_value: String,
     burst_pid: Pid,
     generation: u64,
@@ -290,9 +210,7 @@ struct Capture {
     last_walk: Option<Instant>,
 
     // 不记录的 app（settings.json 的 blacklist，app 名或 bundle id，不分大小写）；每 5 秒看一次文件有没有改
-    blocklist: Vec<String>,
-    blocklist_mtime: Option<std::time::SystemTime>,
-    blocked_cache: HashMap<Pid, bool>,
+    blocklist: Blocklist,
 
     // 在场
     active: Option<bool>,
@@ -382,8 +300,7 @@ impl Capture {
             burst_element: None,
             burst_app: Map::new(),
             burst_window: String::new(),
-            burst_keys: BTreeMap::new(),
-            burst_agents: BTreeSet::new(),
+            burst_stats: KeyStats::default(),
             last_value: String::new(),
             burst_pid: 0,
             generation: 0,
@@ -393,9 +310,7 @@ impl Capture {
             observer: None,
             observed_pid: 0,
             last_walk: None,
-            blocklist: DEFAULT_BLOCKLIST.iter().map(|s| s.to_lowercase()).collect(),
-            blocklist_mtime: None,
-            blocked_cache: HashMap::new(),
+            blocklist: Blocklist::new(DEFAULT_BLOCKLIST),
             active: None,
             last_heartbeat: None,
             locked: false,
@@ -517,36 +432,17 @@ impl Capture {
         self.sched.after(PERMISSION_EVERY, Some("permissions"), Box::new(|c| c.permission_loop()));
     }
 
-    /// 设置页改了不记录的 app 就重读（settings.json 和网页界面共用，在正式数据目录）
+    /// 设置页改了不记录的 app 就重读
     fn reload_blocklist(&mut self) {
-        // 测试版（--shadow）影子目录里有自己的 settings.json 就用它，测名单时不影响正式版
-        let own = beayy_core::data_root().join("settings.json");
-        let path = if beayy_core::shadow_mode() && own.exists() { own } else { beayy_core::default_root().join("settings.json") };
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if mtime.is_none() || mtime == self.blocklist_mtime {
-            return;
-        }
-        self.blocklist_mtime = mtime;
-        let raw: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-        self.blocklist = match raw.get("blacklist").and_then(Value::as_array) {
-            Some(a) => a.iter().filter_map(Value::as_str).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect(),
-            None => DEFAULT_BLOCKLIST.iter().map(|s| s.to_lowercase()).collect(),
-        };
-        self.blocked_cache.clear();
+        self.blocklist.reload();
     }
 
     /// 这个进程是不是不记录的 app
     fn blocked(&mut self, pid: Pid) -> bool {
-        if self.blocklist.is_empty() {
-            return false;
-        }
-        if let Some(b) = self.blocked_cache.get(&pid) {
-            return *b;
-        }
-        let (name, bundle) = app_names(pid);
-        let b = self.blocklist.iter().any(|x| *x == name.to_lowercase() || *x == bundle.to_lowercase());
-        self.blocked_cache.insert(pid, b);
-        b
+        self.blocklist.blocked(pid as i64, || {
+            let (name, bundle) = app_names(pid);
+            vec![name, bundle]
+        })
     }
 
     /// 前台是不记录的 app
@@ -720,7 +616,7 @@ impl Capture {
             }
         }
         self.note_key(&actor);
-        if self.typed.chars().count() < 2000 {
+        if self.typed.chars().count() < TYPED_MAX {
             self.typed += &chars;
         }
         self.schedule_snapshot();
@@ -733,13 +629,7 @@ impl Capture {
     }
 
     fn note_key(&mut self, actor: &Value) {
-        let kind = actor["kind"].as_str().unwrap_or("unknown").to_string();
-        if kind == "agent" {
-            if let Some(p) = actor["source_proc"].as_str() {
-                self.burst_agents.insert(p.to_string());
-            }
-        }
-        *self.burst_keys.entry(kind).or_insert(0) += 1;
+        self.burst_stats.note(actor);
     }
 
     /// 按键后稍等读一次输入框，留住「回车前」的内容
@@ -750,7 +640,7 @@ impl Capture {
             Box::new(|c| {
                 c.refocus();
                 if let Some(el) = &c.burst_element {
-                    let v = clean_text(&element_value(el, 4000));
+                    let v = clean_text(&element_value(el, VALUE_MAX));
                     if !v.is_empty() {
                         c.last_value = v;
                     }
@@ -780,10 +670,8 @@ impl Capture {
                 if c.generation != gen {
                     return; // 这一段已经记过发送（连按回车）
                 }
-                let after = clean_text(&element.as_ref().map(|e| element_value(e, 4000)).unwrap_or_default());
-                // 不能只看「变空、变短」：飞书、ChatGPT 网页这类输入框清空后会显示提示文字，反而比原文长
-                let cleared = !before.is_empty() && !still_contains(&after, &before);
-                if cleared {
+                let after = clean_text(&element.as_ref().map(|e| element_value(e, VALUE_MAX)).unwrap_or_default());
+                if submit_cleared(&before, &after) {
                     c.emit_text("keyboard.submit", &before, "return_cleared", Some(actor));
                     c.ui_schedule("submit", 0.8);
                     c.reset_burst();
@@ -809,11 +697,8 @@ impl Capture {
         if self.burst_start.is_none() {
             return;
         }
-        let mut text = clean_text(&self.burst_element.as_ref().map(|e| element_value(e, 4000)).unwrap_or_default());
-        // 当前值里已经没有最近读到的内容（被发送、清空、换成提示文字），就用最近读到的
-        if text.is_empty() || (!self.last_value.is_empty() && !text.contains(&self.last_value)) {
-            text = self.last_value.clone();
-        }
+        let current = clean_text(&self.burst_element.as_ref().map(|e| element_value(e, VALUE_MAX)).unwrap_or_default());
+        let text = flush_value(current, &self.last_value);
         self.emit_text("keyboard.text_input", &text, reason, None);
         self.ui_schedule("typing", 0.6);
         self.reset_burst();
@@ -826,12 +711,7 @@ impl Capture {
         let secure = self.burst_element.as_ref().map(is_secure).unwrap_or(false);
         f.insert("typed".into(), json!(if secure { "[REDACTED]" } else { self.typed.as_str() }));
         f.insert("reason".into(), json!(reason));
-        f.insert("keys".into(), json!(self.burst_keys));
-        f.insert("agent_procs".into(), json!(self.burst_agents));
-        // 这一段由谁打的：全是人 / 全是代理 / 混合
-        let h = *self.burst_keys.get("human").unwrap_or(&0);
-        let a = *self.burst_keys.get("agent").unwrap_or(&0);
-        f.insert("actor_kind".into(), json!(if a == 0 { "human" } else if h == 0 { "agent" } else { "mixed" }));
+        self.burst_stats.fill(&mut f);
         if let Some(actor) = actor {
             f.insert("submit_actor".into(), actor);
         }
@@ -850,8 +730,7 @@ impl Capture {
         self.burst_element = None;
         self.burst_app = Map::new();
         self.burst_window.clear();
-        self.burst_keys.clear();
-        self.burst_agents.clear();
+        self.burst_stats.clear();
         self.last_value.clear();
         self.typed.clear();
         self.burst_pid = 0;

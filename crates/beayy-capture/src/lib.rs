@@ -1,6 +1,8 @@
 //! 采集接口。各平台实现同一组能力，按平台分模块编译。
-//! macOS：权限、键鼠监听、打字与发送、界面文字、切 app、在场与心跳（`macos::start`）；Windows：时长与在场。
+//! 两边记的事件和字段相同：键鼠、打字与发送、界面文字、切 app、窗口变化、在场与心跳、睡眠锁屏
+//! （`macos::start`／`windows::start`）。判断逻辑（防抖、发送、操作者统计、黑名单、界面文字去重）在 `common`，两边共用。
 
+mod common;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]

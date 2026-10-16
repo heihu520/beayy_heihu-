@@ -890,7 +890,7 @@ async function renderDevices() {
   };
   const detail = (d) => {
     const base = `<div class="dev-acts"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-rename="${esc(d.id)}">重命名</button></div><dl class="kv"><dt>记录从</dt><dd>${mdhm(d.first)}</dd><dt>最近一条</dt><dd>${mdhm(d.last)}</dd><dt>共</dt><dd>${numText(d.events)} 条 · ${bytesText(d.bytes)}</dd><dt>设备编号</dt><dd class="mono">${esc(d.id)}</dd></dl>`;
-    if (d.this && IS_WIN) return base + `<div class="dev-sub">记什么：前台是哪个程序、窗口标题、在不在电脑前。每 10 分钟写一段摘要。打字内容和屏幕上的文字 Windows 版还不记。</div>`;
+    if (d.this && IS_WIN) return base + `<div class="dev-sub">记什么：切换程序和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。以管理员身份运行的程序读不到。</div>`;
     if (d.this) return base + `<div class="dev-sub">记什么：切换 app 和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。</div>`
       + `<h4 class="dev-h">权限</h4>` + permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")
       + permRow("input_monitoring", "输入监控", "被动监听键盘和鼠标，只用来计时和判断是人还是代理在操作。")
@@ -901,7 +901,7 @@ async function renderDevices() {
   const adding = `<div class="add-dev">
       <div class="add-opt">${DEV_ICON.iphone}<div><b>iPhone</b><span>不用装 app。iPhone 上打开 设置 → 屏幕使用时间 →「跨设备共享」，用同一个 Apple 账号，这台 Mac 就能读到。</span></div></div>
       <div class="add-opt">${DEV_ICON.mac}<div><b>另一台 Mac</b><span>装上 Beayy，在设置里用同一个账号登录，记录就会同步过来，出现在下面的列表里。</span></div></div>
-      <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>装上 Windows 版，用同一个账号登录。Windows 版目前只记前台程序、窗口标题和在不在电脑前，还在试用。</span></div></div>
+      <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>装上 Windows 版，用同一个账号登录。记的内容和 Mac 一样（打字、点击、界面文字、切换程序、在不在电脑前），还在试用。</span></div></div>
     </div>`;
   $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
     + `<div class="reading">${syncCard(sy)}<div class="devs">${devs.map((d) => `<div class="dev${DS.open === d.id ? " open" : ""}" data-id="${esc(d.id)}">
@@ -992,7 +992,7 @@ function bindSync() {
 const THEMES = [["", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
 const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist", "relay_server"];
 const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.stringify(SETTING_KEYS.map((k) => b[k]));
-/** Windows 版：没有钥匙串和系统授权，只记前台窗口和在不在电脑前 */
+/** Windows 版：没有钥匙串和系统授权（密钥存数据目录，采集不用授权） */
 const IS_WIN = /Windows/.test(navigator.userAgent);
 const KEY_SOURCE = { keychain: "已存（钥匙串）", file: "已存（数据目录）", env: "在用环境变量里的" };
 const KEY_STORE = IS_WIN ? "数据目录" : "钥匙串";
@@ -1374,7 +1374,7 @@ async function renderOnboarding() {
        <div><b>记什么</b><span>电脑：切换了哪个 app 和窗口、打字和发出去的内容、点了什么、屏幕上的文字、在不在电脑前。手机：每个 app 用了多久（看不到 app 里的内容）。密码框不记；你可以指定某些 app 完全不记，也可以随时暂停或删掉最近的记录。</span></div>
        <div><b>存在哪</b><span>全部存在这台电脑上。写摘要时，会把那 10 分钟的记录发给你自己配置的模型服务。开启同步的话，记录在本机加密后再上传，服务器读不到内容。</span></div>
      </div>`,
-    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权，直接下一步。</p><p class="ob-lead">Windows 版目前只记前台是哪个程序、窗口标题，以及你在不在电脑前；打字内容、屏幕上的文字、iPhone 记录还不支持。</p>`
+    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权，直接下一步。</p><p class="ob-lead">记的内容和 Mac 一样：切换程序和窗口、打字和发出去的内容、点了什么、屏幕上的文字、在不在电脑前。以管理员身份运行的程序读不到；iPhone 记录要在 Mac 上读。杀毒软件可能把键盘监听当成可疑行为，放行 Beayy 即可。</p>`
     : `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。点「去授权」会打开系统设置，把 Beayy 的开关打开再回来。</p>
      ${permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题和屏幕上的文字。")}
      ${permRow("input_monitoring", "输入监控", "知道什么时候在打字、点击，判断是你本人还是程序在操作。")}

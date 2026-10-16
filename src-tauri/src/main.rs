@@ -1,6 +1,6 @@
 // Beayy（Be Authentic. Your Yesterdays.）Tauri 2 外壳。
 // 菜单栏标志＋菜单、主窗口（网页四页，app/ui/）、给网页的命令（清单见 COMMANDS.md）、后台定时任务。
-// macOS 的采集（键鼠、界面文字、在场）在 beayy-capture 里，由这里启动；Windows 是时长与在场。
+// 采集（键鼠、界面文字、在场）在 beayy-capture 里，由这里启动；macOS 和 Windows 记的事件相同。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -84,7 +84,9 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
 fn capturing() -> bool {
     #[cfg(target_os = "macos")]
     return beayy_capture::macos::capturing();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return beayy_capture::windows::capturing();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     return true;
 }
 
@@ -120,12 +122,12 @@ fn set_login_item(on: bool) -> Result<(), String> {
     return if on { Err("这个系统上还不支持".into()) } else { Ok(()) };
 }
 
-/// macOS 上由采集线程发现变化，先把正在打的字落盘再记 app.paused／app.resumed；别的平台这里直接记
+/// macOS、Windows 上由采集线程发现变化，先把正在打的字落盘再记 app.paused／app.resumed；别的平台这里直接记
 fn apply_paused(state: &AppState, paused: bool) {
     if state.paused.swap(paused, Ordering::Relaxed) == paused {
         return;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     state.log.write(if paused { "app.paused" } else { "app.resumed" }, fields! {}, None);
 }
 
@@ -191,6 +193,8 @@ fn tray_ok() -> bool {
 fn on_exit(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     beayy_capture::macos::shutdown();
+    #[cfg(target_os = "windows")]
+    beayy_capture::windows::shutdown();
     if let Some(s) = app.try_state::<Arc<AppState>>() {
         s.log.write("app.quit", fields! {}, None);
     }
@@ -321,11 +325,11 @@ fn main() {
             state.log.write("app.launch", launch, None);
             app.manage(state.clone());
 
-            // 采集：macOS 键鼠、界面文字、在场（这里是主线程，系统通知要挂在主线程上）；Windows 时长与在场（未实机验证）
+            // 采集：键鼠、打字与发送、界面文字、切 app、在场（macOS 在主线程调，系统通知要挂在主线程上；Windows 自己起消息线程）
             #[cfg(target_os = "macos")]
             beayy_capture::macos::start(state.log.clone(), state.paused.clone());
             #[cfg(target_os = "windows")]
-            beayy_capture::windows::start_tracking(state.log.clone(), state.paused.clone());
+            beayy_capture::windows::start(state.log.clone(), state.paused.clone());
 
             // 10 分钟摘要：每个整 10 分过后 1 分钟调起 Python 脚本（并跑版也跑，脚本跳过已写过的分段，锁文件防重入）
             summarizer::start(state.log.clone(), state.paused.clone());

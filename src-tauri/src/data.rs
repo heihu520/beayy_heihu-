@@ -948,7 +948,8 @@ pub fn get_settings() -> Value {
         "model_daily": get("daily_model", ""),
         "repo_path": get("repo_path", ""),
         "onboarded": s.get("onboarded").and_then(Value::as_bool).unwrap_or(false),
-        "blocklist": s.get("blacklist").cloned().unwrap_or(json!(["com.1password.1password"])),
+        // 默认值和采集端一致（beayy-capture 的 DEFAULT_BLOCKLIST）：Windows 按 exe 文件名
+        "blocklist": s.get("blacklist").cloned().unwrap_or(if cfg!(target_os = "windows") { json!(["1password"]) } else { json!(["com.1password.1password"]) }),
         "has_api_key": beayy_summary::api_key_source().is_some(),
         "api_key_source": beayy_summary::api_key_source(),
         "relay_server": get("relay_server", ""),

@@ -16,7 +16,7 @@
 
 | | |
 |---|---|
-| 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（辅助功能读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
+| 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（macOS 辅助功能、Windows UI Automation 读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
 | 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久（看不到 app 里的内容） |
 | 手表（可选） | Apple Watch 全天录音，传到**你自己的**录音服务器转写、分说话人；这里只拉回文字（谁在几点说了什么），音频不经过这台电脑 |
 | 位置（可选） | iPhone 记下的停留点（几点到、几点走、地名），同样经你自己的录音服务器拉回来；路上的轨迹不记 |
@@ -28,7 +28,7 @@
 
 到 [Releases](../../releases) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。装好以后会自动检查更新，有新版本时左下角菜单里出现「重启更新」。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。
 
-要求 macOS 14 以上。Windows 版在做（目前只记前台 app 和在不在电脑前，没在真机上充分测试）。
+要求 macOS 14 以上，或 Windows 10／11（64 位）。Windows 版记的和 Mac 一样（键鼠钩子＋UI Automation），还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）。
 
 ## 让 AI 读你的记录（MCP）
 
@@ -57,7 +57,7 @@ git clone https://github.com/hengfengliya/beayy && cd beayy
 | 目录 | 内容 |
 |---|---|
 | `crates/beayy-core` | 事件格式与写入（按设备、UTC 整 10 分分段、只追加）、设备名、数据目录 |
-| `crates/beayy-capture` | 采集：macOS 键鼠监听、打字与发送、界面文字、切 app、在场与心跳、权限；Windows 时长与在场 |
+| `crates/beayy-capture` | 采集：键鼠、打字与发送、界面文字、切 app、在场与心跳、睡眠锁屏；macOS 用辅助功能和事件监听，Windows 用低级钩子和 UI Automation，判断逻辑两边共用（`common.rs`） |
 | `crates/beayy-phone` | 读 iPhone 经 iCloud 同步来的屏幕使用时间（macOS） |
 | `crates/beayy-remote` | 从录音服务器拉手表对话转写和 iPhone 停留点（HTTPS＋口令） |
 | `crates/beayy-summary` | 10 分钟摘要、小时摘要、两级分类（类型、领域 · 项目）、项目名合并 |
