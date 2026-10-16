@@ -701,7 +701,7 @@ pub fn set_api_key(key: String) -> Result<(), String> {
 // ---------- 删除记录 ----------
 
 /// 删掉本机电脑事件里某时刻之后的记录，连同这些分段的 10 分钟摘要（摘要下一轮按剩下的事件重写）。
-/// 只动本机（mac-*）的事件；iPhone 记录、已经归档进仓库 raw/ 的不动。返回删掉的条数
+/// 只动本机这台电脑的事件（同步来的别的设备不动）；iPhone 记录、已经归档进仓库 raw/ 的不动。返回删掉的条数
 #[tauri::command]
 pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, String> {
     let from: DateTime<Utc> = if today == Some(true) {
@@ -713,7 +713,8 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
     let mut removed = 0;
     let mut touched: Vec<String> = vec![];
     let Ok(devs) = fs::read_dir(default_root().join("devices")) else { return Ok(0) };
-    for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("mac-")) {
+    let me = beayy_core::local_device();
+    for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy() == me.as_str()) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
         for seg in segs.filter_map(|e| e.ok()) {
             let name = seg.file_name().to_string_lossy().to_string();

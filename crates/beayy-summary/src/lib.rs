@@ -217,12 +217,12 @@ impl Summarizer {
         self.root.join("summaries")
     }
 
-    /// 各台 Mac 的分段目录名（已排序、去重）
+    /// 各台电脑（Mac、Windows）的分段目录名（已排序、去重）
     pub fn segment_names(&self) -> Vec<String> {
         let mut out = BTreeSet::new();
         for dev in read_dir_sorted(&self.devices()) {
             let n = dev.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-            if !n.starts_with("mac-") {
+            if !is_computer(&n) {
                 continue;
             }
             for seg in read_dir_sorted(&dev.join("segments")) {
@@ -238,13 +238,13 @@ impl Summarizer {
     fn seg_files(&self, name: &str) -> Vec<PathBuf> {
         read_dir_sorted(&self.devices())
             .into_iter()
-            .filter(|d| d.file_name().map(|x| x.to_string_lossy().starts_with("mac-")).unwrap_or(false))
+            .filter(|d| d.file_name().map(|x| is_computer(&x.to_string_lossy())).unwrap_or(false))
             .map(|d| d.join("segments").join(name).join("events.jsonl"))
             .filter(|p| p.is_file())
             .collect()
     }
 
-    /// 各台 Mac 同一分段的事件合在一起，按解析后的时间排（旧事件带 +08:00、新的是 UTC）；坏行跳过
+    /// 各台电脑同一分段的事件合在一起，按解析后的时间排（旧事件带 +08:00、新的是 UTC）；坏行跳过
     fn load(&self, name: &str) -> Vec<Ev> {
         let mut out = vec![];
         for p in self.seg_files(name) {
@@ -902,6 +902,11 @@ const TAG_PROMPT: &str = "下面是用户电脑上一段 10 分钟活动的摘�
   parts: 1–3 个对象的数组，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1
 ";
 
+/// 设备目录是不是电脑（mac-<主机名>、win-<计算机名>）；iPhone 的 iphone-* 不算，手机另算
+pub fn is_computer(device: &str) -> bool {
+    device.starts_with("mac-") || device.starts_with("win-")
+}
+
 fn api_key() -> Result<String, String> {
     api_key_with_source().map(|(k, _)| k)
 }
@@ -1349,5 +1354,25 @@ mod tests {
         assert!(!JUNK.is_match("正常一行字"));
         assert_eq!(py_round(2.5), 2);
         assert_eq!(py_round(3.5), 4);
+    }
+
+    /// Windows 版写的事件（win-* 设备，bundle_id 是程序路径）也算进电脑时长
+    #[test]
+    fn windows_device_counts() {
+        let root = std::env::temp_dir().join(format!("beayy-wintest-{}", std::process::id()));
+        let seg = root.join("devices/win-TEST/segments/2026-10-16T06-00-00Z");
+        fs::create_dir_all(&seg).unwrap();
+        let ev = |t: &str, ty: &str, extra: &str| format!("{{\"device\":\"win-TEST\",\"event_type\":\"{ty}\",\"timestamp\":\"2026-10-16T06:0{t}Z\"{extra}}}\n");
+        let app = r#","pid":1,"app_name":"msedge","bundle_id":"C:\\Program Files\\msedge.exe","window_title":"新标签页""#;
+        let body = ev("0:00", "app.activated", app) + &ev("0:05", "presence", r#","state":"active","idle_seconds":0"#)
+            + &ev("1:05", "heartbeat", &format!(r#","state":"active","idle_seconds":2{app}"#)) + &ev("2:05", "heartbeat", &format!(r#","state":"active","idle_seconds":1{app}"#));
+        fs::write(seg.join("events.jsonl"), body).unwrap();
+        let s = Summarizer::new(root.clone());
+        assert_eq!(s.segment_names(), vec!["2026-10-16T06-00-00Z".to_string()]);
+        let t0 = DateTime::parse_from_rfc3339("2026-10-16T06:00:00Z").unwrap().with_timezone(&Utc);
+        let act = s.activity(t0, t0 + Duration::minutes(10));
+        let _ = fs::remove_dir_all(&root);
+        assert!(!act.spans.is_empty(), "没算出在电脑前的时间");
+        assert_eq!(act.windows.first().map(|w| w.2.as_str()), Some("msedge"));
     }
 }
