@@ -152,6 +152,9 @@ fn open_data_dir() {
 }
 
 fn open_main(app: &AppHandle) {
+    // 主窗口开着时进 Dock、能 ⌘Tab；关掉后退回只在菜单栏（见 run 里的 Destroyed）
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.set_focus();
@@ -487,6 +490,11 @@ fn main() {
             // 已在运行时再 open 一次（open -a Beayy-rs）：打开主窗口
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => open_main(_app),
+            #[cfg(target_os = "macos")]
+            // 要在窗口真正关掉之前切：Regular 状态下关掉最后一个窗口，系统会把整个 app 退掉（菜单栏也没了）
+            RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { .. }, .. } if label == "main" => {
+                let _ = _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
             _ => {}
         });
 }
