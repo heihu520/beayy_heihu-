@@ -500,27 +500,28 @@ fn is_self(speaker: &str) -> bool {
     !speaker.starts_with("他人") && speaker != "未辨"
 }
 
-/// 某天的对话（手表录音转写）。没有任何手表设备时返回 None
+/// 某天的对话（手表录音转写；没戴手表时 iPhone 自己录的也算）。没有手表设备、iPhone 也没录过时返回 None
 pub fn speech_day(date: NaiveDate) -> Option<Value> {
-    if !has_device("watch-") {
-        return None;
-    }
     let (s, e) = day_bounds(date);
     let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
-    let ev = device_events("watch-", &["speech.segment", "speech.utterance"], s - Duration::minutes(10), e);
+    let mut ev = device_events("watch-", &["speech.segment", "speech.utterance"], s - Duration::minutes(10), e);
+    ev.extend(device_events("iphone-", &["speech.segment", "speech.utterance"], s - Duration::minutes(10), e));
+    if ev.is_empty() && !has_device("watch-") {
+        return None;
+    }
     let inday = |x: &Value| ts_of(&x["start"]).map(|t| t >= s && t < e).unwrap_or(false);
     let mut segs: Vec<&Value> = ev.iter().filter(|x| x["event_type"] == "speech.segment" && inday(x)).collect();
     segs.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
     segs.dedup_by(|a, b| a["seg_id"] == b["seg_id"]);
     // 以后同一段话被两台设备都录到：开口时刻＋原文相同的只留一句
     let mut seen = HashSet::new();
-    let mut utts: Vec<(DateTime<Utc>, DateTime<Utc>, String, String)> = ev
+    let mut utts: Vec<(DateTime<Utc>, DateTime<Utc>, String, String, String)> = ev
         .iter()
         .filter(|x| x["event_type"] == "speech.utterance" && inday(x))
         .filter_map(|x| {
             let a = ts_of(&x["start"])?;
             let z = ts_of(&x["end"]).unwrap_or(a).max(a);
-            Some((a, z, x["speaker"].as_str().unwrap_or("未辨").to_string(), x["text"].as_str().unwrap_or("").to_string()))
+            Some((a, z, x["speaker"].as_str().unwrap_or("未辨").to_string(), x["text"].as_str().unwrap_or("").to_string(), x["device"].as_str().unwrap_or("").to_string()))
         })
         .filter(|u| seen.insert((u.0, u.3.clone())))
         .collect();
@@ -528,17 +529,17 @@ pub fn speech_day(date: NaiveDate) -> Option<Value> {
     let secs = |a: DateTime<Utc>, b: DateTime<Utc>| (b - a).num_milliseconds() as f64 / 1000.0;
     let mut by_spk: BTreeMap<String, f64> = BTreeMap::new();
     let mut hours: BTreeMap<String, f64> = BTreeMap::new();
-    for (a, z, who, _) in &utts {
+    for (a, z, who, _, _) in &utts {
         *by_spk.entry(who.clone()).or_default() += secs(*a, *z);
         *hours.entry(format!("{:02}", a.with_timezone(&Local).hour())).or_default() += secs(*a, *z);
     }
     // 分成一段段对话；同一个人连着说的并成一行
     struct Line { a: DateTime<Utc>, z: DateTime<Utc>, who: String, text: String }
-    struct Conv { a: DateTime<Utc>, z: DateTime<Utc>, lines: Vec<Line>, talk: BTreeMap<String, f64> }
+    struct Conv { a: DateTime<Utc>, z: DateTime<Utc>, lines: Vec<Line>, talk: BTreeMap<String, f64>, dev: String }
     let mut convs: Vec<Conv> = vec![];
-    for (a, z, who, text) in utts {
+    for (a, z, who, text, dev) in utts {
         if convs.last().map(|c| secs(c.z, a) > CONV_GAP).unwrap_or(true) {
-            convs.push(Conv { a, z: a, lines: vec![], talk: BTreeMap::new() });
+            convs.push(Conv { a, z: a, lines: vec![], talk: BTreeMap::new(), dev });
         }
         let c = convs.last_mut().unwrap();
         *c.talk.entry(who.clone()).or_default() += secs(a, z);
@@ -583,7 +584,7 @@ pub fn speech_day(date: NaiveDate) -> Option<Value> {
         "battery": if batt.is_empty() { Value::Null } else { json!([batt[0], batt[batt.len() - 1]]) },
         "segments": segs.len(),
         "conversations": convs.into_iter().map(|c| json!({
-            "start": utc_iso(c.a), "end": utc_iso(c.z),
+            "start": utc_iso(c.a), "end": utc_iso(c.z), "device": c.dev,
             "talk": c.talk.iter().map(|(k, v)| json!({"speaker": k, "sec": v.round() as i64})).collect::<Vec<_>>(),
             "lines": c.lines.iter().map(|l| json!({"start": utc_iso(l.a), "end": utc_iso(l.z), "speaker": l.who, "text": l.text})).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
@@ -603,21 +604,65 @@ fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 /// 自己起的地点名（家、公司……）：[{label, type, lat, lon, r}]。先读 Beayy/places/labels.json，没有再读外部数据目录的 raw/places/labels.json
 fn place_labels() -> Vec<Value> {
-    let mut paths = vec![default_root().join("places").join("labels.json")];
+    let mut paths = vec![labels_path()];
     if let Some(r) = repo_path() {
         paths.push(r.join("raw").join("places").join("labels.json"));
     }
     paths.iter().find_map(|p| fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())).unwrap_or_default()
 }
 
-/// 某天的停留点（iPhone 位置），读法同 脚本/日数据包.py 的 read_places／load_stays：
-/// 同一个停留点取最新一版（rev 大的）；显著位置变化补的短停留（slc）和 CLVisit 重叠超过自身一半的丢掉；
+/// 停留点的可信程度：iPhone 的 CLVisit（系统判定的到访）> iPhone 显著位置变化补的短停留 > 手表录音时取点算的
+fn place_rank(v: &Value) -> u8 {
+    if v["device"].as_str().unwrap_or("").starts_with("watch-") {
+        1
+    } else if v["place_source"] == "slc" {
+        2
+    } else {
+        3
+    }
+}
+
+/// 自己起的地点名存在哪：Beayy/places/labels.json
+fn labels_path() -> PathBuf {
+    default_root().join("places").join("labels.json")
+}
+
+/// 给一个地方起名（家、公司……），存进 Beayy/places/labels.json；半径内已有的就改它，label 为空＝删掉这个名字。
+/// 第一次写时先把外部数据目录 raw/places/labels.json 里已有的抄过来，免得新文件把它们盖住
+#[tauri::command]
+pub fn set_place_label(lat: f64, lon: f64, label: String, kind: Option<String>) -> Result<(), String> {
+    let mut all = place_labels();
+    let label = label.trim().to_string();
+    let hit = all.iter().position(|x| haversine(lat, lon, x["lat"].as_f64().unwrap_or(0.0), x["lon"].as_f64().unwrap_or(0.0)) <= x["r"].as_f64().unwrap_or(PLACE_R));
+    match (hit, label.is_empty()) {
+        (Some(i), true) => {
+            all.remove(i);
+        }
+        (Some(i), false) => {
+            all[i]["label"] = json!(label);
+            if let Some(k) = &kind {
+                all[i]["type"] = json!(k);
+            }
+        }
+        (None, false) => all.push(json!({ "label": label, "type": kind.unwrap_or_else(|| "other".into()), "lat": (lat * 1e5).round() / 1e5, "lon": (lon * 1e5).round() / 1e5, "r": PLACE_R })),
+        (None, true) => return Ok(()),
+    }
+    let p = labels_path();
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&all).unwrap()).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &p).map_err(|e| e.to_string())
+}
+
+/// 某天的停留点（iPhone、手表记的位置），读法同 脚本/日数据包.py 的 read_places／load_stays：
+/// 同一个停留点取最新一版（rev 大的）；可信程度低的（slc、手表）和更可信的重叠超过自身一半的丢掉；
 /// 还没离开的算到下一个到达或现在；同一地点 15 分钟内并成一段，重叠的前一段截到后一段开始。没有任何停留点记录时返回 None
 pub fn places_day(date: NaiveDate) -> Option<Value> {
     let (s, e) = day_bounds(date);
     let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
     // 到达在前一天的也读（在家过夜）
-    let ev = device_events("iphone-", &["place.visit"], s - Duration::days(2), e);
+    let mut ev = device_events("iphone-", &["place.visit"], s - Duration::days(2), e);
+    ev.extend(device_events("watch-", &["place.visit"], s - Duration::days(2), e));
     if ev.is_empty() {
         return None;
     }
@@ -635,16 +680,13 @@ pub fn places_day(date: NaiveDate) -> Option<Value> {
         Some((a.or(d.map(|d| d - Duration::minutes(1)))?, d.unwrap_or(open)))
     };
     let rows: Vec<&Value> = last.values().copied().collect();
-    let visits: Vec<(DateTime<Utc>, DateTime<Utc>)> = rows.iter().filter(|r| r["place_source"] != "slc").filter_map(|r| span(r, now)).collect();
+    let ranked: Vec<(u8, DateTime<Utc>, DateTime<Utc>)> = rows.iter().filter_map(|r| span(r, now).map(|(a, d)| (place_rank(r), a, d))).collect();
     let mut rows: Vec<&Value> = rows
         .into_iter()
         .filter(|r| {
-            if r["place_source"] != "slc" {
-                return true;
-            }
             let Some((a, d)) = span(r, now) else { return false };
-            let dur = ((d - a).num_seconds() as f64).max(1.0);
-            !visits.iter().any(|(va, vd)| ((*vd).min(d) - (*va).max(a)).num_seconds() as f64 > dur / 2.0)
+            let (rank, dur) = (place_rank(r), ((d - a).num_seconds() as f64).max(1.0));
+            !ranked.iter().any(|(k, va, vd)| *k > rank && ((*vd).min(d) - (*va).max(a)).num_seconds() as f64 > dur / 2.0)
         })
         .collect();
     rows.sort_by_key(|r| ts_of(&r["arrive"]).or(ts_of(&r["depart"])));
@@ -686,6 +728,11 @@ pub fn places_day(date: NaiveDate) -> Option<Value> {
         m.insert("end_t".into(), json!(utc_iso(d)));
         m.insert("open".into(), json!(open));
         m.insert("arrive_known".into(), json!(ts_of(&r["arrive"]).map(|x| x >= s).unwrap_or(false)));
+        // 真实的到达时刻（前一天到的也给，页面写「昨天 22:10」）
+        m.insert("arrive".into(), ts_of(&r["arrive"]).map(|x| json!(utc_iso(x))).unwrap_or(Value::Null));
+        m.insert("lat".into(), json!(lat));
+        m.insert("lon".into(), json!(lon));
+        m.insert("device".into(), r["device"].clone());
         m.insert("name".into(), json!(show));
         m.insert("place_name".into(), json!(name));
         m.insert("label".into(), json!(label));
@@ -1041,6 +1088,57 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
 }
 
 // ---------- 设备 ----------
+
+/// 设备详情「事件」页签：某台设备最近的原始事件，新的在前。从最新的分段往回读，读够 limit 条（默认 200、最多 1000）
+/// 或往回翻了 48 个分段（8 小时）就停，不全量扫。before＝只要这个时刻以前的（「加载更早」接着读）；
+/// types＝只要这些种类，以「.」结尾的按前缀算（keyboard. 包含 keyboard.text_input、keyboard.submit……）。
+/// 打的字、界面文字原样返回（采集时密码框已经打码），只给本机界面看，不进网站
+#[tauri::command]
+pub fn recent_events(device: String, before: Option<String>, limit: Option<usize>, types: Option<Vec<String>>) -> Result<Value, String> {
+    if device.is_empty() || !device.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("设备编号不对".into());
+    }
+    let limit = limit.unwrap_or(200).clamp(1, 1000);
+    let types = types.unwrap_or_default();
+    let want = |t: &str| types.is_empty() || types.iter().any(|x| if x.ends_with('.') { t.starts_with(x.as_str()) } else { t == x });
+    let before_t = before.as_deref().and_then(|b| DateTime::parse_from_rfc3339(b).ok()).map(|t| t.with_timezone(&Utc));
+    let top = before_t.map(beayy_core::segment_key);
+    let Ok(rd) = fs::read_dir(default_root().join("devices").join(&device).join("segments")) else {
+        return Ok(json!({ "events": [], "more": false }));
+    };
+    let mut segs: Vec<(String, PathBuf)> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| (e.file_name().to_string_lossy().to_string(), e.path()))
+        .filter(|(n, _)| top.as_ref().map(|t| n <= t).unwrap_or(true))
+        .collect();
+    segs.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out: Vec<(DateTime<Utc>, Value)> = vec![];
+    let mut scanned = 0;
+    for (_, path) in &segs {
+        if out.len() >= limit || scanned >= 48 {
+            break;
+        }
+        scanned += 1;
+        let Ok(bytes) = fs::read(path.join("events.jsonl")) else { continue };
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
+            if !want(e["event_type"].as_str().unwrap_or("")) {
+                continue;
+            }
+            let Some(t) = ts_of(&e["timestamp"]) else { continue };
+            if before_t.map(|b| t >= b).unwrap_or(false) {
+                continue;
+            }
+            out.push((t, e));
+        }
+    }
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    // 还有更早的：这次截掉了一些，或者没翻完的分段
+    let more = out.len() > limit || scanned < segs.len();
+    out.truncate(limit);
+    let events: Vec<Value> = out.into_iter().map(|(_, e)| e).collect();
+    Ok(json!({ "events": events, "more": more }))
+}
 
 /// 数据目录里的每台设备（devices/<设备>/）：种类、是不是本机、记录从哪天开始、最近一条、条数、占用空间。缓存 60 秒
 #[tauri::command]

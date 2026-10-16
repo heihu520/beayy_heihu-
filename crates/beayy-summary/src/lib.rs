@@ -9,7 +9,7 @@
 //!   2. 去重：同一「app＋窗口」的文字只留比上一次（含上一分段）新增的行；
 //!   3. 拼包：时长表＋新增文字＋键盘输入/发送（操作者、按键原文）＋点击元素，压到约 1 万字以内；
 //!   4. 调网关（chat.completions）只写描述，数字和 applications 由代码填。
-//!   有手表录音、iPhone 停留点（beayy-remote 拉来的 devices/watch-*、iphone-* 里的 speech.utterance、place.visit）时，
+//!   有手表录音、停留点（beayy-remote 拉来的 devices/watch-*、iphone-* 里的 speech.utterance、place.visit）时，
 //!   这 10 分钟的对话原文和所在地点也拼进包，标明来源；手表在录时等这一段的转写拉回来再写（最多等 40 分钟）。
 //!
 //! 设置：`<数据根>/settings.json` 的 gateway（任何 OpenAI 兼容接口，默认 https://api.openai.com/v1）、summary_model（没填就不写摘要）。
@@ -615,15 +615,22 @@ impl Summarizer {
         out
     }
 
-    /// 摘要包末尾：这段时间在哪（iPhone 停留点）、手表录到的对话原文（同一个人连着说的并成一行）
+    /// 摘要包末尾：这段时间在哪（iPhone、手表的停留点）、手表录到的对话原文（同一个人连着说的并成一行）
     fn speech_and_place(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<String> {
         let mut out = vec![];
         let t = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|x| DateTime::parse_from_rfc3339(x).ok()).map(|x| x.with_timezone(&Utc));
         // 地点：同一个停留点取最后一版，和这 10 分钟有重叠的
         let mut visits: Vec<(DateTime<Utc>, Option<DateTime<Utc>>, String)> = vec![];
         let mut latest: HashMap<String, Ev> = HashMap::new();
-        for e in self.device_events("iphone-", "place.visit", start - Duration::days(2), end) {
-            latest.insert(s(&e, "place_id").to_string(), e);
+        // iPhone 和手表都可能记；手表的只在 iPhone 前后两天一条都没有时才用（以 iPhone 为准）
+        for prefix in ["iphone-", "watch-"] {
+            let have = !latest.is_empty();
+            for e in self.device_events(prefix, "place.visit", start - Duration::days(2), end) {
+                if prefix == "watch-" && have {
+                    break;
+                }
+                latest.insert(s(&e, "place_id").to_string(), e);
+            }
         }
         for e in latest.values() {
             let (a, z) = (t(e.get("arrive")).or(t(e.get("depart"))), t(e.get("depart")));
@@ -638,7 +645,7 @@ impl Summarizer {
             out.push(String::new());
             let hm = |x: DateTime<Utc>| x.with_timezone(&Local).format("%H:%M").to_string();
             let what = visits.iter().map(|(a, z, n)| format!("「{n}」（{} 起{}）", hm(*a), z.map(|z| format!("，{} 离开", hm(z))).unwrap_or_default())).collect::<Vec<_>>().join("、");
-            out.push(format!("地点（iPhone 停留点）：{what}"));
+            out.push(format!("地点（停留点）：{what}"));
         }
         // 对话：开口时刻在这 10 分钟里的
         let mut lines: Vec<(DateTime<Utc>, DateTime<Utc>, String, String)> = vec![];

@@ -212,32 +212,94 @@ function dayStrip(hc, hp, clickable = false, opt = null) {
   const axis = (n) => `<div class="strip-axis" aria-hidden="true">${Array.from({ length: n }, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div>`;
   if (!opt) return `<div role="img" aria-label="一天的形状：上排电脑，下排手机"><div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>${axis(24)}</div>`;
   const rows = [];
-  if (opt.visits && opt.visits.length) rows.push(["地点", placeBand(opt.visits, opt.date)]);
+  if (opt.visits && opt.visits.length) rows.push(["地点", placeBand(opt.visits, opt.date), "k-pl"]);
   rows.push(["电脑", `<div class="strip">${cells(hc, "--rec-computer", "电脑")}</div>`]);
   rows.push(["手机", `<div class="strip">${cells(hp, "--rec-phone", "手机")}</div>`]);
-  if (opt.hw) rows.push(["手表", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
-  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v]) => `<span class="k">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
+  // 说话：手表录的，和没戴手表时 iPhone 自己录的，合在一排
+  if (opt.hw) rows.push(["说话", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
+  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
 }
 
-/** 地点色带：每段停留按起止画在当天 0–24 点上，相邻两段交替深浅，够宽的写地名 */
+/** 两个停留点之间不超过 3 小时算「路上」，更长的和首尾算「没记到」（同 脚本/日数据包.py 的 TRANSIT_MAX） */
+const TRANSIT_MAX = 3 * 3600e3;
+/** 地点的显示名：起过名的用名字；没起名的只要地点名，不带区名（「望湖区 · 云杉食堂」→「云杉食堂」） */
+const placeName = (v) => (v && (v.label || (v.name || "").split(" · ").pop())) || "没有地名";
+const visitEnd = (v) => (v.end ? Date.parse(v.end) : Date.now());
+const hmMs = (ms) => hm(new Date(ms).toISOString());
+/** 停留的起止：从前一天待过来的写真实到达时刻（「昨天 22:10」），还没走的写「现在」 */
+function visitSpan(v) {
+  let a = hm(v.start);
+  if (!v.arrive_known && v.arrive) {
+    const t = new Date(v.arrive), y = new Date(Date.parse(v.start) - 864e5);
+    a = (localDay(t) === localDay(y) ? "昨天 " : `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} `) + hm(v.arrive);
+  }
+  return `${a}–${v.end ? hm(v.end) : "现在"}`;
+}
+const spanText = (sec) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} 分钟` : `${hh(sec)}h`);
+
+/** 把一天按停留点切开：停留、两段之间的路上（≤ 3 小时）、没记到（更长的空档和首尾），按时间先后。只算到现在 */
+function placeBlocks(visits, date) {
+  const day0 = toDate(date).getTime(), stop = Math.min(Date.now(), day0 + 864e5);
+  const vs = [...visits].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const out = [];
+  let cur = day0;
+  for (const v of vs) {
+    const a = Date.parse(v.start), z = Math.min(visitEnd(v), stop);
+    if (a > cur) out.push({ kind: cur > day0 && a - cur <= TRANSIT_MAX ? "go" : "none", a: cur, z: a });
+    out.push({ kind: "stay", v, a, z });
+    cur = Math.max(cur, z);
+  }
+  if (stop > cur) out.push({ kind: "none", a: cur, z: stop });
+  return out.filter((b) => b.z > b.a);
+}
+
+/** 地点色带：底色只画到现在；每段停留按起止画在当天 0–24 点上，相邻两段交替深浅；够宽的地名写在段上，
+ *  窄的写在下面一行（layoutPlaceNames 排）；两段之间的路上画一条细线；今天画一条「现在」竖线 */
 function placeBand(visits, date) {
-  const day0 = toDate(date).getTime(), now = Date.now();
-  const pos = (iso, dflt) => Math.max(0, Math.min(1, ((iso ? Date.parse(iso) : dflt) - day0) / 864e5));
-  return `<div class="places">${visits.map((v, i) => {
-    const a = pos(v.start), z = pos(v.end, Math.min(now, day0 + 864e5));
-    const name = v.name || "没有地名";
-    return `<span class="${i % 2 ? "alt" : ""}" style="left:${(a * 100).toFixed(2)}%;width:${(Math.max(z - a, 0.003) * 100).toFixed(2)}%" title="${esc(name)} ${hm(v.start)}–${v.end ? hm(v.end) : "现在"}">${(z - a) * 24 >= 1.2 ? esc(name) : ""}</span>`;
-  }).join("")}</div>`;
+  const day0 = toDate(date).getTime(), now = Date.now(), today = now < day0 + 864e5;
+  const pct = (ms) => `${(Math.max(0, Math.min(1, (ms - day0) / 864e5)) * 100).toFixed(3)}%`;
+  const wid = (a, z) => `${(Math.max((z - a) / 864e5, 0.002) * 100).toFixed(3)}%`;
+  const blocks = placeBlocks(visits, date);
+  let html = `<span class="bg" style="width:${today ? pct(now) : "100%"}"></span>`, i = 0;
+  const narrow = [];
+  for (const b of blocks) {
+    if (b.kind === "go") html += `<span class="go" style="left:${pct(b.a)};width:${wid(b.a, b.z)}" title="路上 ${spanText((b.z - b.a) / 1000)}"></span>`;
+    if (b.kind !== "stay") continue;
+    const name = placeName(b.v), wide = (b.z - b.a) / 3600e3 >= 1.2;
+    html += `<span class="st${i++ % 2 ? " alt" : ""}" style="left:${pct(b.a)};width:${wid(b.a, b.z)}" title="${esc(name)} ${visitSpan(b.v)}">${wide ? esc(name) : ""}</span>`;
+    if (!wide) narrow.push([((b.a - day0) / 864e5), name]);
+  }
+  if (today) html += `<span class="now" style="left:${pct(now)}" title="现在 ${hmMs(now)}"></span>`;
+  return `<div><div class="places">${html}</div><div class="pl-names" data-names="${esc(JSON.stringify(narrow))}"></div></div>`;
 }
 
-/** 某段时间里待得最久的地点名 */
+/** 窄段的地名写在色带下面：从左往右排，和前一个挤在一起或超出右边就不写（悬停里有）。页面画好以后、窗口变宽窄时调用 */
+function layoutPlaceNames(root = document) {
+  for (const box of root.querySelectorAll(".pl-names[data-names]")) {
+    const names = JSON.parse(box.dataset.names || "[]"), W = box.getBoundingClientRect().width;
+    box.innerHTML = "";
+    const m = document.createElement("span"); box.appendChild(m);
+    let right = -Infinity, html = "";
+    for (const [f, n] of names) {
+      m.textContent = n;
+      const w = m.getBoundingClientRect().width, x = f * W;
+      if (x < right + 8 || x + w > W) continue;
+      html += `<span style="left:${x.toFixed(1)}px">${esc(n)}</span>`; right = x + w;
+    }
+    box.innerHTML = html;
+  }
+}
+let PL_RESIZE = null;
+window.addEventListener("resize", () => { clearTimeout(PL_RESIZE); PL_RESIZE = setTimeout(() => layoutPlaceNames(), 120); });
+
+/** 某段时间里待得最久的停留点 */
 function placeAt(visits, a, z) {
   let best = null, most = 0;
   for (const v of visits || []) {
-    const o = Math.min(z, v.end ? Date.parse(v.end) : Date.now()) - Math.max(a, Date.parse(v.start));
+    const o = Math.min(z, visitEnd(v)) - Math.max(a, Date.parse(v.start));
     if (o > most) { most = o; best = v; }
   }
-  return best && (best.name || "没有地名");
+  return best;
 }
 
 /** 说话的时长：不到一小时写分钟 */
@@ -247,12 +309,46 @@ function speakers(talk, self) {
   return [...talk].sort((a, b) => (b.speaker === self) - (a.speaker === self) || b.sec - a.sec).map((t) => t.speaker);
 }
 
-/** 概览里的「去了哪」：每个停留点一行，到、走、待了多久 */
-function placesSection(visits) {
+/** 概览里的「去了哪」：先按地点合计（加上路上、没记到），再按时间一个停留一行；点一行给这个地方起名 */
+function placesSection(visits, date) {
   if (!visits.length) return "";
-  const dur = (v) => { const s = Math.max(0, ((v.end ? Date.parse(v.end) : Date.now()) - Date.parse(v.start)) / 1000); return s < 3600 ? `${Math.round(s / 60)} 分钟` : `${hh(s)}h`; };
-  return section("去了哪", `<div class="visits">${visits.map((v) => `<div class="v-row"><span class="t">${hm(v.start)}–${v.end ? hm(v.end) : "现在"}</span><span>${esc(v.name || "没有地名")}</span><span class="d">${dur(v)}</span></div>`).join("")}</div>
-    <p class="note">iPhone 记下的停留点，路上不记。到达时刻不知道的（比如从前一天待过来）从 0 点算起。</p>`, { count: visits.length });
+  const blocks = placeBlocks(visits, date);
+  const tot = new Map();
+  let go = 0, none = 0;
+  for (const b of blocks) {
+    const sec = (b.z - b.a) / 1000;
+    if (b.kind === "go") go += sec;
+    else if (b.kind === "none") none += sec;
+    else tot.set(placeName(b.v), (tot.get(placeName(b.v)) || 0) + sec);
+  }
+  const rows = [...tot].sort((a, b) => b[1] - a[1]).map(([n, sec]) => ({ n, sec, c: "pl" }));
+  if (go) rows.push({ n: "路上", sec: go, c: "go" });
+  if (none) rows.push({ n: "没记到", sec: none, c: "none" });
+  const max = Math.max(...rows.map((r) => r.sec), 1), all = rows.reduce((a, r) => a + r.sec, 0) || 1;
+  const pct = (sec) => { const p = (sec / all) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
+  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-chev"></span><span class="bar-name${r.c === "pl" ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
+  const list = `<div class="visits">${visits.map((v, i) => `<button class="v-row" data-visit="${i}"><span class="t">${visitSpan(v)}</span><span class="n">${esc(placeName(v))}${v.label ? "" : `<span class="sub">${esc(["没起名", ...(v.name || "").split(" · ").slice(0, -1)].join(" · "))}</span>`}</span><span class="d">${spanText((visitEnd(v) - Date.parse(v.start)) / 1000)}</span><span class="act">${v.label ? "改名" : "起名"}</span></button>`).join("")}</div>`;
+  return section("去了哪", bars + list + `<p class="note">iPhone 和手表记下的停留点，路上不记。路上＝两个停留点之间不超过 3 小时的空档；没记到＝更长的空档和一天的首尾。点一行给这个地方起名，以后附近 150 米内的停留都用这个名字。</p>`, { count: visits.length });
+}
+
+/** 给一个地方起名（小弹层）：名字＋种类，存进本机的地点名单；清空＝删掉这个名字 */
+function placeDialog(v) {
+  const TYPES = [["home", "家"], ["work", "工作"], ["other", "其他"]];
+  let kind = v.type || "other";
+  openDialog({
+    title: v.label ? `改「${v.label}」的名字` : `给「${placeName(v)}」起名`, ok: "保存",
+    body: dlgField("pl-name", "名字", { value: v.label || "", ph: "比如 家、公司、健身房", help: v.label ? "清空就删掉这个名字，改回显示地名。" : `地图上查到的地名是「${esc(v.name || "没有")}」。` })
+      + `<div class="mx-field"><label>种类</label><div class="mx-seg" role="tablist" id="pl-kind">${TYPES.map(([k, t]) => `<button role="tab" aria-selected="${k === kind}" class="${k === kind ? "is-on" : ""}" data-v="${k}">${t}</button>`).join("")}</div></div>`,
+    onOpen: (el) => {
+      el.querySelector("#pl-name").maxLength = 20;
+      el.querySelector("#pl-kind").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        kind = b.dataset.v;
+        el.querySelectorAll("#pl-kind button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+      };
+    },
+    submit: async (el) => { await call("set_place_label", { lat: v.lat, lon: v.lon, label: dlgVal(el, "pl-name"), kind }); renderToday(); },
+  });
 }
 
 function actogram(rows, cur) {
@@ -416,7 +512,7 @@ async function renderToday() {
   // 说话按分钟画，不满 1 分钟的也算 1 分钟，免得零碎的几句看不见
   const hw = sp ? Array.from({ length: 24 }, (_, i) => Math.min(60, Math.ceil(((sp.hours || {})[pad2(i)] || 0) / 60))) : null;
   const items = timelineItems(d);
-  const counts = { all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone").length };
+  const counts = { all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone" && !x.visit).length };
   if (sp) counts.watch = items.filter((x) => x.dev === "watch").length;
   const tab = TL.tab in counts ? TL.tab : "all";
   const shown = items.filter((x) => tab === "all" || x.dev === tab);
@@ -435,10 +531,10 @@ async function renderToday() {
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
       </div>
       <div style="margin-top:var(--space-6)">`
-    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>手表（说话）</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span>` : ""}<span>点某个小时，到时间线里看那一小时</span></div>`)
-    + placesSection(visits)
+    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span><span><i class="line"></i>路上</span>` : ""}<span>点某个小时，到时间线里看那一小时</span></div>`)
+    + placesSection(visits, today)
     + workSection(d.work) + `</div>`;
-  const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : shown.map(tlRow).join("")}</div>`
+  const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : tab === "phone" && visits.length ? phoneByPlace(shown, visits, today) : shown.map(tlRow).join("")}</div>`
     : emptyInline(tab === "phone" ? "今天还没有手机记录。iPhone 的屏幕使用经 iCloud 同步过来，通常晚几个小时。"
       : tab === "watch" ? "今天还没有对话。手表录的音传到录音服务器、转写好以后，这里每 10 分钟拉一次，通常晚 20 分钟左右。"
       : "今天还没有记录。10 分钟摘要每个整 10 分过后 1 分钟写好。");
@@ -459,6 +555,8 @@ async function renderToday() {
     try { localStorage.setItem("tl-tab", TL.tab); } catch (err) {}
     renderToday();
   };
+  layoutPlaceNames($app);
+  $app.querySelectorAll("[data-visit]").forEach((b) => (b.onclick = () => placeDialog(visits[+b.dataset.visit])));
   // 点一天的形状里的某个小时：切到时间线，滚到那个小时
   $app.querySelectorAll(".strip [data-h]").forEach((cell) => (cell.onclick = () => {
     TL.view = "timeline"; TL.jump = +cell.dataset.h;
@@ -523,14 +621,14 @@ function hourRows(d, items) {
   for (const x of items) {
     if (x.dev === "computer" && x.seg.kind === "idle") continue; // 合并过的空段按小时摘要算
     if (x.visit) continue; // 停留点写在每小时行首
-    if (x.dev === "watch") {
+    if (x.conv) {
       // 对话按小时切开：每个小时只放这一小时里说的句子
       const by = new Map();
       for (const l of x.conv.lines || []) { const k = hourOf(l.start); if (!by.has(k)) by.set(k, []); by.get(k).push(l); }
       for (const [k, lines] of by) {
         const talk = {};
         for (const l of lines) talk[l.speaker] = (talk[l.speaker] || 0) + (Date.parse(l.end) - Date.parse(l.start)) / 1000;
-        put(k, { dev: "watch", start: lines[0].start, end: lines[lines.length - 1].end, conv: { lines, talk: Object.entries(talk).map(([speaker, sec]) => ({ speaker, sec: Math.round(sec) })) } });
+        put(k, { dev: x.dev, start: lines[0].start, end: lines[lines.length - 1].end, conv: { lines, talk: Object.entries(talk).map(([speaker, sec]) => ({ speaker, sec: Math.round(sec) })) } });
       }
       continue;
     }
@@ -546,7 +644,7 @@ function hourRows(d, items) {
   const flushIdle = () => { if (idleRun) { out.push(`<div class="tl-row computer idle" data-h="${new Date(idleRun[0]).getHours()}"><span class="t">${hm(new Date(idleRun[0]).toISOString())}–${hm(new Date(idleRun[1] + 3600e3).toISOString())}</span><span>不在电脑前</span></div>`); idleRun = null; } };
   for (const k of keys) {
     const xs = buckets.get(k), r = roll[k];
-    const comp = xs.filter((x) => x.dev === "computer"), ph = xs.filter((x) => x.dev === "phone"), wt = xs.filter((x) => x.dev === "watch");
+    const comp = xs.filter((x) => x.dev === "computer"), ph = xs.filter((x) => x.dev === "phone" && x.ses), wt = xs.filter((x) => x.conv);
     const idle = !comp.length && (!r || r.title === "不在电脑前") && k + 3600e3 <= now;
     if (idle && !ph.length && !wt.length) { idleRun = idleRun ? [k, idleRun[1]] : [k, k]; continue; }
     flushIdle();
@@ -562,13 +660,15 @@ function hourRows(d, items) {
     for (const p of (r && r.parts) || []) if (p.project) pj[p.project] = (pj[p.project] || 0) + p.sec;
     if (!r) for (const x of comp) for (const p of x.seg.parts || []) if (p.project) pj[p.project] = (pj[p.project] || 0) + (x.seg.active_sec || 0) * p.share;
     const chips = Object.entries(pj).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `<span class="mx-tag">${esc(n)} ${Math.round(v / 60)}m</span>`).join("");
-    const where = placeAt(visits, k, k + 3600e3);
+    // 地点只在和上一个小时不一样时写（到了新地方），免得每小时都重复「公司」
+    const here = placeAt(visits, k, k + 3600e3), before = placeAt(visits, k - 3600e3, k);
+    const where = here && (!before || placeName(before) !== placeName(here)) ? placeName(here) : null;
     const talkSec = talkH[pad2(new Date(k).getHours())] || 0;
     const talkWho = {};
     for (const x of wt) for (const t of x.conv.talk) talkWho[t.speaker] = (talkWho[t.speaker] || 0) + t.sec;
     const who = speakers(Object.entries(talkWho).map(([speaker, sec]) => ({ speaker, sec })), SELF);
     const inner = xs.sort((a, b) => (a.start < b.start ? 1 : -1)).map(tlRow).join("");
-    out.push(`<details class="tl-row hour" data-h="${new Date(k).getHours()}"><summary><span class="t">${hm(new Date(k).toISOString())}–${hm(new Date(k + 3600e3).toISOString())}${where ? `<div class="where" title="${esc(where)}">${esc(where.length > 8 ? where.slice(0, 8) + "…" : where)}</div>` : ""}</span><span>
+    out.push(`<details class="tl-row hour" data-h="${new Date(k).getHours()}"><summary><span class="t">${hm(new Date(k).toISOString())}–${hm(new Date(k + 3600e3).toISOString())}${where ? `<div class="where" title="${esc(where)}">${esc(where)}</div>` : ""}</span><span>
         <span class="name${title === "不在电脑前" ? " dim" : ""}">${esc(title)}</span>${desc ? `<div class="desc">${esc(desc)}</div>` : ""}
         ${chips ? `<div class="chips">${chips}</div>` : ""}${phSec ? `<div class="ph-line">手机 ${minText(phSec)}${topPh ? ` · ${esc(topPh)}` : ""}</div>` : ""}${wt.length ? `<div class="ph-line">对话 ${talkText(talkSec)} · ${esc(who.slice(0, 3).join("、"))}${who.length > 3 ? ` 等 ${who.length} 人` : ""}</div>` : ""}</span>
         ${inner ? `<span class="chev">${ICON.chevR}</span>` : "<span></span>"}</summary>${inner ? `<div class="hour-in">${inner}</div>` : ""}</details>`);
@@ -597,6 +697,25 @@ function devLabel(dev) {
   return DAY_COMPUTERS.filter((x) => kind(x) === k).length > 1 ? `${k} · ${dev.replace(/^(mac|win)-/, "")}` : k;
 }
 
+/** 手机页签：按停留点分组，新的在上。每组一行标题（地点、起止、待了多久），这段时间里拿手机的记录排在它下面；
+ *  两个停留点之间的空档也成一组（路上／没记到位置），没有拿手机就不列 */
+function phoneByPlace(items, visits, date) {
+  const ses = items.filter((x) => !x.visit);
+  const blocks = placeBlocks(visits, date).map((b) => ({ ...b, items: [] }));
+  for (const x of ses) {
+    const t = Date.parse(x.start);
+    const b = blocks.find((y) => t >= y.a && t < y.z) || (t < blocks[0].a ? blocks[0] : blocks[blocks.length - 1]);
+    b.items.push(x);
+  }
+  return blocks.reverse().filter((b) => b.kind === "stay" || b.items.length).map((b) => {
+    const h = `data-h="${new Date(b.a).getHours()}"`;
+    const head = b.kind === "stay"
+      ? `<div class="tl-place" ${h}><span class="t">${visitSpan(b.v)}</span><span class="n"><i></i>${esc(placeName(b.v))}</span><span class="d">${spanText((b.z - b.a) / 1000)}${b.items.some((x) => x.ses) ? ` · 手机 ${minText(b.items.reduce((n, x) => n + (x.ses ? x.ses.sec : 0), 0))}` : ""}</span></div>`
+      : `<div class="tl-place gap" ${h}><span class="t">${hmMs(b.a)}–${hmMs(b.z)}</span><span class="n">${b.kind === "go" ? "路上" : "没记到位置"}</span><span class="d">${spanText((b.z - b.a) / 1000)}</span></div>`;
+    return head + b.items.sort((x, y) => (x.start < y.start ? 1 : -1)).map(tlRow).join("");
+  }).join("");
+}
+
 function timelineItems(d) {
   DAY_COMPUTERS = d.computers || [];
   DAY_NAMES = d.device_names || {};
@@ -605,7 +724,8 @@ function timelineItems(d) {
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
   for (const v of (d.places && d.places.visits) || []) out.push({ dev: "phone", start: v.start, end: v.end, visit: v });
   SELF = (d.speech && d.speech.self) || null;
-  for (const c of (d.speech && d.speech.conversations) || []) out.push({ dev: "watch", start: c.start, end: c.end, conv: c });
+  // 对话按录它的设备归页签：手表录的在「手表」，iPhone 自己录的在「手机」
+  for (const c of (d.speech && d.speech.conversations) || []) out.push({ dev: (c.device || "").startsWith("iphone-") ? "phone" : "watch", start: c.start, end: c.end, conv: c });
   return out.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
 }
 
@@ -636,7 +756,7 @@ function convRow(c, h, t) {
 function tlRow(x) {
   const t = `<span class="t">${hm(x.start)}–${x.end ? hm(x.end) : "现在"}</span>`;
   const h = `data-h="${localHour(x.start)}"`;
-  if (x.dev === "watch") return convRow(x.conv, h, t);
+  if (x.conv) return convRow(x.conv, h, t);
   if (x.visit) return `<div class="tl-row phone place" ${h}>${t}<span><span class="name">在 ${esc(x.visit.name || "没有地名的地方")}</span></span></div>`;
   if (x.dev === "phone") {
     const s = x.ses;
@@ -867,64 +987,250 @@ const DEV_ICON = {
 const bytesText = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB");
 const numText = (n) => Number(n || 0).toLocaleString("en-US");
 
+/** 设备页：照墨线的列表页和设置页——「设备」一组（一台一行，点进去是设备详情页）、「同步」一组（设置行）。
+ *  本机缺权限时顶上一条提示 */
 async function renderDevices() {
   const [devs, st, sy] = await Promise.all([call("list_devices").catch(() => []), call("get_status"), call("sync_status").catch(() => ({}))]);
   // 登录着的设备：进页面取一次，失败（没网、令牌失效）就不显示
-  if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices") renderDevices(); }).catch(() => {}); }
+  if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices" && !DEV.id) renderDevices(); }).catch(() => {}); }
   S.status = st; S.sync = sy; renderSide();
   // 登录着的设备列表也用改过的名字
   DS.names = Object.fromEntries(devs.filter((d) => d.custom).map((d) => [d.id, d.name]));
+  DS.devs = devs;
   const perm = st.permissions || {};
-  const m = String(st.phone_sync || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
-  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
-    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${perm[kind] ? "已授权" : "未授权"}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
-  const status = (d) => {
-    if (d.this) {
-      const missing = !perm.accessibility || !perm.input_monitoring;
-      const [cls, text] = st.paused ? ["", st.paused_until ? `已暂停，${hm(st.paused_until)} 自动继续` : "已暂停"] : missing ? ["warn", "缺权限，展开去授权"] : st.capturing ? ["ok", "记录中"] : ["", "没在记录"];
-      return `<span class="dot ${cls}"></span>${text} · 今天已记 ${numText(st.events_today)} 条`;
-    }
-    if (d.kind === "iphone" && !d.synced) return `<span class="dot ok"></span>经 iCloud 同步，记录到 ${mdhm(m ? m[0] : d.last)}`;
-    if (d.synced) return `从别的设备同步来，最近一条 ${mdhm(d.last)}`;
-    return `最近一条 ${mdhm(d.last)}`;
-  };
-  const detail = (d) => {
-    const base = `<div class="dev-acts"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-rename="${esc(d.id)}">重命名</button></div><dl class="kv"><dt>记录从</dt><dd>${mdhm(d.first)}</dd><dt>最近一条</dt><dd>${mdhm(d.last)}</dd><dt>共</dt><dd>${numText(d.events)} 条 · ${bytesText(d.bytes)}</dd><dt>设备编号</dt><dd class="mono">${esc(d.id)}</dd></dl>`;
-    if (d.this && IS_WIN) return base + `<div class="dev-sub">记什么：切换程序和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。以管理员身份运行的程序读不到。</div>`;
-    if (d.this) return base + `<div class="dev-sub">记什么：切换 app 和窗口、键盘输入和发送、点击、滚动、界面文字、在不在电脑前。每 10 分钟写一段摘要。</div>`
-      + `<h4 class="dev-h">权限</h4>` + permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")
-      + permRow("input_monitoring", "输入监控", "被动监听键盘和鼠标，只用来计时和判断是人还是代理在操作。")
-      + permRow("full_disk_access", "完全磁盘访问", "读 iPhone 同步到这台电脑的屏幕使用记录。");
-    if (d.kind === "iphone") return base + `<div class="dev-sub">记什么：每个 app 什么时候在前台、用了多久（看不到 app 里的内容）。来源是 iPhone 的屏幕使用时间，经 iCloud 同步到这台 Mac，每 5 分钟读一次，通常晚几个小时。</div>`;
-    return base;
-  };
+  const me = devs.find((d) => d.this);
+  const missing = [["accessibility", "辅助功能"], ["input_monitoring", "输入监控"], ["full_disk_access", "完全磁盘访问"]].filter(([k]) => perm[k] === false).map(([, n]) => n);
+  const notice = me && missing.length ? `<div class="mx-notice"><span>这台电脑缺${missing.join("、")}权限，记不全。</span><a class="mx-btn mx-btn--secondary mx-btn--sm" href="#/devices/${encodeURIComponent(me.id)}">去处理</a></div>` : "";
   const adding = `<div class="add-dev">
       <div class="add-opt">${DEV_ICON.iphone}<div><b>iPhone</b><span>不用装 app。iPhone 上打开 设置 → 屏幕使用时间 →「跨设备共享」，用同一个 Apple 账号，这台 Mac 就能读到。</span></div></div>
       <div class="add-opt">${DEV_ICON.mac}<div><b>另一台 Mac</b><span>装上 Beayy，在设置里用同一个账号登录，记录就会同步过来，出现在下面的列表里。</span></div></div>
       <div class="add-opt">${DEV_ICON.win}<div><b>Windows 电脑</b><span>装上 Windows 版，用同一个账号登录。记的内容和 Mac 一样（打字、点击、界面文字、切换程序、在不在电脑前），还在试用。</span></div></div>
     </div>`;
+  const rows = devs.map((d) => `<a class="mx-row" href="#/devices/${encodeURIComponent(d.id)}"><span class="mx-row-mark">${DEV_ICON[d.kind] || DEV_ICON.mac}</span>
+      <span class="mx-row-main"><div class="mx-row-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}${d.synced ? `<span class="mx-tag">经同步</span>` : ""}</div><div class="mx-row-desc">${devStatus(d, st)}</div></span>
+      <span class="mx-row-side">${ICON.chevR}</span></a>`).join("");
   $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
-    + `<div class="reading">${syncCard(sy)}<div class="devs">${devs.map((d) => `<div class="dev${DS.open === d.id ? " open" : ""}" data-id="${esc(d.id)}">
-        <button class="dev-head" aria-expanded="${DS.open === d.id}"><span class="dev-ico">${DEV_ICON[d.kind] || DEV_ICON.mac}</span>
-          <span class="dev-main"><span class="dev-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}${d.synced ? `<span class="mx-tag">经同步</span>` : ""}</span><span class="dev-status">${status(d)}</span></span>
-          <span class="chev">${ICON.chevR}</span></button>
-        ${DS.open === d.id ? `<div class="dev-body">${detail(d)}</div>` : ""}</div>`).join("") || emptyInline("还没有设备的记录。")}</div></div>`;
+    + `<div class="reading">${notice}${section("设备", rows ? `<div class="mx-list">${rows}</div>` : emptyInline("还没有设备的记录。装上 Beayy 的电脑、同步过来的 iPhone 和手表会列在这里。"))}${syncSection(sy)}</div>`;
   document.getElementById("add-dev").onclick = () => openDialog({ title: "添加设备", body: adding, cancel: "关闭" });
-  $app.querySelectorAll(".dev-head").forEach((b) => (b.onclick = () => { const id = b.closest(".dev").dataset.id; DS.open = DS.open === id ? null : id; renderDevices(); }));
-  $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
-  $app.querySelectorAll("[data-rename]").forEach((b) => (b.onclick = () => renameDialog(devs.find((d) => d.id === b.dataset.rename))));
   bindSync();
   if (sy.running || DS.busy) pollSync();
 }
 
+/** 设备一行下面那句状态 */
+function devStatus(d, st) {
+  const perm = (st && st.permissions) || {};
+  if (d.this) {
+    const missing = !perm.accessibility || !perm.input_monitoring;
+    const [cls, text] = st.paused ? ["", st.paused_until ? `已暂停，${hm(st.paused_until)} 自动继续` : "已暂停"] : missing ? ["warn", "缺权限"] : st.capturing ? ["ok", "记录中"] : ["", "没在记录"];
+    return `<span class="dot ${cls}"></span>${text} · 今天已记 ${numText(st.events_today)} 条`;
+  }
+  const m = String((st && st.phone_sync) || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
+  if (d.kind === "iphone" && !d.synced) return `<span class="dot ok"></span>经 iCloud 同步，记录到 ${mdhm(m ? m[0] : d.last)}`;
+  if (d.synced) return `经同步 · 最近一条 ${mdhm(d.last)}`;
+  return `最近一条 ${mdhm(d.last)}`;
+}
+
+/** 每种设备记什么：一行一项 */
+const DEV_RECORDS = {
+  mac: ["切换 app 和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字", "在不在电脑前、锁屏、睡眠", "每 10 分钟写一段摘要"],
+  win: ["切换程序和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字（以管理员身份运行的程序读不到）", "在不在电脑前、锁屏、睡眠", "每 10 分钟写一段摘要"],
+  iphone: ["每个 app 什么时候在前台、用了多久（看不到 app 里的内容）", "来源是屏幕使用时间，经 iCloud 同步到这台 Mac，每 5 分钟读一次，通常晚几个小时", "停留点：到了哪、待了多久（Beayy iPhone app 记，经录音服务器拉来）"],
+  watch: ["全天录音转成的文字，分出说话人（音频在录音服务器上 7 天后删）", "录音时记下的停留点", "每 10 分钟从录音服务器拉一次"],
+};
+
+/** 设备详情页：DetailHeader（返回、名字、状态、操作菜单）＋ 下划线页签 概况／事件 */
+const DEV = { id: null, tab: "overview", events: [], more: false, type: "all", live: true, open: new Set(), timer: null, err: null };
+async function renderDevice(id, tab) {
+  if (DEV.id !== id) { DEV.events = []; DEV.more = false; DEV.type = "all"; DEV.open = new Set(); DEV.err = null; }
+  DEV.id = id; DEV.tab = tab === "events" ? "events" : "overview";
+  const [devs, st] = await Promise.all([DS.devs ? Promise.resolve(DS.devs) : call("list_devices").catch(() => []), call("get_status")]);
+  S.status = st; renderSide();
+  const d = devs.find((x) => x.id === id);
+  if (!d) { location.hash = "#/devices"; return; }
+  const base = `#/devices/${encodeURIComponent(id)}`;
+  const head = `<div class="dev-detail"><a class="mx-back" href="#/devices">${ICON.chevL}设备</a>
+    <div class="mx-detail"><span class="mx-detail-mark">${DEV_ICON[d.kind] || DEV_ICON.mac}</span><div class="mx-detail-main"><h1>${esc(d.name)}</h1><p>${devStatus(d, st)}${d.this ? " · 本机" : ""}</p></div>
+      <div class="pick"><button class="mx-btn mx-btn--secondary" id="dev-ops" aria-haspopup="menu" aria-expanded="false">操作${ICON.chevD}</button>
+        <div class="mx-menu" role="menu" hidden><button role="menuitem" id="dev-rename">重命名</button></div></div></div>
+    <nav class="mx-utabs"><a href="${base}" class="${DEV.tab === "overview" ? "is-on" : ""}">概况</a><a href="${base}/events" class="${DEV.tab === "events" ? "is-on" : ""}">事件</a></nav></div>`;
+  $app.innerHTML = `<div class="reading">${head}<div id="dev-body">${DEV.tab === "events" ? evShell(d) : devOverview(d, st)}</div></div>`;
+  bindPick(document.getElementById("dev-ops"));
+  document.getElementById("dev-rename").onclick = () => renameDialog(d, () => { DS.devs = null; renderDevice(id, DEV.tab); });
+  $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
+  if (DEV.tab === "events") { DEV.drawn = false; bindEvents(d); await loadEvents(d, false); startEventsTimer(d); } else stopEventsTimer();
+}
+
+function devOverview(d, st) {
+  const perm = st.permissions || {};
+  const permRow = (kind, name, desc) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>
+    <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${perm[kind] ? "已授权" : "未授权"}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
+  const stats = `<div class="mx-stats dev-stats">
+      <div class="mx-stat"><div class="mx-stat-label">记录从</div><div class="mx-stat-value mx-num">${esc(mdhm(d.first) || "—")}</div></div>
+      <div class="mx-stat"><div class="mx-stat-label">最近一条</div><div class="mx-stat-value mx-num">${esc(mdhm(d.last) || "—")}</div></div>
+      <div class="mx-stat"><div class="mx-stat-label">共</div><div class="mx-stat-value mx-num">${numText(d.events)}<small>条</small></div></div>
+      <div class="mx-stat"><div class="mx-stat-label">占用</div><div class="mx-stat-value mx-num">${bytesText(d.bytes).replace(/ (\S+)$/, "<small>$1</small>")}</div></div></div>`;
+  const kind = d.kind === "win" ? "win" : d.kind;
+  const recs = DEV_RECORDS[kind] || DEV_RECORDS.mac;
+  const what = section("记什么", `<ul class="dev-recs">${recs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`, { aside: `<a href="#/devices/${encodeURIComponent(d.id)}/events">看最近的事件</a>` });
+  const perms = d.this && !IS_WIN ? section("权限", `<div class="rows">${permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")}${permRow("input_monitoring", "输入监控", "被动监听键盘和鼠标，只用来计时和判断是人还是代理在操作。")}${permRow("full_disk_access", "完全磁盘访问", "读 iPhone 同步到这台电脑的屏幕使用记录。")}</div>`) : "";
+  return stats + what + perms + `<p class="note dev-id">设备编号 <span class="mono">${esc(d.id)}</span></p>`;
+}
+
+// ---------- 设备详情 · 事件：最近的原始事件，新的在上；页面开着时每 3 秒刷新 ----------
+
+/** 筛选：显示名 → 事件种类（以「.」结尾按前缀）；每种设备只列它会有的 */
+const EV_TYPES = {
+  all: ["全部", null],
+  input: ["打字和发送", ["keyboard."]],
+  mouse: ["点击和滚动", ["mouse."]],
+  switch: ["切换", ["app.activated", "window.changed", "app.focus"]],
+  ui: ["界面文字", ["ui.text"]],
+  presence: ["在不在", ["presence", "heartbeat", "screen.", "system."]],
+  speech: ["对话", ["speech."]],
+  place: ["位置", ["place.visit"]],
+  bg: ["后台", ["sync.run", "summary.run", "phone.sync", "relay.sync", "app.launch", "app.quit", "permission.", "tap.started"]],
+};
+const EV_KINDS = { mac: ["all", "input", "mouse", "switch", "ui", "presence", "bg"], win: ["all", "input", "mouse", "switch", "ui", "presence", "bg"], iphone: ["all", "switch", "place"], watch: ["all", "speech", "place"] };
+
+/** 一条事件的种类标签 */
+function evTag(t) {
+  const m = { "keyboard.text_input": "打字", "keyboard.submit": "发送", "keyboard.return": "回车", "keyboard.shortcut": "快捷键", "mouse.click": "点击", "mouse.scroll": "滚动",
+    "app.activated": "切换", "window.changed": "窗口", "app.focus": "前台", "ui.text": "界面文字", heartbeat: "心跳", presence: "在不在", "speech.utterance": "说话", "speech.segment": "录音",
+    "place.visit": "停留", "sync.run": "同步", "summary.run": "摘要", "phone.sync": "读 iPhone", "relay.sync": "拉录音", "app.launch": "启动", "app.quit": "退出" };
+  return m[t] || (/^(screen|system)\./.test(t) ? "屏幕" : /^permission\./.test(t) ? "权限" : t);
+}
+
+/** 打的字：去掉方向键、退格这些控制字符，回车写成 ⏎ */
+const typedText = (s) => String(s || "").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "").replace(/\n/g, " ⏎ ").trim();
+/** 这次打字敲了几下键（人敲的＋代理敲的） */
+const keyCount = (e) => Object.values(e.keys || {}).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0);
+const clip = (s, n = 80) => (s.length > n ? s.slice(0, n) + "…" : s);
+const durText = (sec) => (sec < 60 ? `${Math.round(sec)} 秒` : sec < 3600 ? `${Math.round(sec / 60)} 分钟` : `${hh(sec)} 小时`);
+
+/** 一条事件的一句人话（打的字、界面文字原样写出来：只在本机显示） */
+function evText(e) {
+  const app = e.app_name || "";
+  const at = app ? `在 ${app} ` : "";
+  const el = e.element || {};
+  const who = e.actor && e.actor.kind === "agent" ? `代理（${e.actor.source_proc || "别的程序"}）` : e.actor_kind === "agent" ? "代理" : "";
+  const elName = el.title || el.description || ({ AXButton: "按钮", AXTextField: "输入框", AXTextArea: "输入框", AXLink: "链接", AXMenuItem: "菜单项", AXCheckBox: "勾选框", AXTab: "页签", AXImage: "图片", AXStaticText: "文字" }[el.role] || "");
+  switch (e.event_type) {
+    case "keyboard.text_input": { const t = typedText(e.text || e.typed), n = keyCount(e); return t ? `${who}${at}打了「${clip(t)}」` : `${who}${at}敲了${n ? ` ${n} 下` : ""}键盘（没读到打的内容）`; }
+    case "keyboard.submit": { const t = typedText(e.text), n = keyCount(e); return `${who}${at}发出${t ? `「${clip(t)}」` : ""}${n ? `（敲了 ${n} 下）` : ""}`; }
+    case "keyboard.return": return `${who}${at}按了回车`;
+    case "keyboard.shortcut": return `${who}${at}按了 ${e.keys || ""}`;
+    case "mouse.click": return `${who}${at}点了${elName ? `「${clip(elName, 40)}」` : "一下"}${e.button === "right" ? "（右键）" : ""}`;
+    case "mouse.scroll": return `${who}${at}滚了 ${e.ticks || 1} 格`;
+    case "app.activated": return `切到 ${app}${e.window_title ? ` · ${clip(e.window_title, 50)}` : ""}`;
+    case "window.changed": return `${app} 换了窗口${e.window_title ? `：${clip(e.window_title, 50)}` : ""}`;
+    case "ui.text": return `读到 ${app} 的界面文字 ${e.lines || 0} 行${e.has_secure_field ? "（有密码框，已打码）" : ""}`;
+    case "heartbeat": return e.state === "idle" ? `没在操作，空闲 ${durText(e.idle_seconds || 0)}` : `在用 ${app}`;
+    case "presence": return e.state === "active" ? "回到电脑前" : `离开电脑（空闲 ${durText(e.idle_seconds || 0)}）`;
+    case "screen.sleep": return "屏幕关了";
+    case "screen.wake": return "屏幕亮了";
+    case "screen.locked": return "锁屏";
+    case "screen.unlocked": return "解锁";
+    case "system.sleep": return "电脑睡眠";
+    case "system.wake": return "电脑唤醒";
+    case "app.focus": { const n = (ICONS[1][e.bundle_id] || {}).name || String(e.bundle_id || "").split(".").pop(); return `${e.state === "start" ? "打开" : "离开"} ${n}`; }
+    case "speech.utterance": return `${e.speaker || "未辨"}：${clip(String(e.text || ""), 120)}`;
+    case "speech.segment": return `录了一段 ${durText(e.audio_sec || 0)}，有人说话 ${durText(e.speech_sec || 0)}${e.battery != null ? `，电量 ${Math.round(e.battery * 100)}%` : ""}`;
+    case "place.visit": return `${e.depart ? "离开" : "到了"} ${e.label || e.name || "没有地名的地方"}`;
+    case "sync.run": return `同步一轮：传 ${e.uploaded || 0} 段、收 ${e.downloaded || 0} 段${e.errors ? `，${e.errors} 个错` : ""}`;
+    case "summary.run": return `写了 ${e.written || 0} 段摘要（${e.seconds || 0} 秒）`;
+    case "phone.sync": return `从 iCloud 读到 iPhone 新记录 ${numText(e.added)} 条`;
+    case "relay.sync": return `从录音服务器拉来 ${numText(e.added)} 条`;
+    case "app.launch": return `Beayy ${e.version || ""} 启动${e.shadow ? "（测试版）" : ""}`;
+    case "app.quit": return "Beayy 退出";
+    case "tap.started": return "开始监听键盘和鼠标";
+    case "permission.requested": return `申请${{ accessibility: "辅助功能", input_monitoring: "输入监控", full_disk_access: "完全磁盘访问" }[e.service] || e.service || ""}权限`;
+    case "permission.changed": return "权限变了";
+    default: return e.event_type || "（没有种类）";
+  }
+}
+
+const hms = (iso) => { const t = new Date(iso); return `${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`; };
+/** 一条事件的键：时刻＋种类＋第几条（同一秒可能有好几条） */
+const evKey = (e, i) => `${e.timestamp}|${e.event_type}|${i}`;
+
+function evShell(d) {
+  const kinds = EV_KINDS[d.kind] || EV_KINDS.mac;
+  if (!kinds.includes(DEV.type)) DEV.type = "all";
+  return `<div class="toolbar ev-bar"><div class="toolbar-left"><div class="pick"><button class="mx-btn mx-btn--secondary" id="ev-type" aria-haspopup="menu" aria-expanded="false">${EV_TYPES[DEV.type][0]}${ICON.chevD}</button>
+      <div class="mx-menu" role="menu" hidden>${kinds.map((k) => `<button role="menuitemradio" aria-checked="${k === DEV.type}" data-ev-type="${k}">${EV_TYPES[k][0]}${k === DEV.type ? `<span class="mx-check">${ICON.check}</span>` : ""}</button>`).join("")}</div></div></div>
+    <div class="toolbar-right"><span class="mx-status ${DEV.live ? "mx-status--ok" : ""}" id="ev-live-state">${DEV.live ? "实时 · 每 3 秒刷新" : "已暂停刷新"}</span><button class="mx-btn mx-btn--text mx-btn--sm" id="ev-live">${DEV.live ? "暂停" : "继续"}</button></div></div>
+    <div id="ev-list"><p class="note">读取中…</p></div>
+    <p class="note">打的字和界面文字只在这台电脑上显示，不进网站；密码框在记录时就打了码。</p>`;
+}
+
+function bindEvents(d) {
+  bindPick(document.getElementById("ev-type"));
+  $app.querySelectorAll("[data-ev-type]").forEach((b) => (b.onclick = () => { DEV.type = b.dataset.evType; DEV.events = []; DEV.open = new Set(); renderDevice(d.id, "events"); }));
+  document.getElementById("ev-live").onclick = () => { DEV.live = !DEV.live; renderDevice(d.id, "events"); };
+}
+
+/** 读事件：older＝接着往前读一页；不然读最新一页，和已经读到的更早的那些接上 */
+async function loadEvents(d, older) {
+  const types = EV_TYPES[DEV.type][1];
+  const before = older && DEV.events.length ? DEV.events[DEV.events.length - 1].timestamp : null;
+  let r;
+  try { r = await call("recent_events", { device: d.id, before, limit: 200, types }); DEV.err = null; }
+  catch (x) { DEV.err = String(x && x.message ? x.message : x); return drawEvents(d); }
+  if (older) { DEV.events = DEV.events.concat(r.events); DEV.more = r.more; }
+  else {
+    const oldest = r.events.length ? r.events[r.events.length - 1].timestamp : null;
+    const keep = oldest ? DEV.events.filter((e) => e.timestamp < oldest) : [];
+    const same = DEV.events.length && r.events.length && DEV.events[0].timestamp === r.events[0].timestamp && DEV.events.length >= r.events.length;
+    if (same && DEV.drawn) return;
+    DEV.events = r.events.concat(keep);
+    if (!keep.length) DEV.more = r.more;
+  }
+  drawEvents(d);
+}
+
+function drawEvents(d) {
+  const box = document.getElementById("ev-list"); if (!box) return;
+  DEV.drawn = true;
+  if (DEV.err) { box.innerHTML = `<p class="mx-error">读不到事件：${esc(DEV.err)}</p>`; return; }
+  if (!DEV.events.length) { box.innerHTML = emptyInline(d.this ? "最近 8 小时没有这一类事件。" : "最近 8 小时没有这一类事件。同步来的设备要等它下次同步。"); return; }
+  const phone = d.kind === "iphone";
+  box.innerHTML = `<div class="ev-list">${DEV.events.map((e, i) => {
+    const k = evKey(e, i), app = e.bundle_id && (e.app_name || phone) ? `<span class="ico" data-b="${esc(e.bundle_id)}" data-p="${phone ? 1 : 0}" title="${esc(e.app_name || e.bundle_id)}">${esc(((e.app_name || e.bundle_id.split(".").pop())[0] || "?").toUpperCase())}</span>` : `<span class="ico ico-none"></span>`;
+    const raw = JSON.stringify(e, null, 2);
+    const extra = e.event_type === "ui.text" && e.text ? `<pre class="ev-text">${esc(clip(String(e.text), 2000))}</pre>` : "";
+    return `<details class="ev-row" data-k="${esc(k)}"${DEV.open.has(k) ? " open" : ""}><summary><span class="t mono">${hms(e.timestamp)}</span><span class="mx-tag">${esc(evTag(e.event_type))}</span>${app}<span class="ev-say">${esc(evText(e))}</span></summary>
+      <div class="ev-more">${extra}<pre class="ev-raw mono">${esc(raw)}</pre></div></details>`;
+  }).join("")}</div>${DEV.more ? `<div class="btns ev-older"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ev-older">加载更早</button></div>` : ""}`;
+  box.querySelectorAll(".ev-row").forEach((x) => x.addEventListener("toggle", () => { x.open ? DEV.open.add(x.dataset.k) : DEV.open.delete(x.dataset.k); }));
+  const older = document.getElementById("ev-older"); if (older) older.onclick = () => loadEvents(d, true);
+  loadIcons().then(() => { if (phone) box.querySelectorAll(".ev-row").forEach((x, i) => { const e = DEV.events[i]; if (e && e.event_type === "app.focus") x.querySelector(".ev-say").textContent = evText(e); }); });
+}
+
+function startEventsTimer(d) {
+  stopEventsTimer();
+  if (!DEV.live) return;
+  DEV.timer = setInterval(() => {
+    if (S.page !== "devices" || DEV.id !== d.id || DEV.tab !== "events" || !document.getElementById("ev-list")) return stopEventsTimer();
+    loadEvents(d, false);
+  }, 3000);
+}
+function stopEventsTimer() { if (DEV.timer) { clearInterval(DEV.timer); DEV.timer = null; } }
+
+/** 下拉菜单（.pick 里的按钮＋.mx-menu）：点按钮开关，点外面或 Esc 关（见文末） */
+function bindPick(btn) {
+  if (!btn) return;
+  const menu = btn.parentElement.querySelector(".mx-menu");
+  btn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute("aria-expanded", String(!menu.hidden)); };
+}
+
 /** 给设备改名（小弹层）。改的名字会同步到别的设备，时间线上的标签也用它；清空＝改回默认名 */
-function renameDialog(d) {
+function renameDialog(d, done) {
   if (!d) return;
   openDialog({
     title: "重命名设备", ok: "保存",
     body: dlgField("dev-name", "名称", { value: d.custom ? d.name : "", ph: d.default_name, help: "时间线上用这个名字标出是哪台。清空就改回默认的名字。会同步到你登录的其他设备。" }),
     onOpen: (el) => { el.querySelector("#dev-name").maxLength = 40; },
-    submit: async (el) => { await call("rename_device", { id: d.id, name: dlgVal(el, "dev-name") }); renderDevices(); },
+    submit: async (el) => { await call("rename_device", { id: d.id, name: dlgVal(el, "dev-name") }); DS.devs = null; done ? done() : renderDevices(); },
   });
 }
 
@@ -934,43 +1240,67 @@ function pollSync() {
   if (SYNC_POLL) return;
   SYNC_POLL = setTimeout(async function tick() {
     SYNC_POLL = null;
-    if (S.page !== "devices") return;
+    if (S.page !== "devices" || DEV.id) return;
     const sy = await call("sync_status").catch(() => null);
-    const card = $app.querySelector(".sync-card");
+    const card = document.getElementById("sync-sec");
     if (!sy || !card) return;
     if (!sy.running && !DS.busy) return renderDevices();
-    card.outerHTML = syncCard(sy);
+    card.outerHTML = syncSection(sy);
     bindSync();
     SYNC_POLL = setTimeout(tick, 2000);
   }, 2000);
 }
 
-/** 多设备同步：按账号。登录了就显示同步状态和「登录着的设备」（可移除）；没登录就引导去设置里登录 */
-function syncCard(sy) {
+/** 多设备同步：设备页「同步」一组设置行——账号、登录着的设备（点开小弹层，可移除）、立即同步。没登录就引导登录 */
+function syncSection(sy) {
   if (sy.shadow) return "";
   const msg = DS.err ? `<div class="mx-field-error">${esc(DS.err)}</div>` : DS.msg ? `<p class="note">${esc(DS.msg)}</p>` : "";
-  if (!sy.configured) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status">没登录</span></div>
-      <p class="note">登录账号后，这台电脑和 iPhone 的记录在本机加密后同步到云端，别的电脑登录同一个账号就能看到。服务器只存加密后的数据，读不到内容。</p>
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></div></section>`;
-  if (!sy.email) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--warn">要设账号</span></div>
-      <p class="note">这台电脑用的是早期的配对码账号。到设置里设好邮箱和主密码，别的设备用邮箱登录就行，已经同步的数据不用重传。</p>
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button></div></section>`;
-  if (sy.need_login) return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--warn">要重新登录</span></div>
-      <p class="note">这台电脑的登录已经失效（在别的设备上用恢复码重设了主密码，或者把这台移除了）。重新登录后接着同步。</p>
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button></div></section>`;
+  const row = (name, desc, side) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${side}</div>`;
+  const wrap = (rows) => section("同步", `<div class="rows">${rows}</div>${msg}`).replace('<section class="mx-sec"', '<section class="mx-sec" id="sync-sec"');
+  if (!sy.configured) return wrap(row("多设备同步", "登录账号后，这台电脑和 iPhone 的记录在本机加密后同步到云端，别的电脑登录同一个账号就能看到。服务器读不到内容。",
+    `<span class="mx-status">没登录</span><span class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></span>`));
+  if (!sy.email) return wrap(row("多设备同步", "这台电脑用的是早期的配对码账号。设好邮箱和主密码，别的设备用邮箱登录就行，已经同步的数据不用重传。",
+    `<span class="mx-status mx-status--warn">要设账号</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button>`));
+  if (sy.need_login) return wrap(row("多设备同步", "这台电脑的登录已经失效（在别的设备上重设了主密码，或者把这台移除了）。重新登录后接着同步。",
+    `<span class="mx-status mx-status--warn">要重新登录</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button>`));
   const sessions = (DS.account && DS.account.sessions) || [];
-  const me = DS.account && DS.account.session;
   const pg = sy.progress || {};
-  const going = (sy.running || DS.busy) && pg.phase && pg.total > 0;
+  const busy = sy.running || DS.busy;
+  const going = busy && pg.phase && pg.total > 0;
   const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? "上传" : "下载"}</span><span class="mono">${numText(pg.done)} / ${numText(pg.total)} 段</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
-  return `<section class="sync-card"><div class="sync-head"><b>多设备同步</b><span class="mx-status mx-status--${sy.last_error ? "warn" : "ok"}">${sy.running || DS.busy ? "同步中…" : sy.last_error ? "上次有错" : "已开"}</span></div>
-      <p class="note">${esc(sy.email)} · ${sy.last ? `上次 ${mdhm(sy.last)}` : "还没同步过"} · 已传 ${numText(sy.uploaded)} 段 · 每 5 分钟一轮</p>${bar}
-      ${sy.last_error ? `<div class="mx-field-error">${esc(sy.last_error)}</div>` : ""}
-      ${sessions.length ? `<div class="sess"><div class="sess-h">登录着这个账号的设备</div>${sessions.map((x) => `<div class="sess-row"><span>${esc((DS.names || {})[x.device] || x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : DS.removing === x.id
-        ? `<span class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" data-sess-keep>取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" data-sess-go="${esc(x.id)}">移除</button></span>`
-        : `<button class="mx-btn mx-btn--text mx-btn--sm" data-sess="${esc(x.id)}">移除</button>`}</div>`).join("")}</div>` : ""}
-      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${DS.busy || sy.running ? "disabled" : ""}>立即同步</button></div>
-      ${msg}</section>`;
+  const state = busy ? `<span class="mx-status">同步中…</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">上次有错</span>` : `<span class="mx-status mx-status--ok">已开${sy.last ? ` · 上次 ${hm(sy.last)}` : ""}</span>`;
+  return wrap(row("账号", esc(sy.email), state)
+    + (bar ? `<div class="sync-bar-row">${bar}</div>` : "")
+    + (sy.last_error ? `<div class="mx-error">${esc(sy.last_error)}</div>` : "")
+    + (sessions.length ? row("登录着的设备", "", `<button class="mx-btn mx-btn--text mx-btn--sm" id="sess-open">${sessions.length} 台${ICON.chevR}</button>`) : "")
+    + row("立即同步", `每 5 分钟自动一轮${sy.uploaded ? `，已传 ${numText(sy.uploaded)} 段` : ""}`, `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>立即同步</button>`));
+}
+
+/** 登录着这个账号的设备（小弹层）：这台标出来，别的可以移除（先点「移除」，再点一次确认） */
+function sessionsDialog() {
+  let removing = null;
+  const body = () => {
+    const sessions = (DS.account && DS.account.sessions) || [], me = DS.account && DS.account.session;
+    return `<div class="sess">${sessions.map((x) => `<div class="sess-row"><span>${esc((DS.names || {})[x.device] || x.name || x.device)}${x.id === me ? `<span class="mx-tag">这台</span>` : ""}</span><span class="note">最近 ${mdhm(new Date(x.last_seen).toISOString())}</span>${x.id === me ? "<span></span>" : removing === x.id
+      ? `<span class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" data-sess-keep>取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" data-sess-go="${esc(x.id)}">移除</button></span>`
+      : `<button class="mx-btn mx-btn--text mx-btn--sm" data-sess="${esc(x.id)}">移除</button>`}</div>`).join("")}</div>
+      <p class="note">移除后，那台设备要重新登录才能再同步，它已经传上来的记录还在。</p>`;
+  };
+  const d = openDialog({ title: "登录着这个账号的设备", body: `<div id="sess-body">${body()}</div>`, cancel: "关闭", ok: null,
+    onOpen: (el) => {
+      const draw = () => { el.querySelector("#sess-body").innerHTML = body(); bind(); };
+      const bind = () => {
+        el.querySelectorAll("[data-sess]").forEach((b) => (b.onclick = () => { removing = b.dataset.sess; draw(); }));
+        el.querySelectorAll("[data-sess-keep]").forEach((b) => (b.onclick = () => { removing = null; draw(); }));
+        el.querySelectorAll("[data-sess-go]").forEach((b) => (b.onclick = async () => {
+          try { await call("account_remove_device", { id: b.dataset.sessGo }); DS.account = await call("account_info").catch(() => DS.account); DS.msg = "已移除。那台设备要重新登录才能再同步。"; }
+          catch (x) { DS.err = String(x); }
+          removing = null; draw(); if (S.page === "devices" && !DEV.id) renderDevices();
+        }));
+      };
+      bind();
+    } });
+  return d;
 }
 
 function bindSync() {
@@ -978,13 +1308,8 @@ function bindSync() {
   on("ac-login", () => loginDialog("login"));
   on("ac-signup", () => loginDialog("signup"));
   on("ac-claim", claimDialog);
+  on("sess-open", sessionsDialog);
   on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = null; renderDevices(); try { const r = await call("sync_now"); DS.msg = `上传 ${r.uploaded} 段，下载 ${r.downloaded} 段${r.errors.length ? "，有错：" + r.errors.join("；") : ""}`; } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
-  $app.querySelectorAll("[data-sess]").forEach((b) => (b.onclick = () => { DS.removing = b.dataset.sess; renderDevices(); }));
-  $app.querySelectorAll("[data-sess-keep]").forEach((b) => (b.onclick = () => { DS.removing = null; renderDevices(); }));
-  $app.querySelectorAll("[data-sess-go]").forEach((b) => (b.onclick = async () => {
-    try { await call("account_remove_device", { id: b.dataset.sessGo }); DS.msg = "已移除。那台设备要重新登录才能再同步。"; } catch (x) { DS.err = String(x); }
-    DS.removing = null; DS.account = null; renderDevices();
-  }));
 }
 
 // ---------- 设置 ----------
@@ -1429,7 +1754,7 @@ async function renderOnboarding() {
 // ---------- 路由 ----------
 
 async function route() {
-  const [page = "today", arg] = location.hash.replace(/^#\/?/, "").split("/");
+  const [page = "today", arg, arg2] = location.hash.replace(/^#\/?/, "").split("/");
   // 换页就关掉弹层；刚拿到恢复码那个必须点「我已存好」才关
   if (DLG && DLG.closable) closeDialog();
   S.page = ["today", "summary", "rules", "devices", "settings"].includes(page) ? page : "today";
@@ -1438,9 +1763,10 @@ async function route() {
     if (!S.days.length && !S.status) await boot();
     if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
     if (!S.settings.onboarded && TAURI) return renderOnboarding();
+    if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
     if (S.page === "summary") await renderSummary(arg);
     else if (S.page === "rules") await renderRules();
-    else if (S.page === "devices") await renderDevices();
+    else if (S.page === "devices") { if (arg) await renderDevice(decodeURIComponent(arg), arg2); else { DEV.id = null; stopEventsTimer(); await renderDevices(); } }
     else if (S.page === "settings") await renderSettings();
     else await renderToday();
     document.getElementById("main").scrollTop = 0;
@@ -1450,12 +1776,10 @@ async function route() {
 }
 
 document.addEventListener("click", (e) => {
-  const menu = document.getElementById("pick-menu");
-  if (menu && !menu.hidden && !e.target.closest(".pick")) menu.hidden = true;
+  for (const menu of document.querySelectorAll(".pick .mx-menu")) if (!menu.hidden && !menu.parentElement.contains(e.target)) menu.hidden = true;
 });
 document.addEventListener("keydown", (e) => {
-  const menu = document.getElementById("pick-menu");
-  if (e.key === "Escape" && menu && !menu.hidden) menu.hidden = true;
+  if (e.key === "Escape") for (const menu of document.querySelectorAll(".pick .mx-menu")) menu.hidden = true;
 });
 // 后退／前进：自己记一份走过的页面，没得退或没得进时按钮置灰（照 Claude）
 const NAV = { stack: [], pos: -1, jumping: false };

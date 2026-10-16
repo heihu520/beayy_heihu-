@@ -1,6 +1,7 @@
-//! 手表录音和 iPhone 位置：从你自己的录音服务器（HTTPS＋Bearer 口令，接口见 src-tauri/COMMANDS.md）拉回对话转写和停留点，写成事件进 `devices/`：
+//! 手表录音和位置：从你自己的录音服务器（HTTPS＋Bearer 口令，接口见 src-tauri/COMMANDS.md）拉回对话转写和停留点，写成事件进 `devices/`：
 //! - 对话 → `devices/watch-<id>/`：每段录音一条 `speech.segment`，每句话一条 `speech.utterance`（时刻＝开口时刻）；
-//! - 停留点 → `devices/<服务器给的 iphone-…>/`（和屏幕使用同一台 iPhone 的目录）：`place.visit`。
+//! - 停留点 → 记它的那台设备的目录：iPhone 记的进 `devices/<服务器给的 iphone-…>/`（和屏幕使用同一台 iPhone），
+//!   手表录音时取点算的（device 以 watch 开头）进和对话同一个 `devices/watch-<id>/`：`place.visit`。
 //!   同一个停留点补上离开时间、地名后服务器上是新的一版，这里再记一条，读的时候同一个 place_id 取最后一条。
 //!
 //! 按（种类、id、内容）去重，只增不改。服务器 `GET /v1/days` 给出每天文件的大小，只拉变了的那几天（`<数据根>/relay/state.json`）。
@@ -76,7 +77,9 @@ pub fn parse_transcripts(text: &str, host: &str) -> Vec<Item> {
     for r in &rows {
         if r["type"] == "segment" {
             if let Some(id) = r["id"].as_str() {
-                seg_dev.insert(id.into(), device_dir("watch", r["device"].as_str().unwrap_or("watch"), host));
+                // 手表录的归手表；没戴手表时 iPhone 自己录的（device 是 iphone-…）归那台 iPhone
+                let given = r["device"].as_str().unwrap_or("watch");
+                seg_dev.insert(id.into(), device_dir(if given.starts_with("iphone") { "iphone" } else { "watch" }, given, host));
             }
         }
     }
@@ -123,7 +126,9 @@ pub fn parse_places(text: &str, host: &str) -> Vec<Item> {
         let Ok(r) = serde_json::from_str::<Value>(line) else { continue };
         let Some(id) = r["id"].as_str() else { continue };
         let Some(at) = utc(&r["arrive"]).or_else(|| utc(&r["depart"])) else { continue };
-        let device = device_dir("iphone", r["device"].as_str().unwrap_or("iphone"), host);
+        // 停留点可能是 iPhone 记的，也可能是手表录音时取点算的（device 以 watch 开头），各归各的设备目录
+        let given = r["device"].as_str().unwrap_or("iphone");
+        let device = device_dir(if given.starts_with("watch") { "watch" } else { "iphone" }, given, host);
         let mut f = Map::new();
         f.insert("place_id".into(), json!(id));
         f.insert("arrive".into(), utc_or_null(&r["arrive"]));

@@ -4,13 +4,13 @@
 /* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜） */
 :root {
   --rec-computer: #2b4cc2; --rec-phone: #e08a1e; --rec-night: #c42a50; --rec-track: #eceee9;
-  --rec-watch: #2f8a57; --rec-place: #d9cdb3; --rec-place-alt: #c4b48f;
+  --rec-watch: #2f8a57; --rec-place: #cdd2d6; --rec-place-alt: #b3bac0;
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #4d4436; --rec-place-alt: #62563f; }
+  :root:not([data-theme="light"]) { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #3b4248; --rec-place-alt: #4d555c; }
 }
-:root[data-theme="dark"] { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #4d4436; --rec-place-alt: #62563f; }
+:root[data-theme="dark"] { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #3b4248; --rec-place-alt: #4d555c; }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
 html, body { height: 100%; }
@@ -54,12 +54,19 @@ body { padding: 0; overflow: hidden; }
 /* ---------- DayStrip 一天的形状、Actogram 作息图（人生记录） ---------- */
 .strip, .strip-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); column-gap: 2px; }
 .strip { row-gap: 3px; }
-/* 地点色带：每段停留按起止画在 0–24 点上，相邻两段交替深浅；地名写在上面 */
-.places { position: relative; height: 18px; margin-bottom: 4px; border-radius: 2px; background: var(--rec-track); overflow: hidden; }
-.places span { position: absolute; top: 0; bottom: 0; background: var(--rec-place); font: 11px/18px var(--font-sans); color: var(--ink); padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.places span.alt { background: var(--rec-place-alt); }
+/* 地点色带：底色画到现在；每段停留按起止画在 0–24 点上，相邻两段交替深浅；够宽的地名写在段上，窄的写在下面一行；
+   两段之间的路上是一条细线，「现在」是一条竖线 */
+.places { position: relative; height: 18px; }
+.places .bg { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 2px; background: var(--rec-track); }
+.places .st { position: absolute; top: 0; bottom: 0; box-sizing: border-box; background: var(--rec-place); font: 11px/18px var(--font-sans); color: var(--ink); padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.places .st.alt { background: var(--rec-place-alt); }
+.places .go { position: absolute; top: 8.5px; height: 1px; background: var(--ink-4); }
+.places .now { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--ink); }
+.pl-names { position: relative; height: 16px; margin-bottom: 2px; font-size: 11px; line-height: 16px; color: var(--ink-4); }
+.pl-names span { position: absolute; top: 0; white-space: nowrap; }
 .strip-rows { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: var(--space-2); align-items: center; row-gap: 3px; }
 .strip-rows > .k { font-size: 11px; line-height: 16px; color: var(--ink-4); white-space: nowrap; }
+.strip-rows > .k-pl { align-self: start; line-height: 18px; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
 .strip-axis, .acto-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
 .acto { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; row-gap: 6px; align-items: center; }
@@ -73,6 +80,7 @@ body { padding: 0; overflow: hidden; }
 .cell.n { border-bottom-color: var(--rec-night); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); font-size: 13px; line-height: 20px; color: var(--ink-3); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: var(--space-1); vertical-align: -1px; }
+.legend i.line { width: 12px; height: 1px; border-radius: 0; background: var(--ink-4); vertical-align: 4px; }
 
 /* ---------- 时间线：电脑、手机按时间穿插，新的在上 ---------- */
 .tl-row { position: relative; border-bottom: 1px solid var(--line); }
@@ -87,7 +95,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .tl-row .desc { margin-top: 2px; font-size: 13px; line-height: 17px; color: var(--ink-3); }
 .tl-row.idle, .tl-row.brief { padding-top: 8px; padding-bottom: 8px; color: var(--ink-4); font-size: 13px; line-height: 20px; }
 .tl-row.brief .name { font-weight: 400; }
-.tl-row .where { font-size: 12px; line-height: 17px; color: var(--ink-4); }
+.tl-row .where { margin-top: 2px; font-size: 12px; line-height: 17px; color: var(--ink-3); }
 .tl-row.place .name { font-weight: 400; }
 .tl-row .talk-line { margin-top: 2px; font-size: 13px; line-height: 17px; color: var(--ink-3); }
 .utts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 20px; }
@@ -95,9 +103,26 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .utts .ut { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; }
 .utts .who { color: var(--ink-3); white-space: nowrap; }
 .utts .who.self { color: var(--ink); font-weight: 500; }
+/* 去了哪：上面按地点合计的条，下面一个停留一行（点了起名） */
+.pl-bars { margin-bottom: var(--space-4); }
+.bar i.pl { background: var(--rec-place-alt); }
+.bar i.go { background: var(--ink-4); }
+.bar i.none { background: var(--line); }
+.bar-name.dim { color: var(--ink-4); }
 .visits { display: flex; flex-direction: column; }
-.visits .v-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: var(--space-3); padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 20px; }
-.visits .v-row .t, .visits .v-row .d { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.visits .v-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto 36px; gap: var(--space-3); align-items: baseline; width: 100%; margin: 0; padding: 8px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; font: 14px/20px var(--font-sans); text-align: left; cursor: pointer; }
+.visits .v-row:hover { background: var(--hover); border-radius: var(--radius-lg); }
+.visits .v-row .t, .visits .v-row .d { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.visits .v-row .sub { margin-left: var(--space-2); font-size: 12px; color: var(--ink-4); }
+.visits .v-row .act { font-size: 13px; color: var(--ink-4); text-align: right; }
+.visits .v-row:hover .act { color: var(--accent-ink); }
+/* 手机页签按地点分组：每组一行标题 */
+.tl-place { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline; padding: var(--space-5) 12px 6px; border-bottom: 1px solid var(--line); }
+.tl-place .t, .tl-place .d { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tl-place .n { font-size: 15px; line-height: 20px; font-weight: 600; }
+.tl-place .n i { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-2); border-radius: 2px; background: var(--rec-place-alt); vertical-align: -1px; }
+.tl-place.gap .n { font-size: 13px; font-weight: 400; color: var(--ink-4); }
+.tl > .tl-place:first-child { padding-top: var(--space-2); }
 .tl-row .chev { margin-top: 2px; color: var(--ink-4); transition: transform .15s; }
 .tl-row[open] > summary .chev { transform: rotate(90deg); }
 .tl-row .more { padding: 0 12px var(--space-4) calc(92px + 36px); display: flex; flex-direction: column; gap: var(--space-4); }
@@ -311,3 +336,40 @@ a.mx-btn { text-decoration: none; }
 .sync-prog-text { display: flex; justify-content: space-between; font-size: 12px; line-height: 16px; color: var(--ink-3); }
 .sync-prog .bar { height: 6px; }
 .dev-acts { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }
+
+/* ---------- 设备：列表页（设备一组、同步一组）和设备详情页（概况、事件） ---------- */
+.reading > .mx-notice { margin-bottom: var(--space-5); }
+.mx-list .mx-row-name .mx-tag { margin-left: var(--space-2); }
+.mx-row-desc .dot, .dev-detail .mx-detail-main p .dot { display: inline-block; margin: 0 6px 0 0; vertical-align: 0; }
+.rows .mx-setting:last-child { border-bottom: 0; }
+.mx-row-side .mx-ico { color: var(--ink-4); }
+.sync-bar-row { padding: 4px 0 12px; border-bottom: 1px solid var(--line); }
+#sess-open { gap: 2px; }
+.dev-detail { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-6); }
+.dev-detail .mx-back { align-self: flex-start; }
+.dev-detail .mx-detail-main { flex: 1; min-width: 0; }
+.dev-detail .pick .mx-menu { min-width: 160px; }
+.dev-stats { margin-bottom: var(--space-6); }
+.dev-recs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.dev-recs li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; line-height: 20px; color: var(--ink-2); }
+.dev-recs li:last-child { border-bottom: 0; }
+.dev-id { margin-top: var(--space-6); color: var(--ink-4); }
+.dev-id .mono { color: var(--ink-3); }
+/* 事件：一行一条，点开看原始 JSON */
+.ev-bar { margin: 0 0 var(--space-3); }
+.ev-bar .pick .mx-menu { left: 0; right: auto; min-width: 160px; }
+.ev-list { display: flex; flex-direction: column; }
+.ev-row { border-bottom: 1px solid var(--line); }
+.ev-row > summary { display: grid; grid-template-columns: 64px 72px 18px minmax(0, 1fr); gap: var(--space-3); align-items: center; padding: 7px 8px; list-style: none; cursor: pointer; border-radius: var(--radius-md); font-size: 13px; line-height: 20px; }
+.ev-row > summary::-webkit-details-marker { display: none; }
+.ev-row > summary:hover { background: var(--hover); }
+.ev-row .t { font-size: 12px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.ev-row .mx-tag { justify-self: start; white-space: nowrap; }
+.ev-row .ico-none { background: none; }
+.ev-say { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-row[open] .ev-say { white-space: normal; }
+.ev-more { padding: 0 8px 12px calc(64px + 12px); display: flex; flex-direction: column; gap: var(--space-2); }
+.ev-more pre { margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--sunken); border: 1px solid var(--line); font-size: 12px; line-height: 18px; color: var(--ink-2); white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow: auto; }
+.ev-more .ev-text { font-family: var(--font-sans); font-size: 13px; color: var(--ink); }
+.ev-older { justify-content: center; margin: var(--space-4) 0; }
+.mx-sec .mx-list .mx-row:last-child { border-bottom-color: transparent; }

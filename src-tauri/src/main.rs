@@ -285,6 +285,7 @@ fn main() {
             Some("list_devices") => json!(data::list_devices()),
             Some("list_projects") => json!(data::list_projects()),
             Some("get_profile") => data::get_profile(),
+            Some("recent_events") => data::recent_events(args.get(3).cloned().unwrap_or_default(), None, Some(5), None).unwrap_or_else(|e| json!({ "error": e })),
             _ => json!({"error": "用法：--dump list_days|get_day 日期|get_settings|get_rules"}),
         };
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
@@ -294,7 +295,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, icons::get_icons, daily::generate_daily, data::test_model,
+            data::get_settings, data::save_settings, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, icons::get_icons, daily::generate_daily, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
