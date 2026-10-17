@@ -200,9 +200,21 @@ pub async fn update_check() -> Value {
 /// 装上下好的新版本并重启
 #[tauri::command]
 pub async fn update_apply(app: AppHandle) -> Result<(), String> {
-    let file = with(|s| s.ready.clone()).ok_or("还没有下好的新版本")?;
-    updatable()?;
-    tauri::async_runtime::spawn_blocking(move || install(&file)).await.map_err(|e| e.to_string())??;
+    // 点两下只装一次：装两次会开出两个新版本（每个都 open -n）；没装成就放开，可以再点
+    static APPLYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if APPLYING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("正在更新，请稍等".into());
+    }
+    let r: Result<(), String> = async {
+        let file = with(|s| s.ready.clone()).ok_or("还没有下好的新版本")?;
+        updatable()?;
+        tauri::async_runtime::spawn_blocking(move || install(&file)).await.map_err(|e| e.to_string())?
+    }
+    .await;
+    if r.is_err() {
+        APPLYING.store(false, std::sync::atomic::Ordering::SeqCst);
+        return r;
+    }
     app.exit(0);
     Ok(())
 }

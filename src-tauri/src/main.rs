@@ -200,6 +200,26 @@ fn on_exit(app: &AppHandle) {
     }
 }
 
+/// 同一个数据目录只跑一个 app：两个一起采会把每条记录写两遍（10-17 更新重启时出过一次）。
+/// 测试版写影子目录，锁也在影子目录，照样能和正式版同时开。
+/// 更新重启时旧进程可能还没退完，拿不到锁先等一会儿（最多 10 秒），还拿不到才算真有一个在跑。
+fn single_instance() -> Result<Option<std::fs::File>, ()> {
+    let root = data_root();
+    let _ = std::fs::create_dir_all(&root);
+    // 锁文件建不了、系统不支持锁：不拦，照常启动（Ok(None)）
+    let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(root.join("app.lock")) else {
+        return Ok(None);
+    };
+    for _ in 0..40 {
+        match f.try_lock() {
+            Ok(()) => return Ok(Some(f)),
+            Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(250)),
+            Err(_) => return Ok(None),
+        }
+    }
+    Err(())
+}
+
 fn main() {
     // 调试用：beayy --dump list_days｜get_day YYYY-MM-DD｜get_settings｜get_rules，打印命令结果后退出（不启动界面）
     let args: Vec<String> = std::env::args().collect();
@@ -291,6 +311,11 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
     }
+    // 锁要活到进程结束（run 不返回），进程退出时系统自动放掉
+    let Ok(_instance) = single_instance() else {
+        eprintln!("Beayy 已经在运行，这个就不开了");
+        return;
+    };
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_status, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
