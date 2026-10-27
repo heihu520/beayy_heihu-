@@ -130,7 +130,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beayy"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "beayy-capture",
  "beayy-core",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "beayy-capture"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "beayy-core",
  "block2",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "beayy-core"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "chrono",
  "serde",
@@ -175,8 +175,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "beayy-mobile"
+version = "0.2.19"
+dependencies = [
+ "beayy-core",
+ "beayy-remote",
+ "beayy-summary",
+ "beayy-sync",
+ "chrono",
+ "pollster",
+ "regex",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "beayy-phone"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "beayy-core",
  "chrono",
@@ -185,9 +201,11 @@ dependencies = [
 
 [[package]]
 name = "beayy-remote"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
+ "base64 0.22.1",
  "beayy-core",
+ "beayy-sync",
  "chrono",
  "serde_json",
  "ureq",
@@ -195,9 +213,10 @@ dependencies = [
 
 [[package]]
 name = "beayy-summary"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "beayy-core",
+ "beayy-sync",
  "chrono",
  "regex",
  "serde_json",
@@ -206,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "beayy-sync"
-version = "0.2.11"
+version = "0.2.19"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2664,6 +2683,12 @@ dependencies = [
  "flate2",
  "miniz_oxide 0.8.9",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "poly1305"

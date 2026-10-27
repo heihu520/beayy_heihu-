@@ -53,7 +53,7 @@ fn data_url(png: &[u8]) -> String {
     format!("data:image/png;base64,{}", base64(png))
 }
 
-fn base64(b: &[u8]) -> String {
+pub(crate) fn base64(b: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
     for c in b.chunks(3) {
@@ -65,11 +65,12 @@ fn base64(b: &[u8]) -> String {
     out
 }
 
-#[cfg(target_os = "macos")]
+// 手机版（mobile/）也编这个文件，它不依赖 beayy-capture
+#[cfg(all(target_os = "macos", not(beayy_mobile)))]
 fn mac_icon(id: &str) -> Option<Vec<u8>> {
     beayy_capture::macos::app_icon_png(id, 64)
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", not(beayy_mobile))))]
 fn mac_icon(_id: &str) -> Option<Vec<u8>> {
     None
 }
@@ -134,7 +135,7 @@ fn one(id: &str, phone: bool) -> Value {
 
 /// 一批 bundle id 的图标：{id: {icon: data URL 或 null, name: App Store 上的名字或 null}}。
 /// 没缓存的手机 app 要联网查，并发查，第一次会慢几秒，之后都走缓存。
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn get_icons(ids: Vec<String>, phone: bool) -> Map<String, Value> {
     let mut ids = ids;
     ids.sort();

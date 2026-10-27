@@ -5,6 +5,12 @@
 
 const $app = document.getElementById("app");
 const TAURI = window.__TAURI__ && window.__TAURI__.core;
+// 手机版没有开发者工具：网页报错交给外壳记进日志（电脑版没有这个命令，调用失败就算了）
+if (TAURI) {
+  const report = (t) => { try { TAURI.invoke("web_log", { text: t }).catch(() => {}); } catch (e) {} };
+  window.addEventListener("error", (e) => report(`${e.message} @ ${e.filename}:${e.lineno}`));
+  window.addEventListener("unhandledrejection", (e) => report(`未处理：${e.reason && (e.reason.stack || e.reason.message || e.reason)}`));
+}
 
 // ---------- 取数 ----------
 
@@ -34,7 +40,7 @@ async function call(cmd, args = {}) {
   // 浏览器里：写操作只改内存，读操作读样例
   switch (cmd) {
     case "save_rules": mockState.rules = args.rules; return null;
-    case "save_settings": mockState.settings = { ...args.settings, has_api_key: (mockState.settings || {}).has_api_key }; return null;
+    case "save_settings": mockState.settings = { ...(mockState.settings || await loadMock("get_settings")), ...args.settings }; return null;
     case "set_api_key": mockState.hasKey = true; return null;
     case "set_paused": mockState.paused = args.paused; return null;
     case "open_permission": case "open_data_dir": console.info(`样例模式：${cmd}`, args); return null;
@@ -67,6 +73,8 @@ const short = (d) => `${d.slice(5)} ${weekday(d)}`;
 const localDay = (t = new Date()) => `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
 const hm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${pad2(t.getHours())}:${pad2(t.getMinutes())}`; };
 const mdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${hm(iso)}`; };
+/** 带完整年月日的时刻（墨线文案：「同步至 2026-10-22 09:27」） */
+const ymdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${hm(iso)}`; };
 const addDays = (d, n) => localDay(new Date(toDate(d).getTime() + 12 * 3600e3 + n * 864e5));
 
 /** 每小时秒数（电脑）：数据包的 active_hours {"09": 秒}，或老数据包的 hours {"09": {app: 秒}} */
@@ -94,6 +102,7 @@ const ICON = {
   chevD: '<svg class="mx-ico" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg>',
   check: '<svg class="mx-ico" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></svg>',
   close: '<svg class="mx-ico" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></svg>',
+  more: '<svg class="mx-ico" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none"/></svg>',
 };
 
 // 极简 Markdown：小标题、列表、段落，行内粗体和代码。先转义再加标记。
@@ -134,6 +143,48 @@ function header(title, right = "") {
 const section = (title, body, { count, aside } = {}) =>
   `<section class="mx-sec"><div class="mx-sec-head"><h3>${esc(title)}</h3>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
 const emptyInline = (text) => `<p class="mx-empty-inline">${esc(text)}</p>`;
+/** 「怎么设置」链接（墨线文案：要分步骤的设置，界面一句话＋这个链接，步骤在弹层里） */
+const howto = (kind, text) => `<button type="button" class="howto" data-howto="${kind}">${esc(text)}</button>`;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-howto]"); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  ({ screentime: screenTimeDialog, amap: amapHowtoDialog })[b.dataset.howto]?.();
+}, true);
+
+/** iCloud 屏幕使用时间怎么同步到这台 Mac：四步＋打开系统设置、现在读取 */
+function screenTimeDialog() {
+  // 手机版不读屏幕使用时间（电脑读），没有这两个按钮
+  const desk = TAURI && !(S.status && S.status.mobile);
+  openDialog({
+    title: "iPhone 屏幕使用时间", cancel: "关闭", ok: desk ? "现在读取" : null, busy: "读取中…",
+    body: `<ol class="steps">
+      <li>iPhone：设置 → 屏幕使用时间 → 打开「跨设备共享」</li>
+      <li>Mac：系统设置 → 屏幕使用时间 → 打开「跨设备共享」</li>
+      <li>两台用同一个 Apple ID</li>
+      <li>想快点同步：在 iPhone 和 Mac 上各打开一次「屏幕使用时间」</li></ol>
+      ${desk ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" style="align-self:flex-start" id="st-open">打开系统设置</button>` : ""}`,
+    onOpen: (el) => { const b = el.querySelector("#st-open"); if (b) b.onclick = () => call("open_permission", { kind: "screentime" }); },
+    submit: async () => {
+      await call("phone_read_now");
+      await new Promise((r) => setTimeout(r, 4000));
+      S.status = await call("get_status").catch(() => S.status);
+      route();
+    },
+  });
+}
+
+/** 高德 Key 怎么获取 */
+function amapHowtoDialog() {
+  openDialog({
+    title: "怎么获取高德 Key", cancel: "关闭", ok: null,
+    body: `<ol class="steps">
+      <li>打开 console.amap.com，用高德账号登录，完成开发者认证</li>
+      <li>应用管理 → 创建新应用</li>
+      <li>添加 Key，服务平台选「Web 服务」：这是 Web 服务 Key</li>
+      <li>再添加一个 Key，服务平台选「Web端(JS API)」：这是地图 Key，它下面的安全密钥一起填</li></ol>
+      <p class="note">不想填 Key，可以开通官方服务。</p>`,
+  });
+}
 
 // ---------- 弹层（墨线 Dialog 小窗口）：新建、编辑、填几项再提交都在这里，页面上不展开编辑框 ----------
 // 同一时间只开一个，挂在 body 上，页面重画不影响它。点遮罩、Esc、关闭都等于取消；提交中不关。
@@ -201,8 +252,9 @@ const dlgVal = (el, id) => { const x = el.querySelector("#" + id); return x ? x.
 const shade = (min, v) => (min ? `background:color-mix(in srgb, var(${v}) ${Math.round(30 + (Math.min(min, 60) / 60) * 70)}%, var(--rec-track))` : "");
 const isNight = (h) => h >= 21 || h < 5;
 
-function readout(k, v, unit, caption = "", over = false) {
-  return `<div class="ro${over ? " over" : ""}"><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div><div class="caption" title="${esc(caption)}">${esc(caption) || "&nbsp;"}</div></div>`;
+/** 读数：标签、数值、单位、下面一行小字；tip 是悬停提示（墨线：读数不配解释文字，要解释放悬停） */
+function readout(k, v, unit, caption = "", over = false, tip = "") {
+  return `<div class="ro${over ? " over" : ""}"${tip ? ` title="${esc(tip)}"` : ""}><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div><div class="caption" title="${esc(caption)}">${esc(caption) || "&nbsp;"}</div></div>`;
 }
 
 /** 一天的形状。只给电脑、手机两排时照旧（上排电脑、下排手机）；给了 opt（手表说话的分钟数 hw、停留点 visits、日期 date）
@@ -222,9 +274,47 @@ function dayStrip(hc, hp, clickable = false, opt = null) {
 
 /** 两个停留点之间不超过 3 小时算「路上」，更长的和首尾算「没记到」（同 脚本/日数据包.py 的 TRANSIT_MAX） */
 const TRANSIT_MAX = 3 * 3600e3;
-/** 地点的显示名：起过名的用名字；没起名的只要地点名，不带区名（「望湖区 · 云杉食堂」→「云杉食堂」） */
-const placeName = (v) => (v && (v.label || (v.name || "").split(" · ").pop())) || "没有地名";
+/** 地点的显示名：起过名的用名字；没起名的不带区名，只有区域时写区域，确认了是哪家店写「区域 · 店」
+ *  （手机用高德取的地名是「区 · 区域」，确认了店是「区 · 区域 · 店」；10-21 前苹果取的是「区 · 区域 · 门牌或店」） */
+const placeName = (v) => {
+  if (!v) return "没有地名";
+  if (v.label) return v.label;
+  const parts = (v.name || "").split(" · ");
+  const n = (parts.length > 1 ? parts.slice(1).join(" · ") : parts[0]) || "没有地名";
+  // 和家不在一个城市：前面写城市（「上海 · 静安寺」）
+  return v.city_prefix ? `${String(v.city_prefix).replace(/市$/, "")} · ${n}` : n;
+};
 const visitEnd = (v) => (v.end ? Date.parse(v.end) : Date.now());
+const pctText = (p) => `${Math.max(1, Math.round(p * 100))}%`;
+/** 店名去掉括号里的分店名：「星巴克(某某广场店)」→「星巴克」（同手机） */
+const shopShort = (n) => String(n || "").replace(/^(.+?)\s*[（(][^（()）]*[)）]$/, "$1").trim();
+/** 还没确认是哪家店时，名字下面一行：在做什么（高德大类，置信度加总，手机算的）和最像的两家 */
+function guessLine(v) {
+  if (v.label || v.confirmed || !(v.guesses || []).length) return "";
+  const parts = [];
+  if (v.doing) parts.push(`${v.doing.kind} ${pctText(v.doing.p)}`);
+  parts.push("可能是 " + v.guesses.slice(0, 2).map((g) => `${shopShort(g.name)} ${pctText(g.p)}`).join("、"));
+  return parts.join(" · ");
+}
+/** 区域名（常去按它合计）：电脑取的分级里的区域，没有就用地名的第二层 */
+const areaOf = (v) => (v.admin && v.admin.area) || ((v.place_name || v.name || "").split(" · ")[1]) || (v.place_name || v.name || "").split(" · ")[0];
+/** 完整分级「中国 › 江苏省 › 南京市 › 江宁区 › 麒麟街道 › 南京江宁宝龙广场」（直辖市省市同名只写一次） */
+function chainOf(v) {
+  const a = v.admin || {};
+  const xs = [a.country, a.province, a.city !== a.province ? a.city : null, a.district, a.township, a.area].filter(Boolean);
+  return xs.join(" › ");
+}
+const cityShort = (c) => String(c || "").replace(/市$/, "");
+/** 角标：起过名的写种类（家、工作、其他），没起名但最近 30 天去过 5 次以上的写「常去」，第一次去的不标 */
+function badgeOf(v) {
+  if (v.label) return PL_ICON[v.type] || "其他";
+  const f = PL.stats && PL.stats.frequent;
+  return f && f.some((r) => r.name === areaOf(v)) ? "常去" : "";
+}
+const badgeHtml = (v) => { const b = badgeOf(v); return b ? `<span class="pl-badge${b === "常去" ? " often" : ""}">${esc(b)}</span>` : ""; };
+
+/** 地图上停留点的编号：1–9、A–Z（同高德静态地图的标注） */
+const MARKS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const hmMs = (ms) => hm(new Date(ms).toISOString());
 /** 停留的起止：从前一天待过来的写真实到达时刻（「昨天 22:10」），还没走的写「现在」 */
 function visitSpan(v) {
@@ -309,17 +399,84 @@ function speakers(talk, self) {
   return [...talk].sort((a, b) => (b.speaker === self) - (a.speaker === self) || b.sec - a.sec).map((t) => t.speaker);
 }
 
-/** 概览里的「去了哪」：先按地点合计（加上路上、没记到），再按时间一个停留一行；点一行给这个地方起名 */
-function placesSection(visits, date) {
+/** 概览里的「去了哪」（照地图类产品的「时间线」）：上面一行汇总；左边按时间的竖线时间线（停留和路上交替，停留里套着那时的对话），
+ *  右边地图（停留点按先后编号，点哪一行地图上那个点变成强调色）。名字只写有把握的；还没认出是哪家店的，下面一行列最像的几家，
+ *  点一下就认定；每行右边「⋯」改地点（候选、附近、搜索、直接输入、起名）。不显示百分比（悬停能看） */
+function placesSection(visits, date, convs, mode = "stays") {
   if (!visits.length) return "";
   const blocks = placeBlocks(visits, date);
+  let go = 0;
+  for (const b of blocks) if (b.kind === "go") go += (b.z - b.a) / 1000;
+  const spots = new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size;
+  const talk = (convs || []).length;
+  // 当天在哪些城市、区：一个城市写「南京 · 江宁区、栖霞区」，跨城写「南京 → 上海」
+  const cities = [...new Set(visits.map((v) => v.admin && v.admin.city).filter(Boolean))];
+  const where = cities.length > 1 ? cities.map(cityShort).join(" → ")
+    : cities.length ? `${cityShort(cities[0])} · ${[...new Set(visits.map((v) => v.admin && v.admin.district).filter(Boolean))].join("、")}` : "";
+  const sum = [where, `${spots} 个地方`, `${visits.length} 段停留`, go ? `路上 ${spanText(go)}` : "", talk ? `说话 ${talk} 段` : ""].filter(Boolean).join(" · ");
+  const idx = new Map(visits.map((v, i) => [v, i]));
+  let first = true;
+  const rows = blocks.map((b) => {
+    if (b.kind === "stay") { first = false; return stayItem(b.v, idx.get(b.v), (convs || []).filter((c) => Date.parse(c.start) >= b.a && Date.parse(c.start) < b.z)); }
+    if (first) return "";  // 一天开头没记到的不画
+    const dur = spanText((b.z - b.a) / 1000);
+    return b.kind === "go" ? `<li class="ptl-go"><span class="ptl-t"></span><span class="ptl-dot"></span><span class="ptl-b">路上 ${dur}</span></li>`
+      : `<li class="ptl-none"><span class="ptl-t"></span><span class="ptl-dot"></span><span class="ptl-b">没记到 ${dur}</span></li>`;
+  }).join("");
+  if (mode === "map") {
+    // 地图：左边一列简短的停留（编号、名字、起止），点哪段地图上那个点变成强调色；右边大地图
+    const list = visits.map((v, i) => `<li><button class="pm-row" data-sel="${i}"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span><span class="pm-b"><span class="pm-n" title="${esc(chainOf(v))}">${esc(placeName(v))}${badgeHtml(v)}</span>${!v.label && !v.confirmed && (v.guesses || [])[0] ? `<span class="pm-m">可能是 ${esc(shopShort(v.guesses[0].name))} ${pctText(v.guesses[0].p)}</span>` : ["auto", "remembered"].includes(v.confirmed) && (v.guesses || [])[0] ? `<span class="pm-m">${v.confirmed === "auto" ? "自动认出" : "按上次认定"} ${pctText(v.guesses[0].p)}</span>` : ""}<span class="pm-m">${visitSpan(v)} · ${spanText((visitEnd(v) - Date.parse(v.start)) / 1000)}</span></span></button></li>`).join("");
+    return `<p class="ptl-sum">${sum}</p><div class="pm-wrap"><ol class="pm-list">${list}</ol>
+      <div class="pm-map"><div class="pl-live" id="pl-live"><p class="note">在打开地图…</p></div><p class="note">地图是高德的，能拖、能缩放。只画停留的地方，虚线只表示先后；认定是哪家、改地点在「停留」里。</p></div></div>`;
+  }
+  return `<p class="ptl-sum">${sum}</p><ol class="ptl" id="ptl">${rows}</ol>`;
+}
+
+/** 地点 · 常去：最近 30 天按地方合计。起过名的（家、公司……，可改名字、地址、种类、范围、删），常去但没起名的（去过 5 次以上，可起名），
+ *  底下「添加一个地方」搜着加。不跟着翻日期，总是最近 30 天 */
+function oftenView(st) {
+  if (!st) return emptyInline("没取到常去的地方。");
+  const md = (d) => (d ? d.slice(5) : "");
+  const meta = (r) => [r.count ? `${r.count} 次` : "最近没来过", r.sec ? `共 ${spanText(r.sec)}` : "", r.last ? `最近 ${md(r.last)}` : ""].filter(Boolean).join(" · ");
+  // 按「城市 › 区县」分组；起过名但最近没去过的（不知道在哪个区）放最后一组
+  const groups = new Map();
+  const put = (k, html, sec) => { if (!groups.has(k)) groups.set(k, { rows: [], sec: 0 }); const g = groups.get(k); g.rows.push(html); g.sec += sec; };
+  for (const r of st.named) {
+    const k = r.city || r.district ? [cityShort(r.city), r.district].filter(Boolean).join(" › ") : "最近没去过";
+    put(k, `<li class="pf-row"><span class="pf-k">${esc(PL_ICON[r.type] || "其他")}</span>
+      <span class="pf-b"><span class="pf-n">${esc(r.name)}${r.address ? `<span class="pf-a"> · ${esc(r.address)}</span>` : ""}</span><span class="pf-m">${esc(meta(r))} · 范围 ${Math.round(r.r || 150)} 米</span></span>
+      <button class="mx-btn mx-btn--text mx-btn--sm" data-pl="${r.index}">改</button></li>`, r.sec || 0);
+  }
+  st.frequent.forEach((r, i) => put([cityShort(r.city), r.district].filter(Boolean).join(" › ") || "其他", `<li class="pf-row"><span class="pf-k often">常去</span>
+      <span class="pf-b"><span class="pf-n">${esc(r.name)}</span><span class="pf-m">${esc(meta(r))} · 还没起名</span></span>
+      <button class="mx-btn mx-btn--text mx-btn--sm" data-name-it="${i}">起名</button></li>`, r.sec || 0));
+  const order = [...groups].sort((a, b) => (a[0] === "最近没去过") - (b[0] === "最近没去过") || b[1].sec - a[1].sec);
+  return `<p class="ptl-sum">最近 ${st.days} 天 · 起过名的 ${st.named.length} 个 · 常去没起名的 ${st.frequent.length} 个</p>
+    ${order.map(([k, g]) => section(k, `<ol class="pf-list">${g.rows.join("")}</ol>`)).join("") || emptyInline("还没有常去的地方")}
+    <p class="note">按城市 › 区分组。没起名的列最近 ${st.days} 天去过 5 次以上的区域。</p>
+    <div class="inline" style="margin-top:var(--space-4)"><button class="mx-btn mx-btn--secondary" id="pl-add">添加一个地方</button></div>`;
+}
+
+function bindOften() {
+  $app.querySelectorAll(".pf-list [data-pl]").forEach((b) => (b.onclick = () => labelDialog(+b.dataset.pl)));
+  $app.querySelectorAll("[data-name-it]").forEach((b) => (b.onclick = () => {
+    const r = PL.stats.frequent[+b.dataset.nameIt];
+    placeDialog({ lat: r.lat, lon: r.lon, name: `${r.district || ""} · ${r.name}`, label: null, type: "other" });
+  }));
+  const add = document.getElementById("pl-add");
+  if (add) add.onclick = addPlaceDialog;
+}
+
+/** 全面页的「去了哪」：按地点合计的条形图（加上路上、没记到），明细在地点页 */
+function placeTotals(visits, date) {
+  if (!visits.length) return "";
   const tot = new Map();
   let go = 0, none = 0;
-  for (const b of blocks) {
+  for (const b of placeBlocks(visits, date)) {
     const sec = (b.z - b.a) / 1000;
     if (b.kind === "go") go += sec;
     else if (b.kind === "none") none += sec;
-    else tot.set(placeName(b.v), (tot.get(placeName(b.v)) || 0) + sec);
+    else { const n = b.v.label || placeName(b.v).split(" · ")[0]; tot.set(n, (tot.get(n) || 0) + sec); }
   }
   const rows = [...tot].sort((a, b) => b[1] - a[1]).map(([n, sec]) => ({ n, sec, c: "pl" }));
   if (go) rows.push({ n: "路上", sec: go, c: "go" });
@@ -327,9 +484,100 @@ function placesSection(visits, date) {
   const max = Math.max(...rows.map((r) => r.sec), 1), all = rows.reduce((a, r) => a + r.sec, 0) || 1;
   const pct = (sec) => { const p = (sec / all) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
   const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-chev"></span><span class="bar-name${r.c === "pl" ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
-  const list = `<div class="visits">${visits.map((v, i) => `<button class="v-row" data-visit="${i}"><span class="t">${visitSpan(v)}</span><span class="n">${esc(placeName(v))}${v.label ? "" : `<span class="sub">${esc(["没起名", ...(v.name || "").split(" · ").slice(0, -1)].join(" · "))}</span>`}</span><span class="d">${spanText((visitEnd(v) - Date.parse(v.start)) / 1000)}</span><span class="act">${v.label ? "改名" : "起名"}</span></button>`).join("")}</div>`;
-  return section("去了哪", bars + list + `<p class="note">iPhone 和手表记下的停留点，路上不记。路上＝两个停留点之间不超过 3 小时的空档；没记到＝更长的空档和一天的首尾。点一行给这个地方起名，以后附近 150 米内的停留都用这个名字。</p>`, { count: visits.length });
+  return section("去了哪", bars, { aside: `<button class="mx-btn mx-btn--text" id="to-places">看地点${ICON.chevR}</button>` });
 }
+
+/** 时间线上的一段停留 */
+function stayItem(v, i, convs) {
+  const dur = spanText((visitEnd(v) - Date.parse(v.start)) / 1000);
+  const meta = [visitSpan(v), dur];
+  if (!v.label && v.doing && v.doing.p >= 0.5 && !["picked", "phone"].includes(v.confirmed)) meta.push(v.doing.kind);
+  // 自动写上的也标把握（第一名的）
+  const topP = (v.guesses || [])[0] ? ` ${pctText(v.guesses[0].p)}` : "";
+  if (v.confirmed === "auto") meta.push(`自动认出${topP}`);
+  if (v.confirmed === "remembered") meta.push(`按上次认定${topP}`);
+  const ok = v.confirmed === "picked" || v.confirmed === "phone";
+  const pct = (g) => `${shopShort(g.name)}：把握 ${pctText(g.p)}，离记到的位置 ${Math.round(g.distance)} 米`;
+  // 还没认定：名字后面淡色写最可能的一家和把握
+  const top = !v.label && !v.confirmed && (v.guesses || [])[0];
+  const likely = top ? `<span class="ptl-likely">· 可能是 ${esc(shopShort(top.name))} <span class="p">${pctText(top.p)}</span></span>` : "";
+  // 候选：一段停留可以认定好几家（商场里逛了几家），点一下加上（打 ✓），再点取消。认定过的排前面，再补最像的凑满 3 个；
+  // 一家没认定时问「是哪家？」，认定过的问「还去了？」。在手机上认定的不在这里列（改在 ⋯ 里）
+  const shops = v.confirmed === "picked" ? (v.shops || []) : [];
+  const chips = [...shops.map((n) => (v.guesses || []).find((g) => g.name === n) || { name: n }), ...(v.guesses || []).filter((g) => !shops.includes(g.name))].slice(0, Math.max(3, shops.length + 1));
+  const guess = !v.label && v.confirmed !== "phone" && chips.length
+    ? `<div class="ptl-guess">${shops.length ? "还去了？" : "是哪家？"}${chips.map((g) => { const on = shops.includes(g.name); return `<button class="${on ? "on" : ""}" data-chip="${i}" data-shop="${esc(g.name)}" aria-pressed="${on}" title="${esc(on ? `${shopShort(g.name)}：认定过，再点取消` : g.p != null ? pct(g) : shopShort(g.name))}">${on ? ICON.check : ""}${esc(shopShort(g.name))}${g.p != null ? `<span class="p">${pctText(g.p)}</span>` : ""}</button>`; }).join("")}<button class="other" data-edit="${i}">其他…</button></div>` : "";
+  const talk = convs.length ? `<details class="ptl-talk"><summary>说话 ${convs.length} 段 · ${talkText(convs.reduce((a, c) => a + (c.talk || []).reduce((x, t) => x + t.sec, 0), 0))}</summary><div class="tl">${convs.map((c) => convRow(c, "", `<span class="t">${hm(c.start)}</span>`)).join("")}</div></details>` : "";
+  return `<li class="ptl-stay${v.end ? "" : " now"}" data-sel="${i}"><span class="ptl-t mono">${v.arrive_known === false && v.arrive ? "昨天" : hm(v.start)}</span><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>
+    <div class="ptl-b"><div class="ptl-name"><span title="${esc(chainOf(v))}">${esc(placeName(v))}</span>${likely}${badgeHtml(v)}${ok ? `<span class="ok" title="${v.confirmed === "phone" ? "在手机上认定的" : "你认定的"}">${ICON.check}</span>` : ""}</div>
+      <div class="ptl-meta">${esc(meta.join(" · "))}</div>${guess}${talk}</div>
+    <div class="ptl-act"><button class="mx-iconbtn" data-edit="${i}" aria-label="改地点" title="改地点">${ICON.more}</button></div></li>`;
+}
+
+/** 点候选：加上这家（打 ✓）；已认定的再点＝取消这家 */
+async function pickChip(visits, i, name) {
+  const v = visits[i];
+  if (!v || !name) return;
+  const g = (v.guesses || []).find((x) => x.name === name) || {};
+  await call("set_place_pick", { id: v.id, shop: name, kind: g.type || null, lat: v.lat, lon: v.lon });
+  renderToday();
+}
+
+/** 改地点（挂在那一行下面的小弹窗）：搜索框在最上面；下面是认定的、最像的几家（电脑算的，按把握排）和高德附近 150 米的地点（按距离），
+ *  点一个就加上（再点认定过的＝取消这家）；搜不到的直接输入店名；最下面给这里起名、认定过的能退回只写区域 */
+function placeEditor(v, anchor) {
+  closeEditor();
+  const box = document.createElement("div");
+  box.className = "mx-menu ptl-edit"; box.setAttribute("role", "menu");
+  const cands = new Map();
+  // 认定过的打 ✓，点一下取消；没认定的点一下加上（一段停留可以认定好几家）
+  const shops = v.confirmed === "picked" ? (v.shops || []) : [];
+  const row = (p, key, right) => { cands.set(key, p); const on = shops.includes(p.name); return `<button role="menuitemcheckbox" aria-checked="${on}" class="${on ? "on" : ""}" data-pk="${esc(key)}"><span class="pk-n">${esc(shopShort(p.name))}<span class="pk-t">${esc(((p.type || "").split(";")[1]) || (p.type || "").split(";")[0] || "")}</span></span>${on ? `<span class="mx-check">${ICON.check}</span>` : `<span class="mx-menu-val">${right}</span>`}</button>`; };
+  const extra = shops.filter((n) => !(v.guesses || []).some((g) => g.name === n)).map((n, j) => row({ name: n }, "x" + j, "")).join("");
+  const guesses = (v.guesses || []).map((g, j) => row(g, "g" + j, `${Math.round(g.distance)} 米`)).join("");
+  box.innerHTML = `${chainOf(v) ? `<div class="pe-chain">${esc(chainOf(v))}</div>` : ""}<input class="mx-input" id="pe-q" placeholder="搜店名，或直接输入" autocomplete="off">
+    <div id="pe-found"></div>
+    ${extra ? `<div class="mx-menu-group">认定的</div>${extra}` : ""}
+    ${guesses ? `<div class="mx-menu-group">最像的</div>${guesses}` : ""}
+    <div class="mx-menu-group">附近</div><div id="pe-near"><p class="note pe-wait">在问高德…</p></div>
+    <hr><button role="menuitem" data-pe="label">${v.label ? "改这里的名字…" : "给这里起名…"}</button>
+    ${shops.length ? `<button role="menuitem" data-pe="clear">${shops.length > 1 ? `都不确定，${shops.length} 家全撤销` : "不确定，退回只写区域"}</button>` : ""}`;
+  anchor.appendChild(box);
+  EDITOR = box;
+  const choose = async (key) => {
+    const c = key.startsWith("t:") ? { name: key.slice(2) } : cands.get(key);
+    if (!c) return;
+    await call("set_place_pick", { id: v.id, shop: c.name, kind: c.type || null, lat: c.lat ?? v.lat, lon: c.lon ?? v.lon });
+    closeEditor(); renderToday();
+  };
+  box.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const b = e.target.closest("[data-pk]"); if (b) return choose(b.dataset.pk);
+    const a = e.target.closest("[data-pe]"); if (!a) return;
+    if (a.dataset.pe === "label") { closeEditor(); placeDialog(v); }
+    if (a.dataset.pe === "clear") { await call("clear_place_pick", { id: v.id }); closeEditor(); renderToday(); }
+  });
+  const q = box.querySelector("#pe-q"); q.focus();
+  let timer = null;
+  q.oninput = () => {
+    clearTimeout(timer);
+    const t = q.value.trim(), out = box.querySelector("#pe-found");
+    if (!t) { out.innerHTML = ""; return; }
+    timer = setTimeout(async () => {
+      const found = await call("amap_search", { text: t, lat: v.lat, lon: v.lon }).catch(() => []);
+      if (q.value.trim() !== t) return;
+      out.innerHTML = found.filter((p) => (p.distance || 0) <= 500).slice(0, 4).map((p) => row(p, "s:" + p.id, `${Math.round(p.distance || 0)} 米`)).join("")
+        + `<button role="menuitem" data-pk="t:${esc(t)}">就叫「${esc(t)}」</button><hr>`;
+    }, 350);
+  };
+  q.onkeydown = (e) => { if (e.key === "Escape") closeEditor(); if (e.key === "Enter" && !e.isComposing && q.value.trim()) choose("t:" + q.value.trim()); };
+  call("amap_around", { lat: v.lat, lon: v.lon, radius: 150 })
+    .then((near) => { const el = box.querySelector("#pe-near"); if (el) el.innerHTML = near.filter((p) => !(v.guesses || []).some((g) => g.name === p.name)).slice(0, 6).map((p) => row(p, "n:" + p.id, `${Math.round(p.distance || 0)} 米`)).join("") || `<p class="note pe-wait">附近 150 米没有地点。</p>`; })
+    .catch((x) => { const el = box.querySelector("#pe-near"); if (el) el.innerHTML = `<p class="note pe-wait">${esc(String(x))}</p>`; });
+}
+let EDITOR = null;
+function closeEditor() { if (EDITOR) { EDITOR.remove(); EDITOR = null; } }
+document.addEventListener("click", (e) => { if (EDITOR && !EDITOR.contains(e.target) && !e.target.closest("[data-edit]")) closeEditor(); });
 
 /** 给一个地方起名（小弹层）：名字＋种类，存进本机的地点名单；清空＝删掉这个名字 */
 function placeDialog(v) {
@@ -337,7 +585,7 @@ function placeDialog(v) {
   let kind = v.type || "other";
   openDialog({
     title: v.label ? `改「${v.label}」的名字` : `给「${placeName(v)}」起名`, ok: "保存",
-    body: dlgField("pl-name", "名字", { value: v.label || "", ph: "比如 家、公司、健身房", help: v.label ? "清空就删掉这个名字，改回显示地名。" : `地图上查到的地名是「${esc(v.name || "没有")}」。` })
+    body: dlgField("pl-name", "名字", { value: v.label || "", ph: "比如 家、公司、健身房", help: v.label ? "清空就删掉这个名字" : `地图上查到的地名是「${esc(v.name || "没有")}」。` })
       + `<div class="mx-field"><label>种类</label><div class="mx-seg" role="tablist" id="pl-kind">${TYPES.map(([k, t]) => `<button role="tab" aria-selected="${k === kind}" class="${k === kind ? "is-on" : ""}" data-v="${k}">${t}</button>`).join("")}</div></div>`,
     onOpen: (el) => {
       el.querySelector("#pl-name").maxLength = 20;
@@ -366,8 +614,8 @@ function actogram(rows, cur) {
     html += `<span class="late">${late > 10 ? late + "m" : ""}</span>`;
   }
   const axis = Array.from({ length: 8 }, (_, i) => `<span style="grid-column:${2 + i * 3}">${i * 3}</span>`).join("");
-  return `<div role="img" aria-label="最近 ${rows.length} 天的作息图：每天一行，上条电脑，下条手机"><div class="acto">${html}</div><div class="acto-axis" aria-hidden="true">${axis}</div></div>
-    <div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span><span><i style="background:var(--rec-night)"></i>夜间有活动（21:00 后、0–5 点），行末是这一晚（21:00 到次日 5 点）的分钟数</span></div>`;
+  return `<div role="img" aria-label="最近 ${rows.length} 天作息图"><div class="acto">${html}</div><div class="acto-axis" aria-hidden="true">${axis}</div></div>
+    <div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span><span><i style="background:var(--rec-night)"></i>熬夜分钟（21:00–5:00）</span></div>`;
 }
 
 // ---------- 状态 ----------
@@ -385,7 +633,8 @@ function renderSide() {
   // 侧栏只放导航；记录状态在「设备」页，这里只在缺权限、暂停、没在记录时给「设备」挂一个点
   const st = S.status || {};
   const perm = st.permissions || {};
-  const bad = st.paused || !perm.accessibility || !perm.input_monitoring || !st.capturing;
+  // 手机版不采集，没有权限、暂停这些
+  const bad = !st.mobile && (st.paused || !perm.accessibility || !perm.input_monitoring || !st.capturing);
   const dot = document.getElementById("dev-dot");
   if (dot) { dot.hidden = !bad; dot.title = st.paused ? "已暂停" : "没在记录或缺权限"; }
   const pf = S.profile || { name: "我" };
@@ -395,7 +644,7 @@ function renderSide() {
   if (nm) nm.textContent = pf.name || "我";
   const sub = document.getElementById("me-sub");
   // 正常记录时不写；暂停、缺权限、没在记录才提示
-  if (sub) sub.textContent = st.paused ? " · 已暂停" : !perm.accessibility || !perm.input_monitoring ? " · 缺权限" : st.capturing ? "" : " · 没在记录";
+  if (sub) sub.textContent = st.mobile ? "" : st.paused ? " · 已暂停" : !perm.accessibility || !perm.input_monitoring ? " · 缺权限" : st.capturing ? "" : " · 没在记录";
   renderMeMenu();
 }
 
@@ -439,7 +688,7 @@ function aboutSection() {
   const u = S.update || {}, st = S.status || {};
   const state = u.checking ? "正在检查…" : u.updatable ? u.updatable : u.error ? u.error
     : u.newer ? (u.ready ? `${u.latest} 已经下好，重启就能用。` : `正在下载 ${u.latest}…`)
-    : u.checked ? `已是最新版本（${mdhm(u.checked)} 检查过）` : "每 6 小时自动检查一次。";
+    : u.checked ? `已是最新版本（${mdhm(u.checked)} 检查过）` : "会自动检查更新";
   const btn = u.newer && u.ready && !u.updatable ? `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-go">重启更新</button>` : `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="up-check" ${u.checking ? "disabled" : ""}>检查更新</button>`;
   return section("关于", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">版本 ${esc(u.current || st.version || "")}</div><div class="mx-setting-desc">${esc(state)}</div>${u.newer && u.notes ? `<div class="mx-setting-desc">${esc(u.notes)}</div>` : ""}</div>${TAURI ? btn : ""}</div>`);
 }
@@ -475,7 +724,9 @@ function toggleMe(open) {
   btn.setAttribute("aria-expanded", String(!menu.hidden));
 }
 
-document.getElementById("me").onclick = (e) => { e.stopPropagation(); toggleMe(); };
+/** 手机（窄屏、iPhone 版）：左下角菜单变成底部页签里的「我」，点了直接进设置 */
+const NARROW = window.matchMedia("(max-width: 760px)");
+document.getElementById("me").onclick = (e) => { e.stopPropagation(); if (NARROW.matches) { location.hash = "#/settings"; return; } toggleMe(); };
 document.getElementById("me-menu").onclick = async (e) => {
   const b = e.target.closest("[data-me]"); if (!b) return;
   toggleMe(false);
@@ -499,13 +750,32 @@ function markNav(page) {
 
 // ---------- 今天 ----------
 
+/** 「今天」页页签那一行右边的翻日期：一个整体「‹ 日期 ▾ ›」（点日期展开，只列有数据的日子，同总结页）；
+ *  看以前的日子时左边多一个「今天」，同样高度 */
+function dayPicker(date, past) {
+  const now = localDay();
+  const dates = [...new Set([now, ...S.days.map((x) => x.date)])].sort().reverse();
+  const i = dates.indexOf(date), prev = dates[i + 1], next = i > 0 ? dates[i - 1] : null;
+  return `${past ? `<button class="mx-btn mx-btn--secondary dn-today" data-day="${now}">今天</button>` : ""}
+    <div class="daynav pick">
+      <button class="dn-step" aria-label="前一天" title="前一天" ${prev ? `data-day="${prev}"` : "disabled"}>${ICON.chevL}</button>
+      <button class="dn-date mono" id="day-pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
+      <button class="dn-step" aria-label="后一天" title="后一天" ${next ? `data-day="${next}"` : "disabled"}>${ICON.chevR}</button>
+      <div class="mx-menu" role="menu" hidden>${dates.map((x) => `<button role="menuitemradio" aria-checked="${x === date}" data-day="${x}">${x === now ? "今天" : short(x)}${x === date ? `<span class="mx-check">${ICON.check}</span>` : ""}</button>`).join("")}</div></div>`;
+}
+const goDay = (x) => { location.hash = x && x !== localDay() ? `#/today/${x}` : "#/today"; };
+
+/** 「今天」页看的是哪一天：null＝今天；地址 #/today/YYYY-MM-DD 看以前的日子（概览、时间线、分类切来切去都停在这天） */
+const TD = { date: null };
+const isPastDay = () => TD.date && TD.date !== localDay();
+
 async function renderToday() {
-  const today = localDay();
-  // 今天总有实时数据（电脑来自自采事件，手机来自 iPhone 同步），不再等每晚的数据包
+  const today = isPastDay() ? TD.date : localDay(), past = today !== localDay();
+  // 今天总有实时数据（电脑来自自采事件，手机来自 iPhone 同步），不再等每晚的数据包；以前的日子按日期取
   const d = (await call("get_day", { date: today })) || { date: today };
   const pack = d.pack || {}, c = d.live || pack.computer || {}, ph = d.phone;
   const fda = ((S.status || {}).permissions || {}).full_disk_access;
-  const phoneCap = ph ? `同步至 ${mdhm(ph.synced_until)}` : fda === false ? "未授权完全磁盘访问" : "取不到";
+  const phoneCap = ph ? (past ? (ph.pickups != null ? `拿起 ${ph.pickups} 次` : "") : `同步至 ${ymdhm(ph.synced_until)}`) : fda === false ? "未授权完全磁盘访问" : "取不到";
   const hc = hourMinutes(c.active_hours || {});
   const hp = hourMinutes(ph ? ph.hours : (pack.phone || {}).hours);
   const sp = d.speech, visits = (d.places && d.places.visits) || [];
@@ -517,30 +787,55 @@ async function renderToday() {
   const tab = TL.tab in counts ? TL.tab : "all";
   const shown = items.filter((x) => tab === "all" || x.dev === tab);
   // 照 Claude：标题下一行，左边「概览｜时间线」纯文字页签；时间线后面接「全部／电脑／手机」切换块；右边放同步时刻
-  const view = TL.view === "timeline" ? "timeline" : "overview";
+  // 三个页签：全面（面：这一天的汇总看板）、时间线（线：按小时）、地点（点：按停留，去了哪、认定是哪家）
+  const view = TL.view === "timeline" ? "timeline" : ["places", "map"].includes(TL.view) ? "places" : "overview";
+  const pview = ["map", "often"].includes(TL.pview) ? TL.pview : "stays";
+  const pseg = `<div class="mx-seg" role="tablist" id="pl-tabs">${[["stays", "停留"], ["map", "地图"], ["often", "常去"]].map(([k, v]) =>
+    `<button role="tab" aria-selected="${k === pview}" class="${k === pview ? "is-on" : ""}" data-pv="${k}">${v}</button>`).join("")}</div>`;
   const seg = `<div class="mx-seg" role="tablist" id="tl-tabs">${[["all", "全部"], ["computer", "电脑"], ["phone", "手机"], ["watch", "手表"]].filter(([k]) => k in counts).map(([k, v]) =>
     `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "is-on" : ""}" data-tab="${k}">${v}<span class="n">${counts[k]}</span></button>`).join("")}</div>`;
-  const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", "概览"], ["timeline", "时间线"]].map(([k, v]) =>
+  const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", "全面"], ["timeline", "时间线"], ["places", "地点"]].map(([k, v]) =>
       `<button role="tab" aria-selected="${k === view}" class="${k === view ? "is-on" : ""}" data-view="${k}">${v}</button>`).join("")}</div>
-      ${view === "timeline" ? `<span class="tb-sep"></span>${seg}` : ""}</div>
-    <div class="toolbar-right">${ph ? `<span class="note">手机同步到 ${hm(ph.synced_until)}</span>` : ""}</div></div>`;
+      ${view === "timeline" ? `<span class="tb-sep"></span>${seg}` : ""}${view === "places" ? `<span class="tb-sep"></span>${pseg}` : ""}</div>
+    <div class="toolbar-right">${ph && !past ? `<span class="note tb-note">同步至 ${ymdhm(ph.synced_until)}</span>` : ""}${view === "places" && pview === "often" ? "" : dayPicker(today, past)}</div></div>`;
   const overview = `<div class="readouts">
         ${readout("在电脑前", hh(c.active_sec), "h", c.first ? `${c.first}–${c.last}` : "还没有记录")}
         ${readout("手机", ph || fda !== false ? hh(ph ? ph.total_sec : (pack.phone || {}).total_sec) : "—", "h", phoneCap)}
-        ${sp ? readout("说话", sp.talk_sec < 3600 ? mins(sp.talk_sec) : hh(sp.talk_sec), sp.talk_sec < 3600 ? "分钟" : "h", sp.first ? `录音 ${hm(sp.first)}–${hm(sp.last)}` : "今天还没有录音") : ""}
+        ${sp ? readout("说话", sp.talk_sec < 3600 ? mins(sp.talk_sec) : hh(sp.talk_sec), sp.talk_sec < 3600 ? "分钟" : "h", sp.first ? `录音 ${hm(sp.first)}–${hm(sp.last)}` : past ? "这一天没有录音" : "今天还没有录音") : ""}
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
+        ${visits.length ? readout("去了", new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size, "处", `${visits.length} 段停留`) : ""}
       </div>
       <div style="margin-top:var(--space-6)">`
-    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span><span><i class="line"></i>路上</span>` : ""}<span>点某个小时，到时间线里看那一小时</span></div>`)
-    + placesSection(visits, today)
+    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span><span><i class="line"></i>路上</span>` : ""}</div>`)
+    + placeTotals(visits, today)
     + workSection(d.work) + `</div>`;
+  if (view === "places" && (pview === "often" || !PL.stats || Date.now() - (PL.at || 0) > 600e3)) {
+    [PL.stats, PL.labels] = await Promise.all([call("place_stats", { days: 30 }).catch(() => null), call("list_place_labels").catch(() => [])]);
+    PL.at = Date.now();
+  }
+  const placesView = pview === "often" ? oftenView(PL.stats) : visits.length ? placesSection(visits, today, sp && sp.conversations, pview)
+    : emptyInline(past ? "这一天没有停留点" : "今天还没有停留点");
   const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : tab === "phone" && visits.length ? phoneByPlace(shown, visits, today) : shown.map(tlRow).join("")}</div>`
-    : emptyInline(tab === "phone" ? "今天还没有手机记录。iPhone 的屏幕使用经 iCloud 同步过来，通常晚几个小时。"
-      : tab === "watch" ? "今天还没有对话。手表录的音传到录音服务器、转写好以后，这里每 10 分钟拉一次，通常晚 20 分钟左右。"
-      : "今天还没有记录。10 分钟摘要每个整 10 分过后 1 分钟写好。");
+    : past ? emptyInline(tab === "phone" ? "这一天没有手机记录" : tab === "watch" ? "这一天没有对话" : "这一天没有记录")
+    : tab === "phone" ? `<p class="mx-empty-inline">手机记录还没同步过来 · ${howto("screentime", "怎么设置")}</p>`
+    : emptyInline(tab === "watch" ? "今天还没有对话" : "今天还没有记录");
 
-  $app.innerHTML = header("今天", `<span class="note mono">${short(today)}</span>`) + toolbar
-    + `<div class="reading">${view === "timeline" ? timeline : overview}</div>`;
+  // 照 Claude 自定义页：标题单独一行；页签和右边的控件（同步时刻、翻日期）同一行
+  $app.innerHTML = header(past ? short(today) : "今天") + toolbar
+    + `<div class="reading">${view === "timeline" ? timeline : view === "places" ? placesView : overview}</div>`;
+  // 地图视图铺满窗口（不受阅读宽度限制）
+  $app.classList.toggle("wide", view === "places" && pview === "map");
+  if (view === "places" && pview === "map" && visits.length) drawLiveMap(visits, today, PL_SEL.date === today ? PL_SEL.i : null);
+  bindOften();
+  const plTabs = document.getElementById("pl-tabs");
+  if (plTabs) plTabs.onclick = (e) => {
+    const b = e.target.closest("[data-pv]"); if (!b) return;
+    TL.pview = b.dataset.pv;
+    try { localStorage.setItem("place-view", TL.pview); } catch (err) {}
+    renderToday();
+  };
+  const toPlaces = document.getElementById("to-places");
+  if (toPlaces) toPlaces.onclick = () => { TL.view = "places"; try { localStorage.setItem("today-view", "places"); } catch (e) {} renderToday(); window.scrollTo(0, 0); };
 
   document.getElementById("view-tabs").onclick = (e) => {
     const b = e.target.closest("[data-view]"); if (!b) return;
@@ -556,7 +851,20 @@ async function renderToday() {
     renderToday();
   };
   layoutPlaceNames($app);
-  $app.querySelectorAll("[data-visit]").forEach((b) => (b.onclick = () => placeDialog(visits[+b.dataset.visit])));
+  bindPick(document.getElementById("day-pick"));
+  $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => goDay(b.dataset.day)));
+  $app.querySelectorAll("[data-chip]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); pickChip(visits, +b.dataset.chip, b.dataset.shop); }));
+  $app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const li = b.closest("li"); EDITOR && EDITOR.parentNode === li ? closeEditor() : placeEditor(visits[+b.dataset.edit], li); }));
+  // 点一段停留：地图上那个点变成强调色，这一行高亮；再点取消
+  $app.querySelectorAll("[data-sel]").forEach((li) => (li.onclick = (e) => {
+    if (!li.classList.contains("pm-row") && e.target.closest("button, summary, details .tl, .ptl-edit")) return;
+    if (!document.getElementById("pl-map") && !document.getElementById("pl-live")) return;
+    const i = +li.dataset.sel, same = PL_SEL.date === today && PL_SEL.i === i;
+    PL_SEL = same ? { date: null, i: null } : { date: today, i };
+    $app.querySelectorAll("[data-sel]").forEach((x) => x.classList.toggle("is-sel", !same && +x.dataset.sel === i));
+    LM.map ? liveSelect(same ? null : i, true) : drawPlaceMap(visits, same ? null : i);
+  }));
+  if (pview === "map" && PL_SEL.date === today && PL_SEL.i != null) { const li = $app.querySelector(`[data-sel="${PL_SEL.i}"]`); if (li) li.classList.add("is-sel"); }
   // 点一天的形状里的某个小时：切到时间线，滚到那个小时
   $app.querySelectorAll(".strip [data-h]").forEach((cell) => (cell.onclick = () => {
     TL.view = "timeline"; TL.jump = +cell.dataset.h;
@@ -595,8 +903,7 @@ function workSection(w) {
         <div class="bar-kids"${open ? "" : " hidden"}>${kids.map((c) => `<div class="bar-row kid"><span class="bar-chev"></span>${cells(c)}</div>`).join("")}</div></div>`;
     }).join("")}</div>`;
   };
-  return section("时间花在哪", `<div class="work"><div><h4>为了什么（领域 · 项目）</h4>${tree("domains", w.domains || [])}</div><div><h4>在做什么（类型）</h4>${tree("activities", w.activities || [])}</div></div>
-    <p class="note">按每 10 分钟摘要判断的领域、项目和类型，乘以那段在电脑前的时间累计；手机不算在内。点一级展开看明细。</p>`);
+  return section("时间花在哪", `<div class="work"><div><h4>为了什么（领域 · 项目）</h4>${tree("domains", w.domains || [])}</div><div><h4>在做什么（类型）</h4>${tree("activities", w.activities || [])}</div></div>`);
 }
 
 // 展开／收起一级：直接改这一块，不重画整页
@@ -611,7 +918,7 @@ document.addEventListener("click", (e) => {
 
 // ---------- 时间线：电脑的 10 分钟摘要和手机的每次拿起，按设备分页签，新的在上 ----------
 
-/** 「全部」页签按小时：每小时一行（小时摘要＋项目＋手机用了多久），点开看这一小时的 10 分钟明细和每次拿起；
+/** 「全部」页签按小时：每小时一行（小时摘要＋项目＋电脑和手机用过的 app 图标＋手机用了多久），点开看这一小时的 10 分钟明细和每次拿起；
  *  连着的「不在电脑前、也没碰手机」的小时合成一行灰字 */
 function hourRows(d, items) {
   const hourOf = (iso) => { const t = new Date(iso); t.setMinutes(0, 0, 0); return t.getTime(); };
@@ -668,9 +975,15 @@ function hourRows(d, items) {
     for (const x of wt) for (const t of x.conv.talk) talkWho[t.speaker] = (talkWho[t.speaker] || 0) + t.sec;
     const who = speakers(Object.entries(talkWho).map(([speaker, sec]) => ({ speaker, sec })), SELF);
     const inner = xs.sort((a, b) => (a.start < b.start ? 1 : -1)).map(tlRow).join("");
+    // 这一小时电脑、手机用过的 app 图标（按时间先后，各最多 10 个）
+    const cApps = [...new Set([...comp].reverse().flatMap((x) => x.seg.apps || []))];
+    const pNames = Object.fromEntries(ph.flatMap((x) => x.ses.apps.map((a) => [a.bundle_id, a.name])));
+    const pApps = [...new Set([...ph].reverse().flatMap((x) => x.ses.apps.map((a) => a.bundle_id)))];
+    const cIco = icons(cApps, false), pIco = icons(pApps, true, pNames);
+    const appsLine = cIco || pIco ? `<div class="hour-apps">${cIco ? `<span class="lbl">电脑</span>${cIco}` : ""}${pIco ? `<span class="lbl">手机</span>${pIco}` : ""}</div>` : "";
     out.push(`<details class="tl-row hour" data-h="${new Date(k).getHours()}"><summary><span class="t">${hm(new Date(k).toISOString())}–${hm(new Date(k + 3600e3).toISOString())}${where ? `<div class="where" title="${esc(where)}">${esc(where)}</div>` : ""}</span><span>
         <span class="name${title === "不在电脑前" ? " dim" : ""}">${esc(title)}</span>${desc ? `<div class="desc">${esc(desc)}</div>` : ""}
-        ${chips ? `<div class="chips">${chips}</div>` : ""}${phSec ? `<div class="ph-line">手机 ${minText(phSec)}${topPh ? ` · ${esc(topPh)}` : ""}</div>` : ""}${wt.length ? `<div class="ph-line">对话 ${talkText(talkSec)} · ${esc(who.slice(0, 3).join("、"))}${who.length > 3 ? ` 等 ${who.length} 人` : ""}</div>` : ""}</span>
+        ${chips ? `<div class="chips">${chips}</div>` : ""}${appsLine}${phSec ? `<div class="ph-line">手机 ${minText(phSec)}${topPh ? ` · ${esc(topPh)}` : ""}</div>` : ""}${wt.length ? `<div class="ph-line">对话 ${talkText(talkSec)} · ${esc(who.slice(0, 3).join("、"))}${who.length > 3 ? ` 等 ${who.length} 人` : ""}</div>` : ""}</span>
         ${inner ? `<span class="chev">${ICON.chevR}</span>` : "<span></span>"}</summary>${inner ? `<div class="hour-in">${inner}</div>` : ""}</details>`);
   }
   flushIdle();
@@ -678,9 +991,121 @@ function hourRows(d, items) {
 }
 
 
+/** 地点 · 地图：高德 JS API 2.0（Key 和安全密钥在钥匙串，amap_js_config 给页面）。停留点按先后编号、虚线连起来，
+ *  常去的点深一点、新地方浅一点，选中的强调色；点点和点清单互相选中；同一天自动刷新时保留缩放和位置。加载不了退回静态图 */
+const LM = { map: null, day: null, view: null, loading: null, markers: [], visits: [] };
+function loadAmapJs() {
+  if (window.AMap) return Promise.resolve(window.AMap);
+  if (LM.loading) return LM.loading;
+  LM.loading = call("amap_js_config").then((c) => new Promise((ok, fail) => {
+    if (!c || !c.key) return fail(new Error(c && c.error ? c.error : "还没有地图 Key（设置 → 连接 → 地图）"));
+    // 官方：安全密钥留在服务器，地图经中转地址取；自己的：页面里带安全密钥
+    window._AMapSecurityConfig = c.service_host ? { serviceHost: c.service_host } : { securityJsCode: c.code };
+    const sc = document.createElement("script");
+    sc.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(c.key)}&plugin=AMap.Scale,AMap.ToolBar`;
+    sc.onload = () => (window.AMap ? ok(window.AMap) : fail(new Error("地图没加载上")));
+    sc.onerror = () => fail(new Error("连不上高德地图"));
+    document.head.appendChild(sc);
+  })).catch((e) => { LM.loading = null; throw e; });
+  return LM.loading;
+}
+/** WGS-84 → GCJ-02（同电脑和手机的换算） */
+function gcjJs(lat, lon) {
+  if (lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lat, lon];
+  const a = 6378245.0, ee = 0.00669342162296594323, x = lon - 105, y = lat - 35, P = Math.PI;
+  let dLat = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  dLat += (20 * Math.sin(6 * x * P) + 20 * Math.sin(2 * x * P)) * 2 / 3 + (20 * Math.sin(y * P) + 40 * Math.sin(y / 3 * P)) * 2 / 3 + (160 * Math.sin(y / 12 * P) + 320 * Math.sin(y * P / 30)) * 2 / 3;
+  let dLon = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  dLon += (20 * Math.sin(6 * x * P) + 20 * Math.sin(2 * x * P)) * 2 / 3 + (20 * Math.sin(x * P) + 40 * Math.sin(x / 3 * P)) * 2 / 3 + (150 * Math.sin(x / 12 * P) + 300 * Math.sin(x / 30 * P)) * 2 / 3;
+  const rad = lat / 180 * P, m = 1 - ee * Math.sin(rad) ** 2, sq = Math.sqrt(m);
+  return [lat + dLat * 180 / ((a * (1 - ee)) / (m * sq) * P), lon + dLon * 180 / (a / sq * Math.cos(rad) * P)];
+}
+/** 地图点上的小卡片：名字、起止 · 时长、去了哪家（认定的）或最可能的一家和把握 */
+function pinCard(v, i) {
+  const dur = spanText((visitEnd(v) - Date.parse(v.start)) / 1000);
+  const g = (v.guesses || [])[0];
+  let shop = "";
+  if (v.confirmed === "picked" && (v.shops || []).length) shop = `去了 ${v.shops.map(shopShort).join("、")}`;
+  else if (v.confirmed === "auto" || v.confirmed === "remembered") shop = g ? `${v.confirmed === "auto" ? "自动认出" : "按上次认定"} ${shopShort(g.name)} ${pctText(g.p)}` : "";
+  else if (!v.label && !v.confirmed && g) shop = `可能是 ${shopShort(g.name)} ${pctText(g.p)}`;
+  return `<div class="lm-card"><div class="lm-card-n"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>${esc(placeName(v))}${badgeHtml(v)}</div>
+    <div class="lm-card-m">${esc(visitSpan(v))} · ${esc(dur)}</div>${shop ? `<div class="lm-card-s">${esc(shop)}</div>` : ""}</div>`;
+}
+const pinHtml = (v, i, on) => `<div class="lm-pin${badgeOf(v) ? " often" : ""}${on ? " sel" : ""}${v.end ? "" : " now"}" >${MARKS[Math.min(i, MARKS.length - 1)]}</div>`;
+/** 地图跟窗口一样高（减去上面的标题和页签） */
+function fitLive(box) {
+  const h = Math.max(420, window.innerHeight - box.getBoundingClientRect().top - 48);
+  box.style.height = `${h}px`;
+}
+window.addEventListener("resize", () => { const b = document.getElementById("pl-live"); if (b) fitLive(b); });
+async function drawLiveMap(visits, date, sel) {
+  const box = document.getElementById("pl-live"); if (!box) return;
+  fitLive(box);
+  let A;
+  try { A = await loadAmapJs(); }
+  catch (e) { box.outerHTML = `<div class="pl-map-img" id="pl-map"><p class="note">${esc(String(e.message || e))}，先用静态图。</p></div>`; return drawPlaceMap(visits, sel); }
+  if (!document.body.contains(box)) return;
+  const keep = LM.day === date && LM.view;
+  if (LM.map) { try { LM.map.destroy(); } catch (e) {} }
+  box.innerHTML = "";
+  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  const map = new A.Map(box, { zoom: 14, mapStyle: dark ? "amap://styles/dark" : "amap://styles/whitesmoke" });
+  map.addControl(new A.Scale());
+  map.addControl(new A.ToolBar({ position: { top: "12px", right: "12px" } }));
+  const pts = visits.map((v) => { const [la, lo] = gcjJs(v.lat, v.lon); return [lo, la]; });
+  if (pts.length > 1) map.add(new A.Polyline({ path: pts, strokeColor: "#73726C", strokeWeight: 2, strokeOpacity: 0.8, strokeStyle: "dashed", strokeDasharray: [6, 6] }));
+  LM.visits = visits;
+  // 小卡片：悬停时出、移开就收；点过的那个一直开着（再点或点别的才换）
+  const card = new A.InfoWindow({ isCustom: true, anchor: "bottom-center", offset: new A.Pixel(0, -22), autoMove: false });
+  LM.pinned = null;
+  const showCard = (i) => { card.setContent(pinCard(visits[i], i)); card.open(map, pts[i]); };
+  LM.card = card;
+  LM.markers = visits.map((v, i) => {
+    const m = new A.Marker({ position: pts[i], content: pinHtml(v, i, i === sel), offset: new A.Pixel(-13, -13), zIndex: i === sel ? 200 : 100 + i });
+    m.on("mouseover", () => showCard(i));
+    m.on("mouseout", () => { if (LM.pinned == null) card.close(); else if (LM.pinned !== i) showCard(LM.pinned); });
+    m.on("click", () => {
+      LM.pinned = LM.pinned === i ? null : i;
+      if (LM.pinned == null) card.close(); else showCard(i);
+      const same = PL_SEL.i === i; PL_SEL = same ? { date: null, i: null } : { date, i };
+      $app.querySelectorAll("[data-sel]").forEach((x) => x.classList.toggle("is-sel", !same && +x.dataset.sel === i));
+      liveSelect(same ? null : i, false);
+      const row = $app.querySelector(`.pm-row[data-sel="${i}"]`); if (row && !same) row.scrollIntoView({ block: "nearest" });
+    });
+    return m;
+  });
+  map.add(LM.markers);
+  if (keep) map.setZoomAndCenter(LM.view.zoom, LM.view.center, true);
+  else map.setFitView(LM.markers, true, [80, 80, 80, 80]);
+  const save = () => { LM.view = { zoom: map.getZoom(), center: map.getCenter() }; };
+  map.on("moveend", save); map.on("zoomend", save);
+  map.on("click", () => { LM.pinned = null; card.close(); });
+  if (sel != null && pts[sel]) { LM.pinned = sel; showCard(sel); }
+  LM.map = map; LM.day = date;
+}
+/** 选中一段：那个点变强调色压在最上面；从清单点的把地图挪过去（不缩小） */
+function liveSelect(i, pan) {
+  LM.markers.forEach((m, j) => { m.setContent(pinHtml(LM.visits[j], j, j === i)); m.setzIndex(j === i ? 200 : 100 + j); });
+  if (pan && i != null && LM.map) LM.map.setZoomAndCenter(Math.max(LM.map.getZoom(), 15), LM.markers[i].getPosition());
+  if (pan && LM.card && LM.map) { LM.pinned = i; if (i == null) LM.card.close(); else { LM.card.setContent(pinCard(LM.visits[i], i)); LM.card.open(LM.map, LM.markers[i].getPosition()); } }
+}
+
+/** 地图图片缓存：停留点和选中的那段没变就不再问高德（今天页每分钟自动刷新） */
+const MAPCACHE = new Map();
+/** 今天页选中的那段停留（哪天、第几段） */
+let PL_SEL = { date: null, i: null };
+function drawPlaceMap(visits, sel) {
+  const pts = visits.map((v) => [v.lat, v.lon]), key = JSON.stringify([pts, sel, visits.map((v) => !!badgeOf(v))]);
+  const show = (html) => { const box = document.getElementById("pl-map"); if (box) box.innerHTML = html; };
+  if (MAPCACHE.has(key)) return show(MAPCACHE.get(key));
+  call("amap_map", { points: pts, width: 640, height: 600, selected: sel, often: visits.map((v) => !!badgeOf(v)) })
+    .then((src) => { const html = `<img src="${src}" alt="这天的停留点地图">`; MAPCACHE.set(key, html); if (MAPCACHE.size > 40) MAPCACHE.delete(MAPCACHE.keys().next().value); show(html); })
+    .catch((x) => show(`<p class="note">${esc(String(x))}${String(x).includes("Key") ? "（设置 → 地图）" : ""}</p>`));
+}
 const TL = {
   tab: (() => { try { return localStorage.getItem("tl-tab") || "all"; } catch (e) { return "all"; } })(),
   view: (() => { try { return localStorage.getItem("today-view") || "overview"; } catch (e) { return "overview"; } })(),
+  pview: (() => { try { return localStorage.getItem("place-view") || "stays"; } catch (e) { return "stays"; } })(),
   jump: null,
 };
 const localHour = (iso) => +hm(iso).slice(0, 2);
@@ -842,16 +1267,16 @@ async function renderSummary(arg) {
   $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<div class="toolbar-right">${right}</div></div>` + `<div class="reading">
     <div class="readouts">
       ${readout("在电脑前", hh(c.active_sec ?? idx.active_sec), "h", c.first ? `${c.first}–${c.last}` : "取不到")}
-      ${readout("手机", hh(ph ? ph.total_sec : pp.total_sec ?? idx.phone_sec), "h", ph ? `同步至 ${mdhm(ph.synced_until)}` : pp.synced_at ? `同步至 ${pp.synced_at.slice(5)}` : "取不到")}
-      ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "按前台空档推算")}
-      ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00 后到次日 5 点", night > 10)}
+      ${readout("手机", hh(ph ? ph.total_sec : pp.total_sec ?? idx.phone_sec), "h", ph ? `同步至 ${ymdhm(ph.synced_until)}` : pp.synced_at ? `同步至 ${pp.synced_at}` : "取不到")}
+      ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "", false, "按前台空档推算")}
+      ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00–5:00", night > 10)}
     </div>
     ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
     <div style="margin-top:var(--space-6)">
       ${sum ? sum.parts.map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
-            : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">这一天还没有日总结。每天 21:30 会自动写当天的，第二天凌晨再用完整的一天重写一次；也可以现在就生成一份。</p>
+            : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">还没有日总结，21:30 自动生成</p>
                 <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>`)}
-      ${section("最近 14 天", actogram(rows, date), { aside: "点日期翻到那一天" })}
+      ${section("最近 14 天", actogram(rows, date))}
     </div></div>`;
 
   const gen = document.getElementById("gen-daily");
@@ -953,11 +1378,11 @@ async function renderRules() {
         <div class="acts"><button class="mx-btn mx-btn--text mx-btn--sm" data-act="edit">改</button><button class="mx-btn mx-btn--text mx-btn--sm" data-act="delete">删除</button></div>
         <button class="mx-switch" role="switch" aria-checked="${r.enabled !== false}" aria-label="对照这条" title="${r.enabled !== false ? "日总结对照这条" : "暂不对照"}" data-act="toggle"></button>
       </div>
-      ${RS.deleting === r.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条规矩？</b><span>删除后日总结不再对照它，删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
+      ${RS.deleting === r.id ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除这条规矩？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-act="keep">取消</button><button class="mx-btn mx-btn--danger" data-act="remove">删除这条</button></div>` : ""}
     </div>`;
   $app.innerHTML = header("规矩", `<button class="mx-btn mx-btn--primary" id="add">加一条规矩</button>`)
     + `<div class="reading" id="rules">
-      ${rules.length ? rules.map(row).join("") : emptyInline("用自己的话写下想守的规矩，比如「21:00 以后不开电脑」「手机每天不超过 3 小时」「抖音每天不超过 30 分钟」。这三类会用今天的数据当场对照，别的写法交给日总结逐条对照。")}
+      ${rules.length ? rules.map(row).join("") : emptyInline("用自己的话写一条规矩，比如「21:00 以后不开电脑」")}
     </div>`;
   const save = async () => { await call("save_rules", { rules: S.rules }); renderRules(); };
   document.getElementById("add").onclick = () => { RS.deleting = null; ruleDialog(null, save); };
@@ -1010,7 +1435,7 @@ async function renderDevices() {
       <span class="mx-row-main"><div class="mx-row-name">${esc(d.name)}${d.this ? `<span class="mx-tag">本机</span>` : ""}${d.synced ? `<span class="mx-tag">经同步</span>` : ""}</div><div class="mx-row-desc">${devStatus(d, st)}</div></span>
       <span class="mx-row-side">${ICON.chevR}</span></a>`).join("");
   $app.innerHTML = header("设备", `<button class="mx-btn mx-btn--primary" id="add-dev">添加设备</button>`)
-    + `<div class="reading">${notice}${section("设备", rows ? `<div class="mx-list">${rows}</div>` : emptyInline("还没有设备的记录。装上 Beayy 的电脑、同步过来的 iPhone 和手表会列在这里。"))}${syncSection(sy)}</div>`;
+    + `<div class="reading">${notice}${section("设备", rows ? `<div class="mx-list">${rows}</div>` : emptyInline("还没有设备"))}${syncSection(sy)}</div>`;
   document.getElementById("add-dev").onclick = () => openDialog({ title: "添加设备", body: adding, cancel: "关闭" });
   bindSync();
   if (sy.running || DS.busy) pollSync();
@@ -1025,17 +1450,21 @@ function devStatus(d, st) {
     return `<span class="dot ${cls}"></span>${text} · 今天已记 ${numText(st.events_today)} 条`;
   }
   const m = String((st && st.phone_sync) || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
-  if (d.kind === "iphone" && !d.synced) return `<span class="dot ok"></span>经 iCloud 同步，记录到 ${mdhm(m ? m[0] : d.last)}`;
-  if (d.synced) return `经同步 · 最近一条 ${mdhm(d.last)}`;
-  return `最近一条 ${mdhm(d.last)}`;
+  if (d.kind === "iphone" && !d.synced) {
+    // 超过一天没有新数据：变提醒样式
+    const at = m ? m[0] : d.last, stale = !at || Date.now() - Date.parse(at) > 86400e3;
+    return `<span class="dot ${stale ? "warn" : "ok"}"></span>同步至 ${ymdhm(at) || "—"} · ${howto("screentime", "怎么设置")}`;
+  }
+  if (d.synced) return `经同步 · 最近一条 ${ymdhm(d.last)}`;
+  return `最近一条 ${ymdhm(d.last)}`;
 }
 
 /** 每种设备记什么：一行一项 */
 const DEV_RECORDS = {
-  mac: ["切换 app 和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字", "在不在电脑前、锁屏、睡眠", "每 10 分钟写一段摘要"],
-  win: ["切换程序和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字（以管理员身份运行的程序读不到）", "在不在电脑前、锁屏、睡眠", "每 10 分钟写一段摘要"],
-  iphone: ["每个 app 什么时候在前台、用了多久（看不到 app 里的内容）", "来源是屏幕使用时间，经 iCloud 同步到这台 Mac，每 5 分钟读一次，通常晚几个小时", "停留点：到了哪、待了多久（Beayy iPhone app 记，经录音服务器拉来）"],
-  watch: ["全天录音转成的文字，分出说话人（音频在录音服务器上 7 天后删）", "录音时记下的停留点", "每 10 分钟从录音服务器拉一次"],
+  mac: ["切换 app 和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字", "在不在电脑前、锁屏、睡眠", "10 分钟摘要"],
+  win: ["切换程序和窗口", "键盘输入和发送（密码框打码）", "点击和滚动", "界面上的文字", "在不在电脑前、锁屏、睡眠", "10 分钟摘要"],
+  iphone: ["每个 app 在前台的时长", "停留点：到了哪、待了多久"],
+  watch: ["录音转成的文字，分出说话人", "录音时记下的停留点"],
 };
 
 /** 设备详情页：DetailHeader（返回、名字、状态、操作菜单）＋ 下划线页签 概况／事件 */
@@ -1066,13 +1495,13 @@ function devOverview(d, st) {
     <span class="mx-status mx-status--${perm[kind] ? "ok" : "warn"}">${perm[kind] ? "已授权" : "未授权"}</span>${perm[kind] ? "" : `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-perm="${kind}">去授权</button>`}</div>`;
   const stats = `<div class="mx-stats dev-stats">
       <div class="mx-stat"><div class="mx-stat-label">记录从</div><div class="mx-stat-value mx-num">${esc(mdhm(d.first) || "—")}</div></div>
-      <div class="mx-stat"><div class="mx-stat-label">最近一条</div><div class="mx-stat-value mx-num">${esc(mdhm(d.last) || "—")}</div></div>
+      <div class="mx-stat"><div class="mx-stat-label">最近一条</div><div class="mx-stat-value mx-num">${esc(ymdhm(d.last) || "—")}</div></div>
       <div class="mx-stat"><div class="mx-stat-label">共</div><div class="mx-stat-value mx-num">${numText(d.events)}<small>条</small></div></div>
       <div class="mx-stat"><div class="mx-stat-label">占用</div><div class="mx-stat-value mx-num">${bytesText(d.bytes).replace(/ (\S+)$/, "<small>$1</small>")}</div></div></div>`;
   const kind = d.kind === "win" ? "win" : d.kind;
   const recs = DEV_RECORDS[kind] || DEV_RECORDS.mac;
   const what = section("记什么", `<ul class="dev-recs">${recs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`, { aside: `<a href="#/devices/${encodeURIComponent(d.id)}/events">看最近的事件</a>` });
-  const perms = d.this && !IS_WIN ? section("权限", `<div class="rows">${permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题。")}${permRow("input_monitoring", "输入监控", "被动监听键盘和鼠标，只用来计时和判断是人还是代理在操作。")}${permRow("full_disk_access", "完全磁盘访问", "读 iPhone 同步到这台电脑的屏幕使用记录。")}</div>`) : "";
+  const perms = d.this && !IS_WIN ? section("权限", `<div class="rows">${permRow("accessibility", "辅助功能", "读取窗口标题和屏幕上的文字")}${permRow("input_monitoring", "输入监控", "判断你在打字还是程序在操作")}${permRow("full_disk_access", "完全磁盘访问", `读取 iPhone 的屏幕使用时间 · ${howto("screentime", "怎么设置")}`)}</div>`) : "";
   return stats + what + perms + `<p class="note dev-id">设备编号 <span class="mono">${esc(d.id)}</span></p>`;
 }
 
@@ -1139,7 +1568,7 @@ function evText(e) {
     case "sync.run": return `同步一轮：传 ${e.uploaded || 0} 段、收 ${e.downloaded || 0} 段${e.errors ? `，${e.errors} 个错` : ""}`;
     case "summary.run": return `写了 ${e.written || 0} 段摘要（${e.seconds || 0} 秒）`;
     case "phone.sync": return `从 iCloud 读到 iPhone 新记录 ${numText(e.added)} 条`;
-    case "relay.sync": return `从录音服务器拉来 ${numText(e.added)} 条`;
+    case "relay.sync": return `同步来 ${numText(e.added)} 条`;
     case "app.launch": return `Beayy ${e.version || ""} 启动${e.shadow ? "（测试版）" : ""}`;
     case "app.quit": return "Beayy 退出";
     case "tap.started": return "开始监听键盘和鼠标";
@@ -1192,7 +1621,7 @@ function drawEvents(d) {
   const box = document.getElementById("ev-list"); if (!box) return;
   DEV.drawn = true;
   if (DEV.err) { box.innerHTML = `<p class="mx-error">读不到事件：${esc(DEV.err)}</p>`; return; }
-  if (!DEV.events.length) { box.innerHTML = emptyInline(d.this ? "最近 8 小时没有这一类事件。" : "最近 8 小时没有这一类事件。同步来的设备要等它下次同步。"); return; }
+  if (!DEV.events.length) { box.innerHTML = emptyInline("最近 8 小时没有这类事件"); return; }
   const phone = d.kind === "iphone";
   box.innerHTML = `<div class="ev-list">${DEV.events.map((e, i) => {
     const k = evKey(e, i), app = e.bundle_id && (e.app_name || phone) ? `<span class="ico" data-b="${esc(e.bundle_id)}" data-p="${phone ? 1 : 0}" title="${esc(e.app_name || e.bundle_id)}">${esc(((e.app_name || e.bundle_id.split(".").pop())[0] || "?").toUpperCase())}</span>` : `<span class="ico ico-none"></span>`;
@@ -1228,7 +1657,7 @@ function renameDialog(d, done) {
   if (!d) return;
   openDialog({
     title: "重命名设备", ok: "保存",
-    body: dlgField("dev-name", "名称", { value: d.custom ? d.name : "", ph: d.default_name, help: "时间线上用这个名字标出是哪台。清空就改回默认的名字。会同步到你登录的其他设备。" }),
+    body: dlgField("dev-name", "名称", { value: d.custom ? d.name : "", ph: d.default_name, help: "清空就改回默认名字" }),
     onOpen: (el) => { el.querySelector("#dev-name").maxLength = 40; },
     submit: async (el) => { await call("rename_device", { id: d.id, name: dlgVal(el, "dev-name") }); DS.devs = null; done ? done() : renderDevices(); },
   });
@@ -1257,23 +1686,23 @@ function syncSection(sy) {
   const msg = DS.err ? `<div class="mx-field-error">${esc(DS.err)}</div>` : DS.msg ? `<p class="note">${esc(DS.msg)}</p>` : "";
   const row = (name, desc, side) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${side}</div>`;
   const wrap = (rows) => section("同步", `<div class="rows">${rows}</div>${msg}`).replace('<section class="mx-sec"', '<section class="mx-sec" id="sync-sec"');
-  if (!sy.configured) return wrap(row("多设备同步", "登录账号后，这台电脑和 iPhone 的记录在本机加密后同步到云端，别的电脑登录同一个账号就能看到。服务器读不到内容。",
+  if (!sy.configured) return wrap(row("多设备同步", "登录后，多台设备的记录会同步",
     `<span class="mx-status">没登录</span><span class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></span>`));
-  if (!sy.email) return wrap(row("多设备同步", "这台电脑用的是早期的配对码账号。设好邮箱和主密码，别的设备用邮箱登录就行，已经同步的数据不用重传。",
+  if (!sy.email) return wrap(row("多设备同步", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录",
     `<span class="mx-status mx-status--warn">要设账号</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button>`));
-  if (sy.need_login) return wrap(row("多设备同步", "这台电脑的登录已经失效（在别的设备上重设了主密码，或者把这台移除了）。重新登录后接着同步。",
+  if (sy.need_login) return wrap(row("多设备同步", "登录已失效，重新登录后接着同步",
     `<span class="mx-status mx-status--warn">要重新登录</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button>`));
   const sessions = (DS.account && DS.account.sessions) || [];
   const pg = sy.progress || {};
   const busy = sy.running || DS.busy;
   const going = busy && pg.phase && pg.total > 0;
   const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? "上传" : "下载"}</span><span class="mono">${numText(pg.done)} / ${numText(pg.total)} 段</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
-  const state = busy ? `<span class="mx-status">同步中…</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">上次有错</span>` : `<span class="mx-status mx-status--ok">已开${sy.last ? ` · 上次 ${hm(sy.last)}` : ""}</span>`;
+  const state = busy ? `<span class="mx-status">同步中…</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">上次有错</span>` : `<span class="mx-status mx-status--ok">已开${sy.last ? ` · 上次 ${ymdhm(sy.last)}` : ""}</span>`;
   return wrap(row("账号", esc(sy.email), state)
     + (bar ? `<div class="sync-bar-row">${bar}</div>` : "")
     + (sy.last_error ? `<div class="mx-error">${esc(sy.last_error)}</div>` : "")
     + (sessions.length ? row("登录着的设备", "", `<button class="mx-btn mx-btn--text mx-btn--sm" id="sess-open">${sessions.length} 台${ICON.chevR}</button>`) : "")
-    + row("立即同步", `每 5 分钟自动一轮${sy.uploaded ? `，已传 ${numText(sy.uploaded)} 段` : ""}`, `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>立即同步</button>`));
+    + row("立即同步", sy.uploaded ? `已传 ${numText(sy.uploaded)} 段` : "", `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>立即同步</button>`));
 }
 
 /** 登录着这个账号的设备（小弹层）：这台标出来，别的可以移除（先点「移除」，再点一次确认） */
@@ -1293,7 +1722,7 @@ function sessionsDialog() {
         el.querySelectorAll("[data-sess]").forEach((b) => (b.onclick = () => { removing = b.dataset.sess; draw(); }));
         el.querySelectorAll("[data-sess-keep]").forEach((b) => (b.onclick = () => { removing = null; draw(); }));
         el.querySelectorAll("[data-sess-go]").forEach((b) => (b.onclick = async () => {
-          try { await call("account_remove_device", { id: b.dataset.sessGo }); DS.account = await call("account_info").catch(() => DS.account); DS.msg = "已移除。那台设备要重新登录才能再同步。"; }
+          try { await call("account_remove_device", { id: b.dataset.sessGo }); DS.account = await call("account_info").catch(() => DS.account); DS.msg = "已移除，那台设备要重新登录"; }
           catch (x) { DS.err = String(x); }
           removing = null; draw(); if (S.page === "devices" && !DEV.id) renderDevices();
         }));
@@ -1355,7 +1784,7 @@ function profileDialog() {
     title: "编辑个人资料", ok: "保存",
     body: `<div class="profile"><span class="avatar big" id="pf-av">${avatarHtml(pf)}</span>
         <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="pf-pick">换头像</button><button class="mx-btn mx-btn--text mx-btn--sm" id="pf-clear">用名字首字</button><input type="file" id="pf-file" accept="image/*" hidden></div></div>
-      ${dlgField("pf-name", "名称", { value: pf.name || "", help: pf.email ? "显示在左下角，换设备登录也是这个。" : "显示在左下角。" })}`,
+      ${dlgField("pf-name", "名称", { value: pf.name || "", help: "" })}`,
     onOpen: (el, d) => {
       const av = el.querySelector("#pf-av"), file = el.querySelector("#pf-file"), name = el.querySelector("#pf-name");
       name.maxLength = 40;
@@ -1389,13 +1818,13 @@ function projectsSection() {
   const rows = byDom.map(([d, xs]) => `<div class="pj-group">${d}</div>` + xs.map((p) => `<div class="pj-row" data-p="${esc(p.name)}">
       <div class="pj-main"><div class="mx-setting-name">${esc(p.name)}</div><div class="mx-setting-desc">累计 ${dur(p.sec)}${p.aliases.length ? ` · 也叫 ${esc(p.aliases.join("、"))}` : ""}</div></div>
       <button class="mx-btn mx-btn--text mx-btn--sm" data-pj-edit>编辑</button></div>`).join("")).join("");
-  return section("项目", `<p class="note">项目和它属于哪个领域由摘要自动判断。判断错了在这里改：改领域、把同一件事的不同叫法合并。你改过的，自动判断不会再覆盖。</p><div class="pj">${rows}</div>${PJ.err ? `<div class="mx-field-error">${esc(PJ.err)}</div>` : ""}`);
+  return section("项目", `<p class="note">项目由摘要自动判断，你改过的不会被覆盖</p><div class="pj">${rows}</div>${PJ.err ? `<div class="mx-field-error">${esc(PJ.err)}</div>` : ""}`);
 }
 
 /** 编辑一个项目（小弹层）：改领域，或者合并到另一个项目 */
 function projectDialog(p) {
   const others = (PJ.list || []).filter((q) => q.name !== p.name);
-  const why = "同一件事有两个叫法时，把一个合并到另一个。";
+  const why = "同一件事的两个叫法，合并成一个";
   let domain = p.domain, into = "";
   openDialog({
     title: `编辑「${p.name}」`, ok: "保存",
@@ -1413,7 +1842,7 @@ function projectDialog(p) {
         const b = e.target.closest("[data-v]"); if (!b) return;
         into = b.dataset.v;
         lst.querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", x === b));
-        el.querySelector("#pj-why").textContent = into ? `以前和以后记成「${p.name}」的时间都算到「${into}」。之后还能在这里改。` : why;
+        el.querySelector("#pj-why").textContent = into ? `记成「${p.name}」的时间都算到「${into}」` : why;
         el.querySelector("#pj-dom-f").hidden = !!into;
         d.setOk(into ? `合并到「${into}」` : "保存");
       };
@@ -1442,20 +1871,20 @@ function accountBody(sy) {
   const msg = AC.msg ? `<p class="note ac-msg">${esc(AC.msg)}</p>` : "";
   const row = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>${right}</div>`;
   const btn = (id, text) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}">${text}</button>`;
-  if (sy.configured && sy.email && !sy.need_login) return row(esc(sy.email), "记录在这台电脑上加密后同步，别的设备用这个邮箱登录。",
+  if (sy.configured && sy.email && !sy.need_login) return row(esc(sy.email), "别的设备用这个邮箱登录",
       AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">退出登录</button></div>` : btn("ac-logout", "退出登录"))
     + row("主密码", "只在设备上用，不会发给服务器。", btn("ac-password", "改主密码"))
     + row("恢复码", "忘了主密码时用它重设。", btn("ac-show-code", "查看")) + msg;
-  if (sy.configured && !sy.email) return row("邮箱和主密码", `这台电脑用的是早期的配对码账号。设好邮箱和主密码，别的设备用邮箱登录就行；已经同步的 ${numText(sy.uploaded)} 段数据不用重传。`, btn("ac-claim", "设好账号")) + msg;
+  if (sy.configured && !sy.email) return row("邮箱和主密码", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录", btn("ac-claim", "设好账号")) + msg;
   return row(sy.need_login ? "登录已失效" : "没登录",
-    sy.need_login ? "这台电脑的登录已经失效（在别的设备上重设了主密码，或者把这台移除了），重新登录后接着同步。" : "登录后，这台电脑的记录在本机加密后同步到云端，别的设备登录同一个账号就能看到。服务器读不到内容。",
+    sy.need_login ? "登录已失效，重新登录后接着同步" : "登录后，多台设备的记录会同步",
     `<div class="btns">${sy.need_login ? "" : btn("ac-signup", "注册")}${btn("ac-login", sy.need_login ? "重新登录" : "登录")}</div>`) + msg;
 }
 
 const checkEmail = (e) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw "邮箱格式不对。";
   // 常见手滑：.con、gmial 这类，邮箱错了以后登录不上
-  if (/\.(con|cmo|cm|comm|om|vom|xom)$/i.test(e) || /@(gmial|gamil|gmai|gmal|gmaill|qq\.con)\b/i.test(e)) throw "邮箱像是拼错了（比如 .com 打成了 .con），检查一下再提交。";
+  if (/\.(con|cmo|cm|comm|om|vom|xom)$/i.test(e) || /@(gmial|gamil|gmai|gmal|gmaill|qq\.con)\b/i.test(e)) throw "邮箱像是拼错了，检查一下";
   return e;
 };
 const checkPw = (el) => {
@@ -1481,7 +1910,7 @@ function loginDialog(mode = "login", email = "") {
   const [title, body, ok, busy] = forms[mode];
   openDialog({
     title, ok, busy,
-    body: (mode === "recover" ? `<p class="note">重设后，之前登录着的设备都要用新主密码重新登录。</p>` : "") + body
+    body: (mode === "recover" ? `<p class="note">重设后，其他设备要重新登录</p>` : `<p class="note">记录在本机加密后再同步，服务器读不到内容</p>`) + body
       + `<div class="dlg-links">${links.map(([k, v]) => `<button class="mx-btn mx-btn--text mx-btn--sm" data-to="${k}">${v}</button>`).join("")}</div>`,
     onOpen: (el) => el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => loginDialog(b.dataset.to, dlgVal(el, "em")))),
     submit: async (el) => {
@@ -1489,7 +1918,7 @@ function loginDialog(mode = "login", email = "") {
       AC.msg = null;
       if (mode === "login") await call("account_login", { email, password: el.querySelector("#pw1").value });
       else if (mode === "signup") { const code = await call("account_signup", { invite: dlgVal(el, "inv"), email, password: checkPw(el) }); setTimeout(() => codeDialog(code, true)); }
-      else { await call("account_recover", { email, code: dlgVal(el, "rc"), password: checkPw(el) }); AC.msg = "已重设主密码并登录。其他设备要用新主密码重新登录。"; }
+      else { await call("account_recover", { email, code: dlgVal(el, "rc"), password: checkPw(el) }); AC.msg = "已重设，其他设备要重新登录"; }
       accountChanged();
     },
   });
@@ -1499,7 +1928,7 @@ function loginDialog(mode = "login", email = "") {
 function claimDialog() {
   openDialog({
     title: "设邮箱和主密码", ok: "设好账号", busy: "设置中…",
-    body: `<p class="note">设好后，别的设备用邮箱和主密码登录。已经同步的数据不用重传。</p>`
+    body: `<p class="note">设好后，别的设备用邮箱和主密码登录</p>`
       + dlgField("em", "邮箱", { ph: "you@example.com" }) + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + dlgField("pw2", "再输一次", { type: "password" }),
     submit: async (el) => {
       const email = checkEmail(dlgVal(el, "em")), code = await call("account_claim", { email, password: checkPw(el) });
@@ -1511,7 +1940,7 @@ function claimDialog() {
 function passwordDialog() {
   openDialog({
     title: "改主密码", ok: "改主密码", busy: "改密码中…",
-    body: `<p class="note">数据不用重传，别的设备也不用重新登录。下次登录新设备用新主密码。</p>`
+    body: `<p class="note">以后登录新设备用新主密码</p>`
       + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + dlgField("pw2", "再输一次", { type: "password" }),
     submit: async (el) => { await call("account_password", { password: checkPw(el) }); AC.msg = "主密码已改。"; renderSettings(); },
   });
@@ -1551,136 +1980,379 @@ function minutesToMorning() {
   return Math.ceil((t - now) / 60000);
 }
 
+// ---------- 设置：地图（高德 Key、常去的地方） ----------
+
+const PL = { labels: [] };
+const PL_TYPES = [["home", "家"], ["work", "工作"], ["other", "其他"]];
+const PL_ICON = { home: "家", work: "工作" };
+
+/** 改了常去的地方以后：在哪一页就重画哪一页 */
+const afterPlaces = () => (S.page === "settings" ? renderSettings() : renderToday());
+
+/** 改常去的地方里的一项：名字、地址、种类、范围；名字清空＝删掉 */
+async function labelDialog(i) {
+  PL.labels = await call("list_place_labels").catch(() => PL.labels);
+  const l = PL.labels[i]; if (!l) return;
+  let kind = l.type || "other", r = Math.round(l.r || 150);
+  const seg = (id, items, cur) => `<div class="mx-seg" role="tablist" id="${id}">${items.map(([k, t]) => `<button role="tab" aria-selected="${String(k) === String(cur)}" class="${String(k) === String(cur) ? "is-on" : ""}" data-v="${k}">${t}</button>`).join("")}</div>`;
+  openDialog({
+    title: `改「${l.label}」`, ok: "保存",
+    body: dlgField("pl-n", "名字", { value: l.label, help: "清空就删掉这个地方。" })
+      + dlgField("pl-a", "地址", { value: l.address || "", ph: "比如 某某小区 3 幢" })
+      + `<div class="mx-field"><label>种类</label>${seg("pl-k", PL_TYPES, kind)}</div>`
+      + `<div class="mx-field"><label>范围</label>${seg("pl-r", [[100, "100 米"], [150, "150 米"], [250, "250 米"], [400, "400 米"]], r)}<p class="note">离得近的两个地方，范围别重叠</p></div>`,
+    onOpen: (el) => {
+      const bindSeg = (id, set) => { el.querySelector("#" + id).onclick = (e) => { const b = e.target.closest("[data-v]"); if (!b) return; set(b.dataset.v); el.querySelectorAll(`#${id} button`).forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); }); }; };
+      bindSeg("pl-k", (v) => (kind = v)); bindSeg("pl-r", (v) => (r = +v));
+    },
+    submit: async (el) => { await call("edit_place_label", { index: i, label: dlgVal(el, "pl-n"), kind, r, address: dlgVal(el, "pl-a") || null }); afterPlaces(); },
+  });
+}
+
+/** 添加一个常去的地方：搜高德（以第一个常去的地方为中心，按距离），挑一个就加上，名字先用店名，之后可以改 */
+function addPlaceDialog() {
+  const c = PL.labels[0];
+  let found = [];
+  openDialog({
+    title: "添加一个地方", cancel: "关闭",
+    body: `<div class="mx-field"><label for="pa-q">搜小区、楼栋、店名、公司</label><input class="mx-input" id="pa-q" autocomplete="off"><div class="pick-list" id="pa-list"></div></div>`,
+    onOpen: (el, d) => {
+      let timer = null;
+      el.querySelector("#pa-q").oninput = (e) => {
+        clearTimeout(timer);
+        const q = e.target.value.trim(), box = el.querySelector("#pa-list");
+        if (!q) { box.innerHTML = ""; return; }
+        timer = setTimeout(async () => {
+          try { found = await call("amap_search", { text: q, lat: c ? c.lat : null, lon: c ? c.lon : null }); }
+          catch (x) { box.innerHTML = `<p class="note">${esc(String(x))}</p>`; return; }
+          if (el.querySelector("#pa-q").value.trim() !== q) return;
+          box.innerHTML = found.slice(0, 8).map((p, i) => `<button class="pick-row" data-add="${i}"><span class="pk-n">${esc(p.name)}<span class="pk-t">${esc((p.type || "").split(";")[1] || "")}</span></span><span class="pk-r mono">${c && p.distance != null ? (p.distance < 1000 ? Math.round(p.distance) + " 米" : (p.distance / 1000).toFixed(1) + " 公里") : ""}</span></button>`).join("") || `<p class="note">没搜到。</p>`;
+        }, 350);
+      };
+      el.addEventListener("click", async (e) => {
+        const b = e.target.closest("[data-add]"); if (!b) return;
+        const p = found[+b.dataset.add];
+        try { await call("set_place_label", { lat: p.lat, lon: p.lon, label: shopShort(p.name), kind: "other" }); closeDialog(); afterPlaces(); }
+        catch (x) { d.setErr(`没加上：${x}`); }
+      });
+    },
+  });
+}
+
+/** 设置分六页，放在页头的页签里：通用｜账号｜记录｜连接｜数据｜项目。改了就存，不再有「保存设置」；要填几项的（地址、模型、密钥）开小弹层 */
+const SET_TABS = [["general", "通用"], ["account", "账号"], ["record", "记录"], ["connect", "连接"], ["data", "数据"], ["projects", "项目"]];
+try { SS.tab = localStorage.getItem("settings-tab") || "general"; } catch (e) { SS.tab = "general"; }
+const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return u || ""; } };
+const setRow = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${right}</div>`;
+const smallBtn = (id, text, attrs = "") => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}" ${attrs}>${text}</button>`;
+const pill = (ok, text) => `<span class="mx-status mx-status--${ok ? "ok" : "warn"}">${text}</span>`;
+/** 只改几个键：save_settings 只写传进去的键 */
+async function saveSome(part) {
+  await call("save_settings", { settings: part });
+  S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings));
+}
+const isUrl = (v) => /^https?:\/\/\S+$/.test(v);
+const KEEP = "已存，留空不改";
+
 async function renderSettings() {
   if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
+  // 手机版不采集：没有「记录」页（暂停、不记录的 app、删最近记录都是电脑上的事）
+  const tabsHere = S.status && S.status.mobile ? SET_TABS.filter(([k]) => k !== "record") : SET_TABS;
+  const tab = tabsHere.some(([k]) => k === SS.tab) ? SS.tab : "general";
   const sy = await call("sync_status").catch(() => ({}));
   S.sync = sy;
-  if (!PJ.list) PJ.list = await call("list_projects").catch(() => []);
+  if (tab === "projects") PJ.list = PJ.list || await call("list_projects").catch(() => []);
   S.profile = await call("get_profile").catch(() => S.profile);
   S.status = await call("get_status");
   if (TAURI) S.update = await call("update_status").catch(() => S.update);
   renderSide();
-  const st = S.status, dr = S.draft;
+  const st = S.status, cf = S.settings;
   const theme = document.documentElement.dataset.theme || "";
-  const gwBad = dr.gateway && !/^https?:\/\//.test(dr.gateway.trim());
-  const keySrc = S.settings.api_key_source;
-  const relayBad = dr.relay_server && !/^https?:\/\//.test(dr.relay_server.trim());
-  const pauseRow = st.paused
-    ? `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">已暂停</div><div class="mx-setting-desc">${st.paused_until ? `到 ${hm(st.paused_until)} 自动继续。` : "一直暂停，点继续才恢复。"}暂停时不记键盘、鼠标、界面文字和切换 app。</div></div>
-        <button class="mx-btn mx-btn--primary" data-pause="off">继续记录</button></div>`
-    : `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">暂停记录</div><div class="mx-setting-desc">暂停时不记键盘、鼠标、界面文字和切换 app；和菜单栏里的「暂停记录」是同一个开关。</div></div>
-        <div class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="60">暂停 1 小时</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="morning">到明早 8 点</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="on">一直暂停</button></div></div>`;
-  const delRow = SS.deleting
-    ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除${DELETES.find((x) => x[0] === SS.deleting)[1]}的记录？</b><span>这段时间电脑上的键盘、点击、界面文字和 10 分钟摘要都会删掉，删了找不回来。手机记录不动。</span></div><button class="mx-btn mx-btn--secondary" data-del="keep">取消</button><button class="mx-btn mx-btn--danger" data-del="go">删除</button></div>`
-    : `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">删除最近的记录</div><div class="mx-setting-desc">${SS.deleted != null ? `刚删掉 ${SS.deleted} 条。` : "不想留下的一段，比如刚输过的私人内容。前一天及更早的已经归档进仓库，不在这里删。"}</div></div>
-        <div class="btns">${DELETES.map(([k, v]) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-del="${k}">${v}</button>`).join("")}</div></div>`;
+  const tabs = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="set-tabs">${tabsHere.map(([k, v]) =>
+    `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "is-on" : ""}" data-st="${k}">${v}</button>`).join("")}</div></div></div>`;
 
-  $app.innerHTML = header("设置") + `<div class="form">
-    ${same(dr, S.settings) ? "" : `<div class="mx-confirm" id="dirty"><div class="mx-confirm-text"><b>设置改了还没保存</b><span>${gwBad ? "网关地址不对，改好才能保存。" : "保存后写进 settings.json，下一轮就按新设置记录和摘要。"}</span></div><button class="mx-btn mx-btn--secondary" id="discard">放弃改动</button><button class="mx-btn mx-btn--primary" id="save" ${gwBad || relayBad ? "disabled" : ""}>保存设置</button></div>`}
-    ${sy.shadow ? section("账号", profileRow()) : accountSection(sy)}
-    ${projectsSection()}
-    ${section("记录", pauseRow
-      + `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">开机自动启动</div><div class="mx-setting-desc">登录后自动开始记录，不用每次手动打开。</div></div>
-        <button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="开机自动启动"></button></div>
-      <div class="block"><div><div class="mx-setting-name">不记录的 app</div><div class="mx-setting-desc">写 app 名或 bundle id。这些 app 在前台时只记「在用它」和时长，窗口标题、输入、点击、界面文字都不记。</div></div>
-        ${dr.blocklist.length ? `<div class="mx-chips" id="chips">${dr.blocklist.map((b, i) => `<button class="mx-chip" data-i="${i}" title="移出">${esc(b)}${ICON.close}</button>`).join("")}</div>` : ""}
-        <div class="inline"><input class="mx-input mono" id="block-new" placeholder="比如 1Password 或 com.1password.1password" aria-label="不记录的 app"><button class="mx-btn mx-btn--secondary" id="block-add">加入</button></div></div>`)}
-    ${section("手表录音与位置", `<p class="note" style="margin:0 0 10px">手表录的对话（转写后的文字）和 iPhone 的停留点存在你自己的录音服务器上，这里每 10 分钟拉一次到本机。音频不经过这台电脑。</p>
-      <div class="mx-field"><label for="relay">录音服务器地址</label><input class="mx-input mono${relayBad ? " is-error" : ""}" id="relay" data-k="relay_server" placeholder="https://audio.example.com" value="${esc(dr.relay_server || "")}">${relayBad ? `<div class="mx-field-error">地址要以 https:// 开头</div>` : ""}</div>
-      <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">口令</div><div class="mx-setting-desc">${S.settings.relay_server && st.relay_sync ? esc(st.relay_sync) : `存进${KEY_STORE}，页面读不到。`}</div></div>
-        <span class="mx-status mx-status--${S.settings.has_relay_token ? "ok" : "warn"}">${S.settings.has_relay_token ? "已存" : "还没有"}</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="relay-key">${S.settings.has_relay_token ? "换一个" : "存一个"}</button></div>`)}
-    ${section("数据", delRow + `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">数据目录</div><div class="mx-setting-desc mono">~/Library/Application Support/Beayy/</div></div><button class="mx-btn mx-btn--secondary" id="open-dir">在访达中打开</button></div>
-      <div class="mx-field" style="padding-top:14px"><label for="repo">人生记录仓库（日数据包和日总结从这里读）</label><input class="mx-input mono" id="repo" data-k="repo_path" value="${esc(dr.repo_path)}"></div>`)}
-    ${section("外观", `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">主题</div></div>
-      <div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div></div>`)}
-    ${aboutSection()}
-    <details class="adv" ${SS.advanced || gwBad ? "open" : ""} id="adv"><summary>高级：摘要用的网关、模型和密钥</summary><div class="stack">
-        <div class="mx-field"><label for="gw">网关地址</label><input class="mx-input mono${gwBad ? " is-error" : ""}" id="gw" data-k="gateway" value="${esc(dr.gateway)}">${gwBad ? `<div class="mx-field-error">网关地址要以 https:// 开头，比如 https://api.openai.com/v1</div>` : ""}</div>
-        <div class="mx-field"><label for="m1">10 分钟摘要的模型</label><input class="mx-input mono" id="m1" data-k="model_segment" value="${esc(dr.model_segment)}"></div>
-        <div class="mx-setting" style="border-top:1px solid var(--line)"><div class="mx-setting-main"><div class="mx-setting-name">网关密钥</div><div class="mx-setting-desc">先找环境变量，再找${KEY_STORE}。存进${KEY_STORE}的只能写入，页面读不到。</div></div>
-          <span class="mx-status mx-status--${keySrc ? "ok" : "warn"}">${KEY_SOURCE[keySrc] || "还没有"}</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="key-edit">${keySrc === "keychain" ? "换一把" : "存一把"}</button></div></div></details>
-  </div>`;
+  let body = "";
+  if (tab === "general") {
+    const mobile = !!st.mobile;
+    body = section("个人资料", profileRow())
+      + (mobile ? phoneSection() : "")
+      + section("通用", (mobile ? "" : setRow("开机自动启动", "登录电脑后自动开始记录。", `<button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="开机自动启动"></button>`))
+        + setRow("主题", "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`))
+      + (mobile ? section("关于", setRow(`版本 ${esc(st.version || "")}`, "手机版跟着 TestFlight 更新。", "")) : aboutSection());
+  } else if (tab === "account") {
+    body = sy.shadow ? section("账号", emptyInline("测试版不登录账号")) : section("账号与同步", accountBody(sy));
+  } else if (tab === "record") {
+    const pause = st.paused
+      ? setRow("已暂停", st.paused_until ? `到 ${hm(st.paused_until)} 自动继续。` : "一直暂停，点继续才恢复。", `<button class="mx-btn mx-btn--primary mx-btn--sm" data-pause="off">继续记录</button>`)
+      : setRow("暂停记录", "暂停后不记录", `<div class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="60">1 小时</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="morning">到明早 8 点</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="on">一直</button></div>`);
+    const block = `<div class="block"><div><div class="mx-setting-name">不记录的 app</div><div class="mx-setting-desc">在前台时只记用了多久，不记内容。</div></div>
+        ${cf.blocklist.length ? `<div class="mx-chips" id="chips">${cf.blocklist.map((b, i) => `<button class="mx-chip" data-i="${i}" title="移出">${esc(b)}${ICON.close}</button>`).join("")}</div>` : ""}
+        <div class="inline"><input class="mx-input mono" id="block-new" placeholder="app 名或 bundle id，比如 1Password" aria-label="不记录的 app"><button class="mx-btn mx-btn--secondary" id="block-add">加入</button></div></div>`;
+    const del = SS.deleting
+      ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>删除${DELETES.find((x) => x[0] === SS.deleting)[1]}的记录？</b><span>删了找不回来。</span></div><button class="mx-btn mx-btn--secondary" data-del="keep">取消</button><button class="mx-btn mx-btn--danger" data-del="go">删除</button></div>`
+      : setRow("删除最近的记录", SS.deleted != null ? `刚删掉 ${SS.deleted} 条。` : "比如刚输过的私人内容。", `<div class="btns">${DELETES.map(([k, v]) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-del="${k}">${v}</button>`).join("")}</div>`);
+    body = section("记录", pause + block) + section("隐私", del);
+  } else if (tab === "connect") {
+    const ks = cf.api_key_source;
+    const amap = cf.has_amap_key && cf.has_amap_js ? pill(true, "已存") : cf.has_amap_key ? pill(false, "缺地图 Key") : pill(false, "还没有");
+    const syncLocked = sy.configured && !sy.shadow;
+    const L = SS.llm || {};
+    const official = cf.model_mode === "official", asrOfficial = cf.transcribe_server === cf.default_transcribe_server, mapOfficial = cf.map_mode === "official";
+    const planPill = L.error ? pill(false, "没登录账号") : L.plan === "official" ? pill(true, "已开通") : L.plan === "stopped" ? pill(false, "已停用") : SS.llm ? pill(false, "没开通") : "";
+    // 三项本月用量：用了多少 / 上限，进度条；这一项改成自己的就写「用的是自己的」
+    const useRow = (name, u, using, fmt) => {
+      const used = (u && u.used) || 0, q = (u && u.quota) || 0;
+      const pct = q ? Math.min(100, Math.round(used / q * 100)) : 0;
+      return setRow(name, `${fmt(used)} / ${q ? fmt(q) : "不限"}${using ? "" : " · 这一项用的是自己的"}<div class="usebar"><i style="width:${pct}%"${pct >= 90 ? ' class="hot"' : ""}></i></div>`, `<span class="note mono">${q ? pct + "%" : ""}</span>`);
+    };
+    const tokens = (n) => (n >= 1e4 ? `${numText(Math.round(n / 1e4))} 万 token` : `${numText(n)} token`);
+    const minutes = (sec) => `${numText(Math.round(sec / 60))} 分钟`;
+    const calls = (n) => `${numText(n)} 次`;
+    body = section("官方服务", setRow("这个账号", L.plan === "official" ? "模型、转写、地图都用官方的，不用填 Key" : L.plan === "stopped" ? "已停用，联系管理员" : L.error ? "登录后才能用" : "还没开通，联系管理员", planPill)
+        + (L.plan === "official" ? useRow("模型", L.llm, official, tokens) + useRow("转写", L.asr, asrOfficial, minutes) + useRow("地图", L.map, mapOfficial, calls) : ""))
+      + section("每一项", (official
+      ? setRow("模型", "官方", smallBtn("c-model", "设置"))
+      : setRow("模型", `自己的网关 · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || "没填模型")}</span>`, `${pill(!!ks, ks ? "密钥已存" : "没有密钥")}${smallBtn("c-model", "设置")}`))
+      + setRow("转写服务", `${asrOfficial ? "官方" : `自建 · <span class="mono">${esc(hostOf(cf.transcribe_server))}</span>`} · 你叫「${esc(cf.speaker_name)}」${st.cloud_sync ? `<br>${esc(st.cloud_sync)}` : ""}`, smallBtn("c-asr", "设置"))
+      + setRow("高德地图", mapOfficial ? "官方" : "自己的 Key", `${mapOfficial ? "" : amap}${smallBtn("c-amap", "设置")}`)
+      + setRow("同步服务器", `<span class="mono">${esc(hostOf(cf.sync_server))}</span>${cf.sync_server === cf.default_sync_server ? " · 官方" : " · 自建"}`, smallBtn("c-sync", "更改", syncLocked ? `disabled title="登录着不能换，先在「账号」里退出"` : ""))
+      );
+  } else if (tab === "data") {
+    body = SS.storage ? storageView(SS.storage) : `<div class="form">${emptyInline("在看数据存在哪……")}</div>`;
+  } else {
+    body = projectsSection();
+  }
+  $app.innerHTML = header("设置") + tabs + `<div class="form">${body}</div>`;
 
-  const rerender = () => { const f = document.activeElement && document.activeElement.id; renderSettings().then(() => { const el = f && document.getElementById(f); if (el) { el.focus(); if (el.setSelectionRange && el.value) el.setSelectionRange(el.value.length, el.value.length); } }); };
-  $app.querySelectorAll("[data-k]").forEach((el) => {
-    el.oninput = () => { const was = same(S.draft, S.settings); S.draft[el.dataset.k] = el.value; if (was !== same(S.draft, S.settings)) rerender(); };
-    el.onchange = () => rerender();
-  });
-  bindAccount();
-  bindProfile();
-  bindProjects();
-  bindAbout();
-  document.getElementById("adv").ontoggle = (e) => { SS.advanced = e.target.open; };
-  document.getElementById("theme").onclick = (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    const t = b.dataset.theme;
-    if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
-    try { t ? localStorage.setItem("theme", t) : localStorage.removeItem("theme"); } catch (err) {}
+  document.getElementById("set-tabs").onclick = (e) => {
+    const b = e.target.closest("[data-st]"); if (!b) return;
+    SS.tab = b.dataset.st; try { localStorage.setItem("settings-tab", SS.tab); } catch (x) {}
     renderSettings();
   };
-  $app.querySelectorAll("[data-pause]").forEach((b) => (b.onclick = async () => {
-    const k = b.dataset.pause;
-    if (k === "off") await call("set_paused", { paused: false });
-    else await call("set_paused", { paused: true, minutes: k === "on" ? null : k === "morning" ? minutesToMorning() : +k });
-    renderSettings();
-  }));
-  document.getElementById("login").onclick = async () => {
-    try { await call("set_login_item", { on: !st.login_item }); } catch (x) { alert(`没改成：${x}`); }
-    renderSettings();
-  };
-  $app.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
-    const k = b.dataset.del;
-    if (k === "keep") { SS.deleting = null; return renderSettings(); }
-    if (k === "go") {
-      const what = SS.deleting; SS.deleting = null;
-      SS.deleted = await call("delete_since", what === "today" ? { today: true } : { minutes: +what });
-      return renderSettings();
-    }
-    SS.deleting = k; SS.deleted = null; renderSettings();
-  }));
-  const addBlock = () => { const v = document.getElementById("block-new").value.trim(); if (v && !S.draft.blocklist.includes(v)) { S.draft.blocklist.push(v); renderSettings(); } };
-  document.getElementById("block-add").onclick = addBlock;
-  document.getElementById("block-new").onkeydown = (e) => { if (e.key === "Enter") addBlock(); };
-  const chips = document.getElementById("chips");
-  if (chips) chips.onclick = (e) => { const b = e.target.closest("[data-i]"); if (b) { S.draft.blocklist.splice(+b.dataset.i, 1); renderSettings(); } };
-  document.getElementById("key-edit").onclick = () => openDialog({
-    title: keySrc === "keychain" ? "换一把网关密钥" : "存一把网关密钥", ok: `存进${KEY_STORE}`,
-    body: dlgField("key", "密钥", { type: "password", ph: "sk-…", mono: true, help: IS_WIN ? "存在这台电脑的 Beayy 数据目录里（没有加密），只用来调你在上面填的网关。存好后页面读不到它。" : "存进这台电脑的钥匙串，只用来调你在上面填的网关。存好后页面读不到它。" }),
-    submit: async (el) => {
-      const k = dlgVal(el, "key");
-      if (!k) throw "先把密钥粘进上面的框。";
-      try { await call("set_api_key", { key: k }); } catch (x) { throw IS_WIN ? `没存进去：${x}` : `没存进钥匙串：${x}。再点一次；还不行就看钥匙串访问里同名条目是否被锁住。`; }
-      S.settings = await call("get_settings"); S.draft = { ...S.draft, has_api_key: true }; renderSettings();
-    },
-  });
-  document.getElementById("relay-key").onclick = () => openDialog({
-    title: "录音服务器口令", ok: `存进${KEY_STORE}`,
-    body: dlgField("rkey", "口令", { type: "password", mono: true, help: "录音服务器 .env 里的 BEAYY_AUDIO_TOKEN。只用来从上面那个地址读转写和停留点。" }),
-    submit: async (el) => {
-      const k = dlgVal(el, "rkey");
-      if (!k) throw "先把口令粘进上面的框。";
-      try { await call("set_relay_token", { token: k }); } catch (x) { throw `没存进去：${x}`; }
-      S.settings = { ...S.settings, has_relay_token: true }; renderSettings();
-    },
-  });
-  document.getElementById("open-dir").onclick = () => call("open_data_dir");
-  const discard = document.getElementById("discard");
-  if (discard) {
-    discard.onclick = () => { S.draft = JSON.parse(JSON.stringify(S.settings)); renderSettings(); };
-    document.getElementById("save").onclick = async () => {
-      const { has_api_key, api_key_source, has_relay_token, ...rest } = S.draft;
-      rest.gateway = rest.gateway.trim();
-      rest.relay_server = (rest.relay_server || "").trim();
-      await call("save_settings", { settings: rest });
-      S.settings = { ...rest, has_api_key: S.settings.has_api_key, api_key_source: S.settings.api_key_source, has_relay_token: S.settings.has_relay_token }; S.draft = JSON.parse(JSON.stringify(S.settings));
+  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
+  if (tab === "general") {
+    bindProfile(); if (!st.mobile) bindAbout();
+    if (st.mobile) bindPhone();
+    document.getElementById("theme").onclick = (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const t = b.dataset.theme;
+      if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+      try { t ? localStorage.setItem("theme", t) : localStorage.removeItem("theme"); } catch (err) {}
       renderSettings();
     };
+    on("login", async () => { try { await call("set_login_item", { on: !st.login_item }); } catch (x) { alert(`没改成：${x}`); } renderSettings(); });
   }
+  if (tab === "account" && !sy.shadow) bindAccount();
+  if (tab === "projects") bindProjects();
+  if (tab === "record") {
+    $app.querySelectorAll("[data-pause]").forEach((b) => (b.onclick = async () => {
+      const k = b.dataset.pause;
+      if (k === "off") await call("set_paused", { paused: false });
+      else await call("set_paused", { paused: true, minutes: k === "on" ? null : k === "morning" ? minutesToMorning() : +k });
+      renderSettings();
+    }));
+    $app.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+      const k = b.dataset.del;
+      if (k === "keep") { SS.deleting = null; return renderSettings(); }
+      if (k === "go") {
+        const what = SS.deleting; SS.deleting = null;
+        SS.deleted = await call("delete_since", what === "today" ? { today: true } : { minutes: +what });
+        return renderSettings();
+      }
+      SS.deleting = k; SS.deleted = null; renderSettings();
+    }));
+    const setBlock = async (list) => { await saveSome({ blocklist: list }); renderSettings(); };
+    const addBlock = () => { const v = document.getElementById("block-new").value.trim(); if (v && !cf.blocklist.includes(v)) setBlock([...cf.blocklist, v]); };
+    on("block-add", addBlock);
+    document.getElementById("block-new").onkeydown = (e) => { if (e.key === "Enter") addBlock(); };
+    const chips = document.getElementById("chips");
+    if (chips) chips.onclick = (e) => { const b = e.target.closest("[data-i]"); if (b) setBlock(cf.blocklist.filter((_, i) => i !== +b.dataset.i)); };
+  }
+  clearInterval(SS.storageTimer);
+  if (tab === "data") {
+    const load = async () => {
+      try { SS.storage = await call("storage_stats"); } catch (x) { SS.storage = { error: String(x) }; }
+      if (S.page === "settings" && SS.tab === "data" && !document.querySelector(".dlg-root")) renderSettings();
+    };
+    if (!SS.storage || Date.now() - (SS.storage.at || 0) > 60e3) load();
+    SS.storageTimer = setInterval(load, 60e3);
+    on("open-dir", () => call("open_data_dir"));
+    on("repo-edit", () => openDialog({
+      title: "人生记录仓库", ok: "保存",
+      body: dlgField("repo", "路径", { value: cf.repo_path || "", mono: true, ph: "~/人生记录", help: "日数据包和日总结的文件夹" }),
+      submit: async (el) => { await saveSome({ repo_path: dlgVal(el, "repo") }); renderSettings(); },
+    }));
+  }
+  if (tab === "connect") {
+    if (!SS.llmLoading && (!SS.llm || Date.now() - SS.llmAt > 60e3)) {
+      SS.llmLoading = true;
+      call("llm_status").then((v) => { SS.llm = v; SS.llmAt = Date.now(); }).catch((x) => { SS.llm = { error: String(x) }; })
+        .finally(() => { SS.llmLoading = false; if (S.page === "settings" && SS.tab === "connect" && !document.querySelector(".dlg-root")) renderSettings(); });
+    }
+    on("c-model", modelDialog);
+    on("c-asr", asrDialog);
+    on("c-amap", amapDialog);
+    on("c-sync", syncServerDialog);
+  }
+}
+
+/** 手机版设置「通用」里的「这台手机」：定位、手表、用这台 iPhone 录、本人声纹、上传进度（原生做的，经 native_ 命令） */
+function phoneSection() {
+  const n = SS.native;
+  if (!n) return section("这台手机", emptyInline("在看这台手机的状态……"));
+  if (n.error) return section("这台手机", `<div class="mx-field-error">${esc(n.error)}</div>`);
+  const loc = { always: [true, "始终允许"], when_in_use: [false, "只在使用时"], denied: [false, "没允许"], not_determined: [false, "还没问过"] }[n.location] || [false, n.location];
+  const ago = (iso) => (iso ? mdhm(iso) : "还没有");
+  return section("这台手机",
+    setRow("位置", loc[0] ? (n.precise ? "记停留点用" : "「精确位置」关着，停留点会不准") : "改成「始终」才能记停留点", `${pill(loc[0] && n.precise, loc[1])}${loc[0] && n.precise ? "" : smallBtn("ph-settings", "去设置")}`)
+    + setRow("手表", n.watch_recording ? `在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}` : `没在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}`, pill(!!n.watch_recording, n.watch_recording ? "在录" : "没在录"))
+    + setRow("用这台 iPhone 录", n.phone_recording ? `在录，${ago(n.phone_since)} 开始` : "没戴手表时用", `<button class="mx-switch" role="switch" id="ph-rec" aria-checked="${!!n.phone_recording}" aria-label="用这台 iPhone 录"></button>`)
+    + setRow("本人声纹", "用来认出哪些话是你说的", smallBtn("ph-voice", "录一段", n.logged_in ? "" : "disabled"))
+    + setRow("上传", `${n.pending ? `还有 ${n.pending} 段录音` : "录音都传完了"}${n.pending_place_days ? `、${n.pending_place_days} 天停留点` : ""}没传 · 最近 ${ago(n.last_upload)}${n.last_error ? `<br>${esc(n.last_error)}` : ""}${n.logged_in ? "" : "<br>登录账号后开始上传。"}`, smallBtn("ph-up", "现在传")));
+}
+
+function bindPhone() {
+  const load = async () => {
+    try { SS.native = await call("native_status"); } catch (x) { SS.native = { error: String(x) }; }
+    if (S.page === "settings" && SS.tab === "general" && !document.querySelector(".dlg-root")) renderSettings();
+  };
+  if (!SS.nativeAt || Date.now() - SS.nativeAt > 5e3) { SS.nativeAt = Date.now(); load(); }
+  const act = (name) => call("native_action", { name }).then(() => setTimeout(() => { SS.nativeAt = 0; renderSettings(); }, 800)).catch((x) => alert(String(x)));
+  const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
+  on("ph-settings", () => act("open_settings"));
+  on("ph-rec", () => act(SS.native && SS.native.phone_recording ? "record_stop" : "record_start"));
+  on("ph-voice", () => act("voiceprint"));
+  on("ph-up", () => act("upload_now"));
+}
+
+/** 「数据」页：本机、Cloudflare、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */
+function storageView(d) {
+  if (d.error) return section("数据", `<div class="mx-field-error">${esc(d.error)}</div>`);
+  const table = (rows, cols) => `<table class="mx-table store"><thead><tr>${cols.map((c) => `<th${c[2] ? ' class="num"' : ""}>${c[0]}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td${c[2] ? ' class="num mono"' : ""}>${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const L = d.local, C = d.cloud, T = d.transcribe;
+  const local = section("本机", setRow("数据目录", `<span class="mono">${esc((L.path || "").replace(/^\/Users\/[^/]+/, "~"))}</span> · 共 ${bytesText(L.total)}`, (S.status && S.status.mobile ? "" : smallBtn("open-dir", "在访达中打开")))
+    + table(L.items, [["内容", (r) => esc(r.name)], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]), { aside: "全部数据，以这里为准" });
+  const cloud = section("Cloudflare（同步）", C.error ? emptyInline(C.error)
+    : `<p class="note" style="margin:0 0 var(--space-3)"><span class="mono">${esc(hostOf(C.server))}</span> · 共 ${bytesText(C.total)}</p>`
+      + table(C.items, [["内容", (r) => esc(r.name)], ["块数", (r) => numText(r.count), 1], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]));
+  const jobs = T.jobs ? Object.entries(T.jobs).map(([k, n]) => `${{ queued: "排队", running: "在转", done: "转好待取", failed: "失败" }[k] || k} ${n}`).join("、") : "";
+  const asr = section("转写服务", T.error ? `<p class="note" style="margin:0"><span class="mono">${esc(hostOf(T.server))}</span></p>${emptyInline(T.error)}`
+    : setRow(`<span class="mono">${esc(hostOf(T.server))}</span>`, `${jobs || "没有你的任务"} · 占 ${bytesText(T.bytes)}`, `<span class="note">${esc(T.keep)}</span>`));
+  const repo = section("人生记录仓库", setRow(d.repo ? `<span class="mono">${esc((d.repo.path || "").replace(/^\/Users\/[^/]+/, "~"))}</span>` : "没填",
+    d.repo ? `raw/ 共 ${bytesText(d.repo.bytes)} · ${esc(d.repo.keep)}` : "日数据包和日总结的文件夹", smallBtn("repo-edit", "更改")));
+  return local + cloud + asr + repo + `<p class="note">${d.at ? `${hm(new Date(d.at).toISOString())} 取的，开着这一页每分钟更新。` : ""}</p>`;
+}
+
+/** 模型：官方（按账号开通，经同步服务代调，不用填密钥）或自己的网关（地址、模型、密钥；地址和模型有默认值，密钥不预填） */
+function modelDialog() {
+  const cf = S.settings, ks = cf.api_key_source;
+  let mode = cf.model_mode === "official" ? "official" : "custom";
+  const L = SS.llm || {};
+  const state = L.error ? "要先在「账号」里登录。" : L.plan === "official" ? "这个账号已开通。" : L.plan === "stopped" ? "这个账号的官方服务已停用。" : "这个账号还没开通。";
+  openDialog({
+    title: "模型", ok: "保存",
+    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="md-mode">${[["official", "官方"], ["custom", "自己的网关"]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
+      <div id="md-official" ${mode === "official" ? "" : "hidden"}><p class="note">开通后不用填地址和密钥。${esc(state)}</p></div>
+      <div id="md-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>`
+      + dlgField("gw", "网关地址", { value: cf.gateway, mono: true, ph: cf.default_gateway, help: "兼容 OpenAI 接口，到 /v1 为止" })
+      + dlgField("md", "模型", { value: cf.model_segment, mono: true, ph: cf.default_model || "比如 gpt-4.1-mini", help: "10 分钟摘要和日总结都用它。" })
+      + dlgField("key", "密钥", { type: "password", mono: true, ph: ks === "env" ? "在用环境变量里的" : ks ? KEEP : "sk-…", help: "" })
+      + (cf.default_gateway ? `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="md-reset">恢复默认地址和模型</button>` : "") + `</div>`,
+    onOpen: (el) => {
+      const r = el.querySelector("#md-reset");
+      if (r) r.onclick = () => { el.querySelector("#gw").value = cf.default_gateway; el.querySelector("#md").value = cf.default_model; };
+      el.querySelector("#md-mode").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        mode = b.dataset.v;
+        el.querySelectorAll("#md-mode button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+        el.querySelector("#md-official").hidden = mode !== "official";
+        el.querySelector("#md-custom").hidden = mode !== "custom";
+      };
+    },
+    submit: async (el) => {
+      if (mode === "official") { await saveSome({ model_mode: "official" }); SS.llm = null; return renderSettings(); }
+      const gw = dlgVal(el, "gw").replace(/\/+$/, ""), md = dlgVal(el, "md"), key = dlgVal(el, "key");
+      if (!isUrl(gw)) throw "网关地址要以 https:// 开头，比如 https://api.openai.com/v1";
+      if (!md) throw "填一个模型名。";
+      await saveSome({ model_mode: "custom", gateway: gw, model_segment: md, model_daily: md });
+      if (key) { try { await call("set_api_key", { key }); } catch (x) { throw `地址和模型存好了，密钥没存进去：${x}`; } S.settings = await call("get_settings"); }
+      renderSettings();
+    },
+  });
+}
+
+/** 转写服务：地址（默认官方，可换自建）、你在对话里的称呼。认账号用同步服务发的票据，不用另填口令 */
+function asrDialog() {
+  const cf = S.settings;
+  openDialog({
+    title: "转写服务", ok: "保存",
+    body: dlgField("ta", "地址", { value: cf.transcribe_server, mono: true, ph: cf.default_transcribe_server, help: `官方的是 ${esc(cf.default_transcribe_server)}，也可以填自己搭的` })
+      + `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="ta-reset">用官方的</button>`
+      + dlgField("tn", "你在对话里叫什么", { value: cf.speaker_name, ph: "我", help: "转写里你说的话标成这个名字" }),
+    onOpen: (el) => { el.querySelector("#ta-reset").onclick = () => { el.querySelector("#ta").value = cf.default_transcribe_server; }; },
+    submit: async (el) => {
+      const a = dlgVal(el, "ta").replace(/\/+$/, ""), n = dlgVal(el, "tn");
+      if (a && !isUrl(a)) throw "地址要以 https:// 开头。";
+      await saveSome({ transcribe_server: !a || a === cf.default_transcribe_server ? "" : a, speaker_name: n });
+      renderSettings();
+    },
+  });
+}
+
+/** 高德：「Web 服务」Key（地名、附近的店、搜地点），「Web端(JS API)」Key 和安全密钥（能缩放的地图）。留空不改 */
+function amapDialog() {
+  const cf = S.settings, hex = /^[0-9a-f]{32}$/i;
+  let mode = cf.map_mode === "official" ? "official" : "custom";
+  openDialog({
+    title: "高德地图", ok: "保存",
+    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="am-mode">${[["official", "官方"], ["custom", "自己的 Key"]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
+      <div id="am-official" ${mode === "official" ? "" : "hidden"}><p class="note">开通后不用填 Key</p></div>
+      <div id="am-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>`
+      + dlgField("ak", "Web 服务 Key", { type: "password", mono: true, ph: cf.has_amap_key ? KEEP : "", help: `用于地名和附近的店 · ${howto("amap", "怎么获取")}` })
+      + dlgField("jk", "地图 Key", { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "" })
+      + dlgField("jc", "地图安全密钥", { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "", help: `用于显示可拖动的地图 · ${howto("amap", "怎么获取")}` }) + `</div>`,
+    onOpen: (el) => {
+      el.querySelector("#am-mode").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        mode = b.dataset.v;
+        el.querySelectorAll("#am-mode button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+        el.querySelector("#am-official").hidden = mode !== "official";
+        el.querySelector("#am-custom").hidden = mode !== "custom";
+      };
+    },
+    submit: async (el) => {
+      if (mode === "official") { await saveSome({ map_mode: "official" }); LM.loading = null; return renderSettings(); }
+      const ak = dlgVal(el, "ak"), jk = dlgVal(el, "jk"), jc = dlgVal(el, "jc");
+      if (ak && !hex.test(ak)) throw "Web 服务 Key 是 32 位的字母数字。";
+      if ((jk || jc) && !(hex.test(jk) && hex.test(jc))) throw "地图 Key 和安全密钥要一起填，各 32 位";
+      if (!ak && !cf.has_amap_key) throw "填一个 Web 服务 Key，或者改用官方。";
+      if (ak) await call("set_amap_key", { key: ak });
+      if (jk) await call("set_amap_js", { key: jk, code: jc });
+      await saveSome({ map_mode: "custom" }); LM.loading = null; renderSettings();
+    },
+  });
+}
+
+/** 同步服务器：默认官方的，自己部署了同步服务（app/sync-server）可以换。只能在登录前换 */
+function syncServerDialog() {
+  const cf = S.settings;
+  openDialog({
+    title: "同步服务器", ok: "保存",
+    body: dlgField("ss", "地址", { value: cf.sync_server, mono: true, ph: cf.default_sync_server, help: `官方的是 ${esc(cf.default_sync_server)}，也可以填自己部署的` })
+      + `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="ss-reset">用官方的</button>`,
+    onOpen: (el) => { el.querySelector("#ss-reset").onclick = () => { el.querySelector("#ss").value = cf.default_sync_server; }; },
+    submit: async (el) => {
+      const v = dlgVal(el, "ss").replace(/\/+$/, "");
+      if (v && !isUrl(v)) throw "地址要以 https:// 开头。";
+      await saveSome({ sync_server: !v || v === cf.default_sync_server ? "" : v });
+      renderSettings();
+    },
+  });
 }
 
 // ---------- 首次启动引导 ----------
 
-const OB = { step: 0, err: null, msg: null, busy: false, timer: null };
+const OB = { step: 0, err: null, msg: null, busy: false, timer: null, mode: "official" };
 
 async function renderOnboarding() {
   document.documentElement.classList.add("onboarding");
@@ -1694,36 +2366,38 @@ async function renderOnboarding() {
   const msg = (OB.err ? `<div class="mx-field-error">${esc(OB.err)}</div>` : "") + (OB.msg ? `<p class="note">${esc(OB.msg)}</p>` : "");
   const body = [
     `<h1 class="ob-title">Be Authentic. Your Yesterdays.</h1>
-     <p class="ob-lead">Beayy 在后台记下你一天在电脑和手机上做了什么，每 10 分钟写一段摘要，每晚写一份日总结。</p>
+     <p class="ob-lead">Beayy 在后台记下你在电脑和手机上的一天，写成摘要和日总结。</p>
      <div class="ob-list">
-       <div><b>记什么</b><span>电脑：切换了哪个 app 和窗口、打字和发出去的内容、点了什么、屏幕上的文字、在不在电脑前。手机：每个 app 用了多久（看不到 app 里的内容）。密码框不记；你可以指定某些 app 完全不记，也可以随时暂停或删掉最近的记录。</span></div>
-       <div><b>存在哪</b><span>全部存在这台电脑上。写摘要时，会把那 10 分钟的记录发给你自己配置的模型服务。开启同步的话，记录在本机加密后再上传，服务器读不到内容。</span></div>
+       <div><b>记什么</b><span>电脑上的应用、窗口、输入、点击和屏幕文字；手机上每个 app 的时长。密码框不记，可以排除某些 app、随时暂停或删除。</span></div>
+       <div><b>存在哪</b><span>都存在这台电脑上；写摘要时，记录会发给你选的模型服务。</span></div>
      </div>`,
-    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权，直接下一步。</p><p class="ob-lead">记的内容和 Mac 一样：切换程序和窗口、打字和发出去的内容、点了什么、屏幕上的文字、在不在电脑前。以管理员身份运行的程序读不到；iPhone 记录要在 Mac 上读。杀毒软件可能把键盘监听当成可疑行为，放行 Beayy 即可。</p>`
-    : `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。点「去授权」会打开系统设置，把 Beayy 的开关打开再回来。</p>
-     ${permRow("accessibility", "辅助功能", "读输入框内容、点中的元素、窗口标题和屏幕上的文字。")}
-     ${permRow("input_monitoring", "输入监控", "知道什么时候在打字、点击，判断是你本人还是程序在操作。")}
-     ${permRow("full_disk_access", "完全磁盘访问（可选）", "读 iPhone 经 iCloud 同步过来的屏幕使用时间。iPhone 上要打开 设置 → 屏幕使用时间 →「跨设备共享」。")}`,
-    `<h2>模型</h2><p class="ob-lead">摘要和日总结要用一个大模型。填任何兼容 OpenAI 接口的服务都行：OpenAI、各家云厂商、或你自己的转发网关。不填也能先只记录，以后在设置里补。</p>
-     <div class="stack"><div class="mx-field"><label for="ob-gw">接口地址</label><input class="mx-input mono" id="ob-gw" value="${esc(S.draft.gateway || "https://api.openai.com/v1")}"></div>
+    IS_WIN ? `<h2>授权</h2><p class="ob-lead">Windows 上不用授权。杀毒软件拦键盘监听时，放行 Beayy。</p>`
+    : `<h2>授权</h2><p class="ob-lead">macOS 要你亲自打开这三项权限。</p>
+     ${permRow("accessibility", "辅助功能", "读取窗口标题和屏幕上的文字")}
+     ${permRow("input_monitoring", "输入监控", "判断你在打字还是程序在操作")}
+     ${permRow("full_disk_access", "完全磁盘访问（可选）", `读取 iPhone 的屏幕使用时间 · ${howto("screentime", "怎么设置")}`)}`,
+    `<h2>模型</h2><p class="ob-lead">摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不选也能先只记录，以后在设置里改。</p>
+     <div class="mx-seg" role="tablist" id="ob-mode" style="margin-bottom:var(--space-4)">${[["official", "用官方"], ["custom", "自己的网关"]].map(([k, v]) => `<button role="tab" aria-selected="${k === OB.mode}" class="${k === OB.mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div>
+     ${OB.mode === "official" ? `<p class="note">下一步登录账号，开通后就能用</p>` : `<div class="stack"><div class="mx-field"><label for="ob-gw">接口地址</label><input class="mx-input mono" id="ob-gw" value="${esc(S.draft.gateway || "https://api.openai.com/v1")}"></div>
        <div class="mx-field"><label for="ob-model">模型名</label><input class="mx-input mono" id="ob-model" value="${esc(S.draft.model_segment || "")}" placeholder="比如 gpt-4.1-mini"></div>
        <div class="mx-field"><label for="ob-key">密钥</label><input class="mx-input mono" id="ob-key" type="password" autocomplete="off" placeholder="${S.settings.has_api_key ? "已经存过一把，不改就留空" : "sk-…"}"></div>
-       <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ob-test" ${OB.busy ? "disabled" : ""}>${OB.busy ? "测试中…" : "存下并测试一下"}</button></div></div>`,
-    `<h2>同步（可选）</h2><p class="ob-lead">有好几台电脑，或者想在别的设备上看记录，就注册或登录一个账号。记录在本机加密后同步，服务器读不到内容。只用这一台的话可以跳过。</p>
+       <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ob-test" ${OB.busy ? "disabled" : ""}>${OB.busy ? "测试中…" : "存下并测试一下"}</button></div></div>`}`,
+    `<h2>同步（可选）</h2><p class="ob-lead">有好几台设备，就注册或登录一个账号；只用这一台可以跳过。</p>
      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="ob-account">去登录或注册</button></div>`,
   ][OB.step];
   const last = OB.step === steps.length - 1;
   $app.innerHTML = `<div class="ob">${dots}<div class="ob-body">${body}${msg}</div>
     <div class="ob-nav">${OB.step ? `<button class="mx-btn mx-btn--text" id="ob-back">上一步</button>` : "<span></span>"}
-      <button class="mx-btn mx-btn--primary" id="ob-next">${last ? "开始使用" : OB.step === 2 && !S.settings.has_api_key ? "先跳过" : "继续"}</button></div></div>`;
+      <button class="mx-btn mx-btn--primary" id="ob-next">${last ? "开始使用" : OB.step === 2 && OB.mode === "custom" && !S.settings.has_api_key ? "先跳过" : "继续"}</button></div></div>`;
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
+  on("ob-mode", (e) => { const b = e.target.closest("[data-v]"); if (b) { OB.mode = b.dataset.v; OB.err = OB.msg = null; renderOnboarding(); } });
   $app.querySelectorAll("[data-perm]").forEach((b) => (b.onclick = () => call("open_permission", { kind: b.dataset.perm })));
   // 授权这一步：每 2 秒看一次权限，用户从系统设置回来就更新
   clearInterval(OB.timer);
   if (OB.step === 1) OB.timer = setInterval(async () => { const p = (await call("get_status")).permissions || {}; if (JSON.stringify(p) !== JSON.stringify(perm)) renderOnboarding(); }, 2000);
   const saveModel = async () => {
     const gw = document.getElementById("ob-gw").value.trim(), model = document.getElementById("ob-model").value.trim(), key = document.getElementById("ob-key").value.trim();
-    S.draft = { ...S.draft, gateway: gw, model_segment: model, model_daily: model };
+    S.draft = { ...S.draft, model_mode: "custom", gateway: gw, model_segment: model, model_daily: model };
     const { has_api_key, api_key_source, ...rest } = S.draft;
     await call("save_settings", { settings: rest });
     if (key) await call("set_api_key", { key });
@@ -1745,7 +2419,8 @@ async function renderOnboarding() {
   };
   on("ob-account", () => finish("#/settings"));
   on("ob-next", async () => {
-    if (OB.step === 2 && (document.getElementById("ob-model").value.trim() || document.getElementById("ob-key").value.trim())) { try { await saveModel(); } catch (x) { OB.err = String(x); return renderOnboarding(); } }
+    if (OB.step === 2 && OB.mode === "official") { S.draft = { ...S.draft, model_mode: "official" }; await call("save_settings", { settings: { model_mode: "official" } }); }
+    else if (OB.step === 2 && (document.getElementById("ob-model").value.trim() || document.getElementById("ob-key").value.trim())) { try { await saveModel(); } catch (x) { OB.err = String(x); return renderOnboarding(); } }
     if (last) return finish("#/today");
     OB.step++; OB.err = OB.msg = null; renderOnboarding();
   });
@@ -1762,13 +2437,13 @@ async function route() {
   try {
     if (!S.days.length && !S.status) await boot();
     if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
-    if (!S.settings.onboarded && TAURI) return renderOnboarding();
+    if (!S.settings.onboarded && TAURI && !(S.status && S.status.mobile)) return renderOnboarding();
     if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
     if (S.page === "summary") await renderSummary(arg);
     else if (S.page === "rules") await renderRules();
     else if (S.page === "devices") { if (arg) await renderDevice(decodeURIComponent(arg), arg2); else { DEV.id = null; stopEventsTimer(); await renderDevices(); } }
     else if (S.page === "settings") await renderSettings();
-    else await renderToday();
+    else { TD.date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : null; await renderToday(); }
     document.getElementById("main").scrollTop = 0;
   } catch (e) {
     $app.innerHTML = header("出错了") + `<p class="mx-error">${esc(e && e.message ? e.message : e)}</p>`;
@@ -1806,7 +2481,7 @@ if (document.documentElement.dataset.side === "collapsed") { const b = document.
 window.addEventListener("hashchange", route);
 // 今天页每分钟自动刷新（展开着某一段、或正在看别的页时不刷）
 setInterval(async () => {
-  if (S.page !== "today" || document.hidden || $app.querySelector("details[open]")) return;
+  if (S.page !== "today" || isPastDay() || document.hidden || $app.querySelector("details[open]") || document.getElementById("pl-live") || EDITOR) return;
   const y = document.getElementById("main").scrollTop;
   try { [S.days, S.status] = await Promise.all([call("list_days"), call("get_status")]); renderSide(); await renderToday(); } catch (e) { return; }
   document.getElementById("main").scrollTop = y;

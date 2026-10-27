@@ -12,7 +12,7 @@
 //!   有手表录音、停留点（beayy-remote 拉来的 devices/watch-*、iphone-* 里的 speech.utterance、place.visit）时，
 //!   这 10 分钟的对话原文和所在地点也拼进包，标明来源；手表在录时等这一段的转写拉回来再写（最多等 40 分钟）。
 //!
-//! 设置：`<数据根>/settings.json` 的 gateway（任何 OpenAI 兼容接口，默认 https://api.openai.com/v1）、summary_model（没填就不写摘要）。
+//! 设置：`<数据根>/settings.json` 的 gateway（任何 OpenAI 兼容接口）、summary_model，没填用 beayy_core::DEFAULT_GATEWAY／DEFAULT_MODEL（模型也空就不写摘要）。
 //! 密钥：环境变量 BEAYY_API_KEY（或旧名 LIFE_RECORD_API_KEY）＞ 钥匙串（服务 com.fengli.beayy，账户 api_key）。
 
 use chrono::{DateTime, Duration, Local, NaiveDateTime, Utc};
@@ -23,8 +23,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-const GATEWAY: &str = "https://api.openai.com/v1";
-const MODEL: &str = "";
+const GATEWAY: &str = beayy_core::DEFAULT_GATEWAY;
+const MODEL: &str = beayy_core::DEFAULT_MODEL;
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /// 中文约 0.7 token/字，1 万字约 7 千 token，加提示词和输出约 8 千
 const PACK_CHARS: usize = 10000;
@@ -708,12 +708,18 @@ impl Summarizer {
     // ---------- 4. 调模型 ----------
 
     fn settings(&self) -> (String, String) {
-        let raw: Map<String, Value> = fs::read_to_string(self.root.join("settings.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+        let raw = self.raw_settings();
         let get = |k: &str, d: &str| raw.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
         (get("gateway", GATEWAY), get("summary_model", MODEL))
+    }
+
+    fn raw_settings(&self) -> Map<String, Value> {
+        fs::read_to_string(self.root.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    /// 用官方模型（settings.json 的 model_mode＝official）：经同步服务代调，按账号开通，不用自己的密钥
+    fn official(&self) -> bool {
+        self.raw_settings().get("model_mode").and_then(Value::as_str) == Some("official")
     }
 
     fn call_model(&self, pack: &str, prior: &str, known: &[String]) -> Result<(Map<String, Value>, Value), String> {
@@ -736,19 +742,25 @@ impl Summarizer {
     /// 调网关，要一个 JSON 对象回来；返回（对象，用量）
     fn chat(&self, system: &str, user: &str) -> Result<(Map<String, Value>, Value), String> {
         let (gateway, model) = self.settings();
-        if model.is_empty() {
-            return Err("还没设模型：到设置 → 高级 里填摘要用的模型".into());
-        }
-        let key = api_key()?;
+        // 官方：地址是同步服务的代理，认证用账号令牌（模型由服务器定）；自己的网关：地址、模型、密钥都用设置里的
+        let (url, auth) = if self.official() {
+            beayy_sync::official_llm(&beayy_core::data_root()).ok_or("用官方模型要先登录账号：设置 → 账号")?
+        } else {
+            if model.is_empty() {
+                return Err("还没设模型：到设置 → 连接 → 模型 里填".into());
+            }
+            (format!("{}/chat/completions", gateway.trim_end_matches('/')), format!("Bearer {}", api_key()?))
+        };
         let body = json!({"model": model, "temperature": 0.3, "messages": [
             {"role": "system", "content": system}, {"role": "user", "content": user}]});
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .proxy(None)
             .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
             .timeout_global(Some(std::time::Duration::from_secs(120)))
+            // 出错时也读返回体：官方模型的没开通、额度用完写在里面
+            .http_status_as_error(false)
             .build()
             .into();
-        let url = format!("{}/chat/completions", gateway.trim_end_matches('/'));
         let fence = Regex::new(r"^```(?:json)?\s*|\s*```$").unwrap();
         let mut err = String::new();
         for _ in 0..3 {
@@ -757,9 +769,17 @@ impl Summarizer {
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .header("User-Agent", UA)
-                .header("Authorization", &format!("Bearer {key}"))
+                .header("Authorization", &auth)
                 .send_json(&body);
             let r: Result<Value, String> = r.map_err(|e| e.to_string()).and_then(|mut resp| resp.body_mut().read_json::<Value>().map_err(|e| e.to_string()));
+            // 官方模型没开通、停用、额度用完：服务器给的是人话，直接报，不重试
+            if let Ok(v) = &r {
+                if v.get("choices").is_none() {
+                    if let Some(e) = v["error"].as_str() {
+                        return Err(e.to_string());
+                    }
+                }
+            }
             match r {
                 Ok(v) => {
                     let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();

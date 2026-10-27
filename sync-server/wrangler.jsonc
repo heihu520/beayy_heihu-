@@ -3,10 +3,14 @@
 {
   "name": "beayy-sync",
   "main": "worker.js",
+  // privacy.html 当文本模块打进 Worker（GET /privacy）
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   "preview_urls": false,
   "routes": [{ "pattern": "sync.beayy.com", "custom_domain": true }],
+  // 每天 03:17（UTC）删超期的录音块
+  "triggers": { "crons": ["17 3 * * *"] },
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "beayy-sync" }],
   "d1_databases": [{ "binding": "DB", "database_name": "beayy-sync", "database_id": "589ef894-add4-4b94-8800-ee4b26904b86" }]
 }

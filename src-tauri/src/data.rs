@@ -23,7 +23,7 @@ fn settings_path() -> PathBuf {
     default_root().join("settings.json")
 }
 
-fn read_settings_raw() -> Map<String, Value> {
+pub(crate) fn read_settings_raw() -> Map<String, Value> {
     fs::read_to_string(settings_path())
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
@@ -596,7 +596,7 @@ const MERGE_PLACE: i64 = 15 * 60;
 /// 地点标签默认半径（米）
 const PLACE_R: f64 = 150.0;
 
-fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+pub(crate) fn haversine(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
     let h = ((p2 - p1) / 2.0).sin().powi(2) + p1.cos() * p2.cos() * ((lon2 - lon1).to_radians() / 2.0).sin().powi(2);
     2.0 * 6_371_000.0 * h.sqrt().asin()
@@ -629,7 +629,7 @@ fn labels_path() -> PathBuf {
 
 /// 给一个地方起名（家、公司……），存进 Beayy/places/labels.json；半径内已有的就改它，label 为空＝删掉这个名字。
 /// 第一次写时先把外部数据目录 raw/places/labels.json 里已有的抄过来，免得新文件把它们盖住
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn set_place_label(lat: f64, lon: f64, label: String, kind: Option<String>) -> Result<(), String> {
     let mut all = place_labels();
     let label = label.trim().to_string();
@@ -654,10 +654,167 @@ pub fn set_place_label(lat: f64, lon: f64, label: String, kind: Option<String>) 
     fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
+/// 在电脑上确认过是哪家店：Beayy/places/picks.json，{"stays": {停留点 id: {shop, type}}, "remembered": [{name, type, lat, lon, at}]}。
+/// 同手机的 picked.json：remembered 里的店，以后 30 米内的停留只要它在候选里就当已确认
+fn picks_path() -> PathBuf {
+    default_root().join("places").join("picks.json")
+}
+
+fn place_picks() -> Value {
+    fs::read_to_string(picks_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({ "stays": {}, "remembered": [] }))
+}
+
+fn write_json(p: &PathBuf, v: &Value) -> Result<(), String> {
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(v).unwrap()).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, p).map_err(|e| e.to_string())
+}
+
+/// 确认一段停留是哪家店（「这次在哪」里点的，或自己输入的店名）；店的坐标用高德给的，自己输入的用停留点的。
+/// 同一处同名的店只记一条
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn set_place_pick(id: String, shop: String, kind: Option<String>, lat: f64, lon: f64) -> Result<(), String> {
+    let shop = shop.trim().to_string();
+    if shop.is_empty() {
+        return Err("店名是空的".into());
+    }
+    let mut p = place_picks();
+    if !p["stays"].is_object() {
+        p["stays"] = json!({});
+    }
+    // 一段停留可以认定好几家（商场里逛了几家）：再点一次同一家＝取消。旧格式 {shop, type} 先转成 {shops: [...]}
+    let mut shops: Vec<Value> = picks_of(&p["stays"][&id]);
+    let had = shops.iter().any(|x| x["name"] == shop.as_str());
+    if had {
+        shops.retain(|x| x["name"] != shop.as_str());
+    } else {
+        shops.push(json!({ "name": shop, "type": kind }));
+    }
+    if shops.is_empty() {
+        if let Some(m) = p["stays"].as_object_mut() {
+            m.remove(&id);
+        }
+    } else {
+        p["stays"][&id] = json!({ "shops": shops });
+    }
+    if had {
+        return write_json(&picks_path(), &p);
+    }
+    let mut rem: Vec<Value> = p["remembered"].as_array().cloned().unwrap_or_default();
+    rem.retain(|x| !(x["name"] == shop.as_str() && haversine(lat, lon, x["lat"].as_f64().unwrap_or(0.0), x["lon"].as_f64().unwrap_or(0.0)) <= 30.0));
+    rem.push(json!({ "name": shop, "type": kind, "lat": (lat * 1e6).round() / 1e6, "lon": (lon * 1e6).round() / 1e6, "at": utc_iso(Utc::now()) }));
+    p["remembered"] = json!(rem);
+    write_json(&picks_path(), &p)
+}
+
+/// 一段停留认定过的店（新格式 {shops: [{name, type}]}，旧格式 {shop, type}）
+fn picks_of(v: &Value) -> Vec<Value> {
+    if let Some(a) = v["shops"].as_array() {
+        return a.clone();
+    }
+    v["shop"].as_str().map(|n| vec![json!({ "name": n, "type": v["type"] })]).unwrap_or_default()
+}
+
+/// 撤销对一段停留的确认（名字退回只写区域）
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn clear_place_pick(id: String) -> Result<(), String> {
+    let mut p = place_picks();
+    if let Some(m) = p["stays"].as_object_mut() {
+        m.remove(&id);
+    }
+    write_json(&picks_path(), &p)
+}
+
+/// 「地点 · 常去」：最近 days 天（默认 30）的停留按地方合计。起过名的按名字合（没去过的也列，次数 0），
+/// 没起名的按区域合（同一个区县 · 区域），只列去过 5 次以上的。只用缓存，不问高德（没缓存过分级的用手机传来的地名）
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn place_stats(days: Option<i64>) -> Value {
+    let days = days.unwrap_or(30).clamp(1, 120);
+    let today = Local::now().date_naive();
+    let labels = place_labels();
+    // 名字 → (次数, 秒, 最近一天, 纬度, 经度, 区县, 种类)
+    let mut agg: BTreeMap<(bool, String), (BTreeSet<String>, f64, String, f64, f64, String, String, String)> = BTreeMap::new();
+    for k in 0..days {
+        let date = today - Duration::days(k);
+        let Some(p) = places_day_opt(date, false) else { continue };
+        for v in p["visits"].as_array().cloned().unwrap_or_default() {
+            let named = v["label"].as_str().filter(|x| !x.is_empty()).map(String::from);
+            let area = v["admin"]["area"].as_str().map(String::from).or_else(|| v["place_name"].as_str().and_then(|n| n.split(" · ").nth(1).or(n.split(" · ").next()).map(String::from)));
+            let Some(key) = named.clone().or(area) else { continue };
+            let sec = match (ts_of(&v["start"]), ts_of(&v["end"]).or(Some(Utc::now()))) { (Some(a), Some(z)) => (z - a).num_seconds().max(0) as f64, _ => 0.0 };
+            let e = agg.entry((named.is_some(), key)).or_insert_with(|| (BTreeSet::new(), 0.0, String::new(), v["lat"].as_f64().unwrap_or(0.0), v["lon"].as_f64().unwrap_or(0.0), v["admin"]["district"].as_str().unwrap_or("").to_string(), v["type"].as_str().unwrap_or("").to_string(), v["admin"]["city"].as_str().unwrap_or("").to_string()));
+            e.0.insert(v["id"].as_str().unwrap_or("").to_string());
+            e.1 += sec;
+            let d = date.format("%Y-%m-%d").to_string();
+            if d > e.2 {
+                e.2 = d;
+            }
+        }
+    }
+    let row = |name: &str, (ids, sec, last, lat, lon, district, kind, city): &(BTreeSet<String>, f64, String, f64, f64, String, String, String)| json!({ "name": name, "count": ids.len(), "sec": sec.round(), "last": last, "lat": lat, "lon": lon, "district": district, "city": city, "type": kind });
+    let named: Vec<Value> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let n = l["label"].as_str().unwrap_or("");
+            let mut r = agg.get(&(true, n.to_string())).map(|x| row(n, x)).unwrap_or_else(|| json!({ "name": n, "count": 0, "sec": 0, "last": null }));
+            r["index"] = json!(i);
+            r["type"] = l["type"].clone();
+            r["address"] = l["address"].clone();
+            r["r"] = l["r"].clone();
+            r
+        })
+        .collect();
+    let mut named = named;
+    named.sort_by(|a, b| b["sec"].as_f64().unwrap_or(0.0).partial_cmp(&a["sec"].as_f64().unwrap_or(0.0)).unwrap());
+    let mut frequent: Vec<Value> = agg.iter().filter(|((n, _), x)| !n && x.0.len() >= 5).map(|((_, k), x)| row(k, x)).collect();
+    frequent.sort_by(|a, b| b["sec"].as_f64().unwrap_or(0.0).partial_cmp(&a["sec"].as_f64().unwrap_or(0.0)).unwrap());
+    frequent.truncate(12);
+    json!({ "days": days, "named": named, "frequent": frequent })
+}
+
+/// 常去的地方（自己起过名的）：[{label, type, lat, lon, r, address?}]，设置页列出来改
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn list_place_labels() -> Vec<Value> {
+    place_labels()
+}
+
+/// 改常去的地方里的一项：名字、种类、范围（米）、地址；名字空＝删掉。第一次写同 set_place_label（先把外部数据目录的抄过来）
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn edit_place_label(index: usize, label: String, kind: String, r: f64, address: Option<String>) -> Result<(), String> {
+    let mut all = place_labels();
+    if index >= all.len() {
+        return Err("这一项不在了".into());
+    }
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        all.remove(index);
+    } else {
+        all[index]["label"] = json!(label);
+        all[index]["type"] = json!(kind);
+        all[index]["r"] = json!(r.clamp(30.0, 1000.0));
+        match address.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) {
+            Some(a) => all[index]["address"] = json!(a),
+            None => {
+                if let Some(o) = all[index].as_object_mut() {
+                    o.remove("address");
+                }
+            }
+        }
+    }
+    write_json(&labels_path(), &json!(all))
+}
+
 /// 某天的停留点（iPhone、手表记的位置），读法同 脚本/日数据包.py 的 read_places／load_stays：
 /// 同一个停留点取最新一版（rev 大的）；可信程度低的（slc、手表）和更可信的重叠超过自身一半的丢掉；
 /// 还没离开的算到下一个到达或现在；同一地点 15 分钟内并成一段，重叠的前一段截到后一段开始。没有任何停留点记录时返回 None
 pub fn places_day(date: NaiveDate) -> Option<Value> {
+    places_day_opt(date, true)
+}
+
+/// online＝false 只用缓存，不问高德（统计 30 天常去的地方时用，免得一次问几百次）
+pub fn places_day_opt(date: NaiveDate, online: bool) -> Option<Value> {
     let (s, e) = day_bounds(date);
     let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
     // 到达在前一天的也读（在家过夜）
@@ -685,12 +842,36 @@ pub fn places_day(date: NaiveDate) -> Option<Value> {
         .into_iter()
         .filter(|r| {
             let Some((a, d)) = span(r, now) else { return false };
+            // 到达和离开同一刻：作废的记录（比如误传上来又撤掉的），不算停留，也不拿来截断前一段
+            if ts_of(&r["depart"]).is_some() && d <= a {
+                return false;
+            }
             let (rank, dur) = (place_rank(r), ((d - a).num_seconds() as f64).max(1.0));
             !ranked.iter().any(|(k, va, vd)| *k > rank && ((*vd).min(d) - (*va).max(a)).num_seconds() as f64 > dur / 2.0)
         })
         .collect();
     rows.sort_by_key(|r| ts_of(&r["arrive"]).or(ts_of(&r["depart"])));
+    // 同一段两条记录（系统到访和位置变化）：时间用留下的那条，地名和候选用定位更准的那条（误差大的点容易落到隔壁区域）。同手机
+    let all: Vec<&Value> = last.values().copied().collect();
+    // 算同一段：到达相差 10 分钟内，离开也相差 10 分钟内（有一条没离开的不比离开）。没离开的记录不能按「算到现在」比重叠，会把后面几段都吞进来
+    let same = |x: &Value, r: &Value| -> bool {
+        let near = |a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>| match (a, b) {
+            (Some(a), Some(b)) => (a - b).num_seconds().abs() <= 600,
+            _ => true,
+        };
+        ts_of(&x["arrive"]).is_some() && ts_of(&r["arrive"]).is_some() && near(ts_of(&x["arrive"]), ts_of(&r["arrive"])) && near(ts_of(&x["depart"]), ts_of(&r["depart"]))
+    };
+    let precise = |r: &Value| -> Option<&Value> {
+        let acc = r["acc"].as_f64().unwrap_or(f64::MAX);
+        all.iter()
+            .copied()
+            .filter(|x| x["name"].is_string() && x["acc"].as_f64().unwrap_or(f64::MAX) < acc && same(x, r))
+            .min_by(|x, y| x["acc"].as_f64().unwrap_or(f64::MAX).partial_cmp(&y["acc"].as_f64().unwrap_or(f64::MAX)).unwrap())
+    };
+    let picks = place_picks();
     let labels = place_labels();
+    // 家在哪个城市（种类是家的那个起名地方）：别的城市的停留，名字前面加城市
+    let home_city = labels.iter().find(|x| x["type"] == "home").and_then(|h| crate::amap::admin(h["lat"].as_f64()?, h["lon"].as_f64()?, 20.0, online)).and_then(|a| a["city"].as_str().map(String::from));
     let mut out: Vec<Map<String, Value>> = vec![];
     for (i, r) in rows.iter().enumerate() {
         let a = ts_of(&r["arrive"]).unwrap_or(s);
@@ -708,8 +889,71 @@ pub fn places_day(date: NaiveDate) -> Option<Value> {
             .map(|x| (haversine(lat, lon, x["lat"].as_f64().unwrap_or(0.0), x["lon"].as_f64().unwrap_or(0.0)), x))
             .filter(|(m, x)| *m <= x["r"].as_f64().unwrap_or(PLACE_R))
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        let label = lab.and_then(|(_, x)| x["label"].as_str()).map(String::from);
-        let name = r["name"].as_str().unwrap_or("").to_string();
+        // 名字：电脑上起的（labels.json）优先，没有就用手机上起的（随停留点传来的 label）
+        let label = lab.and_then(|(_, x)| x["label"].as_str()).or(r["label"].as_str().filter(|x| !x.is_empty())).map(String::from);
+        // 手机已经确认了店（名字三层「区 · 区域 · 店」）的不换；不然地名和候选取定位更准的那条
+        let src = if r["name"].as_str().map(|n| n.split(" · ").count() >= 3).unwrap_or(false) { *r } else { precise(r).unwrap_or(r) };
+        let mut name = src["name"].as_str().unwrap_or("").to_string();
+        let mut guesses = src["guesses"].clone();
+        // 在哪（电脑为准）：电脑用高德取完整分级（国家 › 省 › 市 › 区县 › 街道 › 区域），名字的前两层「区县 · 区域」用它；问不到才用手机传来的
+        let (slat0, slon0) = (src["lat"].as_f64().unwrap_or(lat), src["lon"].as_f64().unwrap_or(lon));
+        let admin = crate::amap::admin(slat0, slon0, src["acc"].as_f64().unwrap_or(50.0), online);
+        // 手机上认定过店：10-21 15:00 起手机用高德取名，名字只写「区 · 区域」，三层的就是认定过的；之前收到的三层是苹果反查的门牌，不算
+        let phone_pick = name.split(" · ").count() >= 3 && r["recorded_at"].as_str().map(|t| t >= "2026-10-21T07:00:00").unwrap_or(false);
+        if let Some(ad) = &admin {
+            let region2 = [ad["district"].as_str(), ad["area"].as_str()].iter().flatten().copied().collect::<Vec<_>>().join(" · ");
+            if !region2.is_empty() {
+                let shop = if phone_pick { name.split(" · ").last().map(String::from) } else { None };
+                name = [Some(region2), shop].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            }
+        } else if !phone_pick {
+            name = name.split(" · ").take(2).collect::<Vec<_>>().join(" · ");
+        }
+        // 是哪家店（电脑为准）：在电脑上确认过的（picks.json）写进名字；手机上确认过的（名字已经三层）照用；
+        // 不然电脑自己用高德算候选（起过名的地方不算），手机传来的候选只在高德问不到时兜底。
+        // 第一名把握到 50% 以上（比其余候选加起来还像）就自动写进名字（30 米内确认过的店算分时加了很多，通常就是它）。没离开的记录（系统漏送离开）按下一段到达算待了多久
+        let region = name.split(" · ").take(2).collect::<Vec<_>>().join(" · ");
+        let id = r["place_id"].as_str().unwrap_or("");
+        let remembered: Vec<Value> = picks["remembered"].as_array().cloned().unwrap_or_default();
+        let picked: Vec<String> = picks_of(&picks["stays"][id]).iter().filter_map(|x| x["name"].as_str().map(String::from)).collect();
+        let mut confirmed: Option<(Vec<String>, &str)> = if picked.is_empty() { None } else { Some((picked, "picked")) };
+        if confirmed.is_none() && phone_pick {
+            confirmed = Some((vec![name.split(" · ").last().unwrap_or("").to_string()], "phone"));
+        }
+        // 候选总是算（认定过的也算，好再加别的店）；自动认定只在一家都没认定时
+        if label.is_none() {
+            let (slat, slon) = (src["lat"].as_f64().unwrap_or(lat), src["lon"].as_f64().unwrap_or(lon));
+            let mine = crate::amap::guesses_for(id, r["rev"].as_i64().unwrap_or(1), slat, slon, src["acc"].as_f64().unwrap_or(50.0), ts_of(&r["arrive"]), ts_of(&r["depart"]).or(next), &remembered, online);
+            if let Some(g) = mine {
+                guesses = json!(g);
+            }
+            if confirmed.is_none() {
+                if let Some(top) = guesses.as_array().and_then(|g| g.first()).filter(|t| t["p"].as_f64().unwrap_or(0.0) >= 0.5) {
+                    let shop = top["name"].as_str().unwrap_or("").to_string();
+                    let known = remembered.iter().any(|x| x["name"] == shop.as_str() && haversine(lat, lon, x["lat"].as_f64().unwrap_or(0.0), x["lon"].as_f64().unwrap_or(0.0)) <= 30.0);
+                    confirmed = Some((vec![shop], if known { "remembered" } else { "auto" }));
+                }
+            }
+        }
+        // 名字：区域 · 店（几家用顿号，三家以上写「等 N 家」）
+        if let Some((shops, how)) = &confirmed {
+            if *how != "phone" {
+                let names: Vec<String> = shops.iter().map(|x| crate::amap::short(x)).collect();
+                let list = if names.len() > 2 { format!("{}、{} 等 {} 家", names[0], names[1], names.len()) } else { names.join("、") };
+                name = [region.as_str(), list.as_str()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            }
+        }
+        // 在做什么：候选的置信度按高德大类加起来，取最大的（同手机）
+        let doing = guesses.as_array().and_then(|gs| {
+            let mut m: BTreeMap<String, f64> = BTreeMap::new();
+            for g in gs {
+                let major = g["type"].as_str().unwrap_or("").split(';').next().unwrap_or("").to_string();
+                if !major.is_empty() {
+                    *m.entry(major).or_insert(0.0) += g["p"].as_f64().unwrap_or(0.0);
+                }
+            }
+            m.into_iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|(k, p)| json!({ "kind": k, "p": p }))
+        });
         let show = label.clone().unwrap_or_else(|| name.clone());
         if let Some(prev) = out.last_mut() {
             let pd = ts_of(&prev["end_t"]).unwrap();
@@ -738,6 +982,15 @@ pub fn places_day(date: NaiveDate) -> Option<Value> {
         m.insert("label".into(), json!(label));
         m.insert("type".into(), lab.and_then(|(_, x)| x["type"].as_str()).map(|t| json!(t)).unwrap_or(Value::Null));
         m.insert("source".into(), r["place_source"].clone());
+        m.insert("acc".into(), src["acc"].clone());
+        // 完整分级；和家不在一个城市时给 city_prefix，页面写在名字前面（「上海 · 静安寺」）
+        let city = admin.as_ref().and_then(|a| a["city"].as_str()).map(String::from);
+        m.insert("city_prefix".into(), match (&city, &home_city) { (Some(c), Some(h)) if c != h => json!(c), _ => Value::Null });
+        m.insert("admin".into(), admin.unwrap_or(Value::Null));
+        m.insert("guesses".into(), if label.is_none() { guesses } else { Value::Null });
+        m.insert("doing".into(), if label.is_none() { doing.unwrap_or(Value::Null) } else { Value::Null });
+        m.insert("shops".into(), confirmed.as_ref().map(|(s, _)| json!(s)).unwrap_or(json!([])));
+        m.insert("confirmed".into(), confirmed.map(|(_, how)| json!(how)).unwrap_or(Value::Null));
         out.push(m);
     }
     // end：还在那儿（没离开、后面也没有新的到达）给 null，页面算到现在
@@ -784,7 +1037,7 @@ fn computer_hours(c: &Value) -> Value {
     Value::Object(m)
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn list_days() -> Vec<Value> {
     let repo = repo_path();
     let names = app_names();
@@ -830,7 +1083,7 @@ pub fn list_days() -> Vec<Value> {
         .collect()
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_day(date: String) -> Value {
     let repo = repo_path();
     let Ok(nd) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else { return Value::Null };
@@ -972,12 +1225,12 @@ fn rules_path() -> PathBuf {
     default_root().join("rules.json")
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_rules() -> Value {
     fs::read_to_string(rules_path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!([]))
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn save_rules(rules: Value) -> Result<(), String> {
     fs::create_dir_all(default_root()).map_err(|e| e.to_string())?;
     fs::write(rules_path(), serde_json::to_string_pretty(&rules).unwrap()).map_err(|e| e.to_string())
@@ -985,32 +1238,50 @@ pub fn save_rules(rules: Value) -> Result<(), String> {
 
 
 /// settings.json 的键沿用 Python 摘要脚本的叫法（summary_model、daily_model、blacklist），对网页换成 COMMANDS.md 的叫法
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_settings() -> Value {
     let s = read_settings_raw();
     let get = |k: &str, d: &str| s.get(k).and_then(|v| v.as_str()).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
     json!({
-        "gateway": get("gateway", "https://api.openai.com/v1"),
-        "model_segment": get("summary_model", ""),
-        "model_daily": get("daily_model", ""),
+        "gateway": get("gateway", beayy_core::DEFAULT_GATEWAY),
+        "model_segment": get("summary_model", beayy_core::DEFAULT_MODEL),
+        "model_daily": get("daily_model", &get("summary_model", beayy_core::DEFAULT_MODEL)),
+        "default_gateway": beayy_core::DEFAULT_GATEWAY,
+        "default_model": beayy_core::DEFAULT_MODEL,
+        "transcribe_server": beayy_remote::cloud::transcribe_server(),
+        "default_transcribe_server": beayy_core::DEFAULT_TRANSCRIBE,
+        "speaker_name": beayy_remote::cloud::speaker_name(),
+        "sync_server": crate::sync::server(),
+        "default_sync_server": beayy_sync::DEFAULT_SERVER,
         "repo_path": get("repo_path", ""),
         "onboarded": s.get("onboarded").and_then(Value::as_bool).unwrap_or(false),
         // 默认值和采集端一致（beayy-capture 的 DEFAULT_BLOCKLIST）：Windows 按 exe 文件名
         "blocklist": s.get("blacklist").cloned().unwrap_or(if cfg!(target_os = "windows") { json!(["1password"]) } else { json!(["com.1password.1password"]) }),
         "has_api_key": beayy_summary::api_key_source().is_some(),
+        // 模型用官方的（按账号开通，经同步服务代调）还是自己的网关；没选过的：有自己的密钥算自己的，否则官方
+        "model_mode": s.get("model_mode").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| if beayy_summary::api_key_source().is_some() { "custom".into() } else { "official".into() }),
         "api_key_source": beayy_summary::api_key_source(),
         "relay_server": get("relay_server", ""),
         "has_relay_token": beayy_core::secret_get(beayy_remote::SECRET).is_some(),
+        "has_amap_key": beayy_core::secret_get(crate::amap::SECRET).is_some(),
+        "map_mode": if crate::amap::official() { "official" } else { "custom" },
+        "has_amap_js": beayy_core::secret_get("amap_js_key").is_some() && beayy_core::secret_get("amap_js_code").is_some(),
     })
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn save_settings(settings: Value) -> Result<(), String> {
     let mut s = read_settings_raw();
-    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server")];
+    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server"), ("sync_server", "sync_server"), ("transcribe_server", "transcribe_server"), ("speaker_name", "speaker_name"), ("model_mode", "model_mode"), ("map_mode", "map_mode")];
     for (from, to) in map {
-        if let Some(v) = settings.get(from) {
-            s.insert(to.into(), v.clone());
+        if let Some(mut v) = settings.get(from).cloned() {
+            // 同步服务器、转写服务填的就是官方的，存成空（官方地址以后变了跟着变）
+            if (from == "sync_server" && v.as_str().map(|x| x.trim_end_matches('/')) == Some(beayy_sync::DEFAULT_SERVER))
+                || (from == "transcribe_server" && v.as_str().map(|x| x.trim_end_matches('/')) == Some(beayy_core::DEFAULT_TRANSCRIBE))
+            {
+                v = json!("");
+            }
+            s.insert(to.into(), v);
         }
     }
     fs::create_dir_all(default_root()).map_err(|e| e.to_string())?;
@@ -1018,13 +1289,13 @@ pub fn save_settings(settings: Value) -> Result<(), String> {
 }
 
 /// 存密钥：macOS 进钥匙串，Windows 写数据目录里的文件（见 beayy_summary::store_api_key）；不回传网页
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn set_api_key(key: String) -> Result<(), String> {
     beayy_summary::store_api_key(key.trim())
 }
 
 /// 存录音服务器（手表对话、iPhone 停留点）的口令：macOS 进钥匙串，Windows 写数据目录；不回传网页。空字符串＝删掉
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn set_relay_token(token: String) -> Result<(), String> {
     beayy_core::secret_set(beayy_remote::SECRET, token.trim())
 }
@@ -1033,7 +1304,7 @@ pub fn set_relay_token(token: String) -> Result<(), String> {
 
 /// 删掉本机电脑事件里某时刻之后的记录，连同这些分段的 10 分钟摘要（摘要下一轮按剩下的事件重写）。
 /// 只动本机这台电脑的事件（同步来的别的设备不动）；iPhone 记录、已经归档进仓库 raw/ 的不动。返回删掉的条数
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, String> {
     let from: DateTime<Utc> = if today == Some(true) {
         day_bounds(Local::now().date_naive()).0.with_timezone(&Utc)
@@ -1093,7 +1364,7 @@ pub fn delete_since(minutes: Option<i64>, today: Option<bool>) -> Result<usize, 
 /// 或往回翻了 48 个分段（8 小时）就停，不全量扫。before＝只要这个时刻以前的（「加载更早」接着读）；
 /// types＝只要这些种类，以「.」结尾的按前缀算（keyboard. 包含 keyboard.text_input、keyboard.submit……）。
 /// 打的字、界面文字原样返回（采集时密码框已经打码），只给本机界面看，不进网站
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn recent_events(device: String, before: Option<String>, limit: Option<usize>, types: Option<Vec<String>>) -> Result<Value, String> {
     if device.is_empty() || !device.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("设备编号不对".into());
@@ -1141,7 +1412,7 @@ pub fn recent_events(device: String, before: Option<String>, limit: Option<usize
 }
 
 /// 数据目录里的每台设备（devices/<设备>/）：种类、是不是本机、记录从哪天开始、最近一条、条数、占用空间。缓存 60 秒
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn list_devices() -> Vec<Value> {
     let mut g = DEV_CACHE.lock().unwrap();
     if let Some((t, v)) = g.as_ref() {
@@ -1157,7 +1428,7 @@ pub fn list_devices() -> Vec<Value> {
 static DEV_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
 
 /// 给设备改名（空＝改回默认名），会同步到别的设备
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn rename_device(id: String, name: String) -> Result<(), String> {
     beayy_sync::rename_device(&beayy_core::data_root(), &id, &name)?;
     *DEV_CACHE.lock().unwrap() = None;
@@ -1174,6 +1445,11 @@ fn read_devices() -> Vec<Value> {
     devs.sort_by_key(|e| e.file_name());
     for dev in devs {
         let id = dev.file_name().to_string_lossy().to_string();
+        // 手机版自己算出的那份（-m）和它的同步客户端（iosapp-）不是设备，不列；
+        // 账号的配置、声纹（account）也不是设备：0.2.14 以前会把它们当分段下载下来
+        if id.ends_with("-m") || id.starts_with("iosapp-") || id == "account" {
+            continue;
+        }
         let kind = id.split('-').next().unwrap_or("other").to_string();
         let mut segs: Vec<PathBuf> = fs::read_dir(dev.path().join("segments")).map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default();
         segs.sort();
@@ -1220,7 +1496,7 @@ fn read_devices() -> Vec<Value> {
 // ---------- 头像和名称 ----------
 
 /// 本机存的显示名称和头像（settings.json 的 profile_*）；没设名称时用账号邮箱 @ 前面那段，再没有就「我」
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_profile() -> Value {
     let s = read_settings_raw();
     let email = beayy_sync::load(&beayy_core::data_root()).and_then(|a| a.email);
@@ -1244,7 +1520,7 @@ pub fn profile_updated() -> i64 {
 }
 
 /// 改名称和头像：先存本机；登录着就同时存到账号上（换设备登录也是这个头像和名字）
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), String> {
     if let Some(a) = &avatar {
         if !a.starts_with("data:image/") || a.len() > 300_000 {
@@ -1264,7 +1540,7 @@ pub async fn save_profile(name: String, avatar: Option<String>) -> Result<(), St
 // ---------- 项目（领域 · 项目） ----------
 
 /// 所有出现过的项目：规范名、领域、累计时长、最近一次、被合并进来的别名
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn list_projects() -> Vec<Value> {
     let sm = beayy_summary::Summarizer::new(default_root());
     let aliases = sm.aliases();
@@ -1297,18 +1573,28 @@ pub fn list_projects() -> Vec<Value> {
     out
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn merge_project(from: String, into: String) -> Result<(), String> {
     beayy_summary::Summarizer::new(default_root()).merge_project(&from, &into)
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn set_project_domain(project: String, domain: String) -> Result<(), String> {
     beayy_summary::Summarizer::new(default_root()).set_project_domain(&project, &domain)
 }
 
 /// 首次引导里「测试一下」：用现在的网关、模型、密钥问一句
-#[tauri::command]
+/// 官方服务（模型、转写、地图）在这个账号上开通了没有、本月各用了多少：
+/// {plan: null|"official"|"stopped", month, llm: {used, quota}, asr: {used, quota}（秒）, map: {used, quota}（次）}；没登录返回 {error}
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn llm_status() -> Value {
+    match beayy_sync::account(&beayy_core::data_root()) {
+        Ok(a) => a.get("services").cloned().unwrap_or(json!({"plan": null})),
+        Err(e) => json!({"error": e}),
+    }
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn test_model() -> Result<(), String> {
     beayy_summary::Summarizer::new(default_root()).ask("只返回一个 JSON 对象：{\"ok\": true}", "测试连接").map(|_| ())
 }

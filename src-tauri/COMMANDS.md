@@ -6,14 +6,17 @@
 
 | 命令 | 参数 | 返回 |
 |---|---|---|
-| `get_status` | — | `{ "permissions": {"accessibility": bool, "input_monitoring": bool, "full_disk_access": bool}, "capturing": bool, "paused": bool, "events_today": int, "phone_sync": "iphone-1A2B3C4D 同步截至 …", "relay_sync": "新增 12 条，服务器最近一天 2026-10-16"（录音服务器上一轮拉取的结果或错误；没设置服务器是「没设置录音服务器」）, "device": "mac-…", "version": "0.2.0", "paused_until": ISO 或 null, "login_item": bool }`。`events_today` 是今天本机写的总条数（不是本次启动以来） |
+| `get_status` | — | `{ "permissions": {"accessibility": bool, "input_monitoring": bool, "full_disk_access": bool}, "capturing": bool, "paused": bool, "events_today": int, "phone_sync": "iphone-1A2B3C4D 同步截至 …", "relay_sync": "新增 12 条，服务器最近一天 2026-10-16"（旧 v1 录音服务器上一轮拉取的结果或错误，过渡期）, "cloud_sync": "新增 3 条，转写 2 段"（录音和停留点走账号同步的上一轮结果，见 beayy-remote/src/cloud.rs；没登录是「没登录账号」）, "device": "mac-…", "version": "0.2.0", "paused_until": ISO 或 null, "login_item": bool }`。`events_today` 是今天本机写的总条数（不是本次启动以来） |
 | `list_days` | — | `[{ "date": "2026-10-15", "line": "今天的一句话（没有日总结为 null）", "active_sec": int, "phone_sec": int, "hc": {"09": 秒, …}, "hp": {"09": 秒, …} }]`，新的在前；`hc`／`hp` 是每小时电脑／手机分钟数（同网站索引），给作息图用 |
 | `get_day` | `{ "date": "YYYY-MM-DD" }` | `{ "date", "pack": <日数据/日数据_YYYYMMDD.json 原样，没有为 null>, "summary_md": <日总结 Markdown 原文或 null>, "segments": [{ "start": ISO, "end": ISO, "kind": "10min"/"6h"/"idle"（连续「不在电脑前」合成的一段）, "source": "beayy"/"codex", "title", "description", "memory", "context": [..] }], "phone": { "total_sec", "pickups", "late_sec", "night_sec", "apps": [{"bundle_id", "name", "sec"}], "hours": {"09": 秒, …}, "synced_until": ISO, "sessions": [{ "start", "end", "sec", "kind": "session"/"brief"（连着的零碎拿起合成一行）, "count", "apps": [{"bundle_id", "name", "sec"}] }] }, "live": 今天（或还没有数据包的那天）从自采事件实时算的电脑 `{ "active_sec", "first", "last", "switches", "active_hours": {"09": 秒}, "spans": [[ISO, ISO]], "apps": [{"name", "bundle_id", "sec"}] }` 或 null, "speech": 对话（手表录的，和 iPhone 自己录的；见下）或 null（没有 watch-* 设备、iPhone 也没录过）, "places": { "visits": [{ "id", "start": ISO, "end": ISO 或 null（还在那儿）, "arrive_known": bool, "arrive": 真实到达时刻 ISO（前一天到的也给）或 null, "name": 显示名（自己起的标签，没有就是反查的地名）, "place_name", "label", "type": "home"/"work"/"other"/null, "source": "visit"/"slc"/"watch", "device": 记它的设备（iphone-…／watch-…）, "lat", "lon" }] }（读 iphone-*、watch-* 两种设备；读法同 脚本/日数据包.py 的 read_places／load_stays：同 id 取 rev 最大的一版；可信程度 iPhone CLVisit > slc > 手表，低的和高的重叠过半丢掉；没离开的算到下一个到达或现在；同一地点 15 分钟内并段。标签读 Beayy/places/labels.json，没有再读外部数据目录 raw/places/labels.json：[{label, type, lat, lon, r（米，默认 150）}] } 或 null }`；segments 每段另有 `"apps": [bundle id]`。`speech`：`{ "recorded_sec", "talk_sec"（所有人说话秒数）, "self": 本人在转写里的名字或 null, "self_sec", "speakers_sec": {"他人1": 秒}, "hours": {"09": 说话秒}, "first", "last", "recorded": [[ISO, ISO]], "gaps": [[ISO, ISO]]（录音断档，空 5 分钟以上）, "battery": [首, 末] 或 null, "segments": 段数, "conversations": [{ "start", "end", "device": 录它的设备（watch-…；没戴手表时 iPhone 自己录的是 iphone-…）, "talk": [{"speaker", "sec"}], "lines": [{"start", "end", "speaker", "text"}]（同一个人 20 秒内接着说的并成一行） }]（两句之间空 3 分钟以上算另一段，同 脚本/日数据包.py） }` |
 | `get_rules` | — | `[{ "id": "r1", "text": "21:00 硬停", "enabled": true }]`（存 `Beayy/rules.json`） |
 | `save_rules` | `{ "rules": [...] }` | `null` |
-| `get_settings` | — | `{ "gateway": "https://api.openai.com/v1", "model_segment": "gpt-4.1-mini", "model_daily": "gpt-4.1-mini", "repo_path": "", "blocklist": ["com.1password.1password"], "has_api_key": bool, "api_key_source": "env"/"keychain"/null, "onboarded": bool, "relay_server": "https://audio.example.com"（录音服务器，没填为空）, "has_relay_token": bool }`（存 `Beayy/settings.json`，密钥在钥匙串，不经网页回传） |
-| `save_settings` | `{ "settings": {...} }`（不含密钥） | `null` |
+| `get_settings` | — | `{ "gateway": "https://api.openai.com/v1", "model_segment": "gpt-4.1-mini", "model_daily": "gpt-4.1-mini", "repo_path": "", "blocklist": ["com.1password.1password"], "has_api_key": bool, "model_mode"、"map_mode": "official"/"custom"（官方服务按账号开通，或自己的网关、自己的高德 Key）, "api_key_source": "env"/"keychain"/null, "onboarded": bool, "relay_server": "https://audio.example.com"（录音服务器，没填为空）, "has_relay_token": bool, "has_amap_key": bool, "has_amap_js": bool, "default_gateway"/"default_model"（编译时的默认，BEAYY_DEFAULT_GATEWAY／BEAYY_DEFAULT_MODEL）, "sync_server"（注册登录用的同步服务器，没填＝官方）, "default_sync_server" }`（没填的网关、模型按默认值给；存 `Beayy/settings.json`，密钥在钥匙串，不经网页回传） |
+| `save_settings` | `{ "settings": {...} }`（不含密钥；只写传进来的键，可以只传一两个） | `null` |
 | `set_api_key` | `{ "key": "sk-…" }` | `null`（写钥匙串） |
+| `llm_status` | — | `{plan: null\|"official"\|"stopped", month, llm: {used, quota}, asr: {used, quota}（秒）, map: {used, quota}（次）}` 或 `{error}`（官方服务在这个账号上开通了没有、三项本月各用了多少；要联网，异步；方案见 报告/方案_20261021_官方模型开通.md） |
+| `phone_read_now` | — | `null`（iPhone 屏幕使用时间不等 5 分钟，马上读一次；「怎么设置」弹层的「现在读取」） |
+| `storage_stats` | — | `{local: {path, total, items: [{key, name, bytes, keep}]}, cloud: {server, total, items: [{key, name, count, bytes, oldest, keep}]} 或 {error}, transcribe: {server, jobs, bytes, keep} 或 {error}, repo: {path, bytes, keep} 或 null, at}`（设置「数据」页：本机、Cloudflare、转写服务、人生记录仓库各存了什么、多大、留多久；要联网，异步） |
 | `set_relay_token` | `{ "token": "…" }`（空字符串＝删掉） | `null`（录音服务器口令写钥匙串，账号 relay_token；Windows 写数据目录 secrets/relay_token） |
 | `set_paused` | `{ "paused": bool, "minutes": int?（给了就是定时暂停，到点自动继续） }` | `null` |
 | `set_login_item` | `{ "on": bool }` | `null`；失败返回系统给的错误 |
@@ -21,6 +24,14 @@
 | `list_devices` | — | `[{ "id": "mac-…"/"iphone-…"/"watch-…", "kind": "mac"/"iphone"/"win"/"watch", "name", "this": 是否本机, "first": ISO, "last": ISO, "events": 条数, "bytes": 占用 }]`，本机排第一（读数据目录 devices/，缓存 60 秒） |
 | `set_place_label` | `{ "lat", "lon", "label": "家", "kind": "home"/"work"/"other" }`（label 空＝删掉这个名字） | `null`；写 Beayy/places/labels.json：半径内已有的改它，没有就新加一条（r 150 米）。第一次写时先抄外部数据目录 raw/places/labels.json 里已有的 |
 | `recent_events` | `{ "device": "mac-…", "before": ISO?, "limit": 200?, "types": ["keyboard.", "mouse.click"]? }` | `{ "events": [原始事件，新的在前], "more": bool }`。设备详情「事件」页签用：从最新分段往回读，够 limit 条（最多 1000）或翻了 48 个分段就停；`before` 接着读更早的；`types` 以「.」结尾按前缀。打的字、界面文字原样返回（采集时密码框已打码），只给本机界面，不进网站 |
+| `set_place_pick` | `{ "id": 停留点 id, "shop": "店名", "kind": 高德分类?, "lat", "lon" }` | `null`；确认这段停留去了这家店，写 Beayy/places/picks.json（stays[id].shops 加一家，remembered 里记一条，同一处同名只留一条）。一段停留可以认定好几家；已认定的同一家再调一次＝取消这家（remembered 不动）。旧格式 stays[id] = {shop, type} 照样认。以后 30 米内的停留，候选里有它就当已确认 |
+| `clear_place_pick` | `{ "id" }` | `null`；撤销这段停留认定的所有店，名字退回只写区域 |
+| `list_place_labels` | — | `[{label, type, lat, lon, r, address?}]` 常去的地方（同 set_place_label 读的名单） |
+| `edit_place_label` | `{ "index", "label", "kind", "r", "address"? }` | `null`；改名单里的一项（label 空＝删掉），r 限 30–1000 米 |
+| `set_amap_key` | `{ "key" }` | `null`；高德「Web 服务」Key 存钥匙串（账号 amap_key），Windows 写数据目录；空字符串＝删掉。不回传网页 |
+| `amap_around` | `{ "lat", "lon", "radius": 150? }` | `[{id, name, type, distance, lat, lon}]` 高德附近的去处（按距离，WGS-84） |
+| `amap_search` | `{ "text", "lat"?, "lon"? }` | 同上；有位置按距离（50 公里内），没有全国按相关度 |
+| `amap_map` | `{ "points": [[lat, lon], …], "width"?, "height"? }` | `"data:image/png;base64,…"` 高德静态地图，停留点按先后编号、连线 |
 | `sync_status` | — | `{ configured, email, server, user, last, last_error, uploaded, need_login, running, shadow }` |
 | `sync_now` | — | `{ uploaded, downloaded, errors }` |
 | `account_signup` / `account_login` / `account_claim` / `account_recover` / `account_password` | 邮箱、主密码（signup 另要 invite，recover 另要 code） | signup、claim 返回恢复码 |
@@ -31,7 +42,7 @@
 | `list_projects` | — | `[{ name, domain, sec, last, aliases }]` |
 | `merge_project` / `set_project_domain` | `{ from, into }` ／ `{ project, domain }` | `null` |
 | `get_icons` | `{ "ids": [bundle id], "phone": bool }` | `{ id: { "icon": "data:image/png;base64,…" 或 null, "name": App Store 上的名字或 null } }`。电脑取本机图标；手机查 App Store（先中国区再美区），查不到的苹果自带 app 用 Mac 上对应的；缓存在 `Beayy/icons/` |
-| `open_permission` | `{ "kind": "accessibility" \| "input_monitoring" \| "full_disk_access" }` | `null`（打开系统设置对应页） |
+| `open_permission`（kind 另可为 screentime：打开系统设置的屏幕使用时间页） | `{ "kind": "accessibility" \| "input_monitoring" \| "full_disk_access" }` | `null`（打开系统设置对应页） |
 | `open_data_dir` | — | `null` |
 
 **实现状态（10-15）**：表里命令都已在 Rust 实现（`src-tauri/src/main.rs`、`src-tauri/src/data.rs`），和 `ui/mock/生成样例.py` 的输出逐项对过：31 天 `list_days`、10-15 的 `get_day` 完全相同。调试可以不开界面直接看结果：`app/target/release/beayy --dump list_days`、`--dump get_day 2026-10-15`、`--dump get_settings`、`--dump get_rules`。`settings.json` 里沿用 Python 摘要脚本的键名（summary_model、daily_model、blacklist），由 Rust 换成上表的叫法。
@@ -45,3 +56,11 @@
 `pack` 的字段以 `网站/build.py` 和 `网站/static/app.js` 现在用的为准（computer、phone、codex、git、cover 等）。新增字段只加不改名。
 
 **手表对话、iPhone 停留点（10-16）**：`crates/beayy-remote` 每 10 分钟从录音服务器（`GET /v1/days`、`/v1/transcripts/<日>`、`/v1/places/<日>`，Bearer 口令）拉回来，写成 `speech.segment`／`speech.utterance`（`devices/watch-<id>/`）和 `place.visit`（`devices/iphone-<id>/`，同一台 iPhone 的目录）。调试：`beayy --relay-pull` 拉一轮；`beayy --relay-import transcripts|places <文件>` 把本地 jsonl 当服务器数据写进去；`echo 口令 | beayy --set-relay-token` 存口令。
+
+**停留点取名（10-21）**：地名、候选都是手机用高德算的（见 录音/README.md「停留点取名」），随停留点传到录音服务器（`guesses` 字段）再拉回来。`get_day` 的 `places.visits` 每项多了 `acc`、`guesses`（最多 5 个：name、type、p、distance）、`doing`（{kind, p}：候选按高德大类加总）、`confirmed`（"picked" 在电脑上确认的／"phone" 在手机上确认的（名字三层）／"auto" 电脑算的第一名把握到 50% 以上自动写上的／"remembered" 同 auto 但是 30 米内确认过的店／null）、`shops`（认定的店，几家都列，没认定是 []；名字写「区域 · A、B」，三家以上「A、B 等 N 家」）。在电脑上认定过的也照样给 `guesses`，好再加别的店。同一段两条记录时，地名和候选取定位更准的那条（到达、离开都相差 10 分钟内才算同一段）。
+
+**候选电脑为准（10-21 定：电脑端为准、其他端同步）**：`guesses` 由电脑自己算（`amap::guesses_for`：高德周边 50–120 米＋同手机的打分，缓存在 Beayy/places/guesses.json，按「停留点 id:版本:离开时刻」；问不到 10 分钟内不再试），手机传来的只在电脑问不到时兜底。没离开的记录按下一段到达算待了多久。
+
+**地点分级、常去（10-21）**：`get_day` 的 `places.visits` 每项多 `admin`（{country, province, city, district, township, adcode（GB/T 2260 六位）, towncode, area}，电脑用高德逆地理编码取，缓存 Beayy/places/admin.json，按坐标四位小数＋误差档）和 `city_prefix`（和种类是家的那个起名地方不在一个城市时给城市名）；名字的「区县 · 区域」由电脑算，手机传来的只兜底。`place_stats { days?: 30 }` → `{days, named: [{name, count, sec, last, type, address, r, index}], frequent: [{name, district, count, sec, last, lat, lon}]}`：最近 N 天按地方合计，起过名的按名字、没起名的按区域（去过 5 次以上），只用缓存不问高德。
+
+**能缩放的地图（10-21）**：`amap_js_config` → `{key, code}`／null（高德「Web端(JS API)」Key 和安全密钥，钥匙串 amap_js_key／amap_js_code，页面用来加载 JS API 2.0）；`set_amap_js { key, code }`。地点 · 地图用它画可拖动缩放的地图，没存或加载失败退回 `amap_map` 静态图。`amap_map` 多了 `often: [bool]`（常去的点深一点）。

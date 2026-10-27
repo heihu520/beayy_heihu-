@@ -9,6 +9,8 @@
 //! 口令在钥匙串（服务 com.fengli.beayy，账号 relay_token），Windows 在数据目录 `secrets/relay_token`。
 //! 拉来的数据不经多设备同步：每台电脑各自从服务器拉。
 
+pub mod cloud;
+
 use beayy_core::{default_root, iso, EventLog};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
@@ -119,7 +121,7 @@ pub fn parse_transcripts(text: &str, host: &str) -> Vec<Item> {
     out
 }
 
-/// places/<日>.jsonl（iPhone 停留点：id、arrive、depart、lat、lon、acc、name、label、source、device）→ 事件。同一个 id 的每一版各一条
+/// places/<日>.jsonl（iPhone 停留点：id、arrive、depart、lat、lon、acc、name、label、source、device、guesses）→ 事件。同一个 id 的每一版各一条
 pub fn parse_places(text: &str, host: &str) -> Vec<Item> {
     let mut out = vec![];
     for line in text.lines() {
@@ -137,6 +139,10 @@ pub fn parse_places(text: &str, host: &str) -> Vec<Item> {
             f.insert(k.into(), r[k].clone());
         }
         f.insert("place_source".into(), r["source"].clone());
+        // 是哪家店的候选（手机用高德算的）：有才写，免得旧记录的 key 变了被当成新的一版
+        if r["guesses"].is_array() {
+            f.insert("guesses".into(), r["guesses"].clone());
+        }
         f.insert("source".into(), json!(format!("relay:{host}")));
         // 内容变了（补上离开时间、地名）才算新的一版
         let key = format!("place:{id}:{:016x}", fnv(&Value::Object(f.clone()).to_string()));
@@ -167,6 +173,9 @@ fn load_seen(log: &EventLog) -> HashSet<String> {
 pub struct Relay {
     writers: HashMap<String, (EventLog, HashSet<String>)>,
     pub last_summary: String,
+    /// 写进去的设备目录名加的后缀。手机上用（"-m"）：手机自己算出的事件单独放，不和电脑同步来的同名目录混写；
+    /// 读的地方按停留点 id、段 id、开口时刻＋原文去重
+    pub device_suffix: String,
 }
 
 #[derive(Default, Debug)]
@@ -200,8 +209,9 @@ impl Relay {
         items.sort_by_key(|x| x.at);
         let mut added = 0;
         for it in items {
-            let entry = self.writers.entry(it.device.clone()).or_insert_with(|| {
-                let log = EventLog::new(root.to_path_buf(), it.device.clone());
+            let device = format!("{}{}", it.device, self.device_suffix);
+            let entry = self.writers.entry(device.clone()).or_insert_with(|| {
+                let log = EventLog::new(root.to_path_buf(), device.clone());
                 let seen = load_seen(&log);
                 (log, seen)
             });

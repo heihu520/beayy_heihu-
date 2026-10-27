@@ -27,6 +27,23 @@ pub fn data_root() -> PathBuf {
     }
 }
 
+/// 摘要用的默认网关和模型。编译时可用环境变量 BEAYY_DEFAULT_GATEWAY、BEAYY_DEFAULT_MODEL 换掉
+/// （自己打包时给用户预填一组能用的，密钥仍要用户自己填）；没给就是 OpenAI 官方地址、模型留空
+pub const DEFAULT_GATEWAY: &str = match option_env!("BEAYY_DEFAULT_GATEWAY") {
+    Some(s) => s,
+    None => "https://api.openai.com/v1",
+};
+pub const DEFAULT_MODEL: &str = match option_env!("BEAYY_DEFAULT_MODEL") {
+    Some(s) => s,
+    None => "",
+};
+
+/// 默认的转写服务（官方的；自己搭的在设置里换）。编译时可用 BEAYY_DEFAULT_TRANSCRIBE 换掉
+pub const DEFAULT_TRANSCRIBE: &str = match option_env!("BEAYY_DEFAULT_TRANSCRIBE") {
+    Some(s) => s,
+    None => "https://audio.beayy.com",
+};
+
 /// 正式数据根（不管影子模式），读 iPhone 对数、读摘要时用
 pub fn default_root() -> PathBuf {
     #[cfg(target_os = "windows")]

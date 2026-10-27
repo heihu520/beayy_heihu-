@@ -559,12 +559,19 @@ pub fn progress() -> Value {
 }
 
 pub fn sync_once(root: &Path, local_device: &str) -> Option<Report> {
-    let r = sync_round(root, local_device);
+    let r = sync_round(root, local_device, true);
     set_phase("", 0);
     r
 }
 
-fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
+/// 只下载（手机）：手机自己不采集电脑那种分段，也不能把它算出的东西当成某台设备的分段传上去盖掉原来的
+pub fn sync_download_only(root: &Path, local_device: &str) -> Option<Report> {
+    let r = sync_round(root, local_device, false);
+    set_phase("", 0);
+    r
+}
+
+fn sync_round(root: &Path, local_device: &str, upload: bool) -> Option<Report> {
     let a = load(root)?;
     let mut st = read_state(root);
     let mut errors = vec![];
@@ -575,7 +582,7 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
     for dev in devs {
         let d = dev.file_name().to_string_lossy().to_string();
         let mine = d == local_device || (d.starts_with("iphone-") && !is_remote(root, &st, &d));
-        if !mine || !safe_name(&d) || !dev.path().is_dir() {
+        if !upload || !mine || !safe_name(&d) || !dev.path().is_dir() {
             continue;
         }
         let segs = fs::read_dir(dev.path().join("segments")).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default();
@@ -594,7 +601,7 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         }
     }
     // 本机写的 10 分钟摘要（<数据根>/summaries/），块名 sum.<文件名>
-    for f in fs::read_dir(root.join("summaries")).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
+    for f in fs::read_dir(root.join("summaries")).ok().filter(|_| upload).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
         let file = f.file_name().to_string_lossy().to_string();
         let name = format!("{SUM}{file}");
         if !file.ends_with("-memory-summary.md") || !safe_name(&name) {
@@ -608,7 +615,7 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         }
     }
     // 本机的设备改名表
-    if let Ok(meta) = fs::metadata(root.join(NAMES_FILE)) {
+    if let Some(meta) = fs::metadata(root.join(NAMES_FILE)).ok().filter(|_| upload) {
         let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
         let sig = (meta.len(), mtime);
         if st.up.get(&format!("{local_device}/{NAMES}")) != Some(&sig) {
@@ -693,6 +700,9 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         // 要下载的：别的设备的（本机电脑和本机读到的 iPhone 是自己传的）
         let wanted = |it: &Value| {
             let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
+            if is_special(d, n) {
+                return false;
+            }
             let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(d).exists() && !is_remote(root, &st, d));
             !mine && safe_name(d) && safe_name(n)
         };
@@ -757,6 +767,116 @@ fn sync_round(root: &Path, local_device: &str) -> Option<Report> {
         }
     }
     Some(finish(root, st, uploaded, downloaded, errors))
+}
+
+// ---------- 录音、转写、停留点、配置这些块（方案见 报告/方案_20261021_录音与存储.md）：普通同步跳过，由 beayy-remote 单独处理 ----------
+
+/// 不是分段、摘要、改名表的块：录音 audio.、转写 transcript.、停留点 places.，以及 account 设备下的配置和声纹
+pub fn is_special(device: &str, name: &str) -> bool {
+    device == "account" || ["audio.", "transcript.", "places."].iter().any(|p| name.starts_with(p))
+}
+
+fn logged_in(root: &Path) -> Result<Account, String> {
+    load(root).ok_or_else(|| "没登录账号".to_string())
+}
+
+/// 加密后传一块
+pub fn put_named(root: &Path, device: &str, name: &str, plain: &[u8]) -> Result<(), String> {
+    let a = logged_in(root)?;
+    if !safe_name(device) || !safe_name(name) {
+        return Err(format!("块名不合法：{device}/{name}"));
+    }
+    let blob = seal(&a, device, name, plain)?;
+    let r = agent()
+        .put(&format!("{}/v1/blob/{device}/{name}", a.server))
+        .header("Authorization", &a.auth())
+        .header("Content-Type", "application/octet-stream")
+        .send(&blob[..])
+        .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(err_of(r));
+    }
+    Ok(())
+}
+
+/// 取一块并解开；服务器上没有返回 None
+pub fn get_named(root: &Path, device: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
+    let a = logged_in(root)?;
+    let mut r = agent().get(&format!("{}/v1/blob/{device}/{name}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+    if r.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    if !r.status().is_success() {
+        return Err(err_of(r));
+    }
+    let blob = r.body_mut().with_config().limit(64 * 1024 * 1024).read_to_vec().map_err(|e| e.to_string())?;
+    open(&a, device, name, &blob).map(Some)
+}
+
+pub fn delete_named(root: &Path, device: &str, name: &str) -> Result<(), String> {
+    let a = logged_in(root)?;
+    let r = agent().delete(&format!("{}/v1/blob/{device}/{name}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(err_of(r));
+    }
+    Ok(())
+}
+
+/// 按块名前缀列（[{device, segment, size, updated}]，按 updated 升序），since 之后的；自动翻页
+pub fn list_named(root: &Path, prefix: &str, since: i64) -> Result<Vec<Value>, String> {
+    let a = logged_in(root)?;
+    let ag = agent();
+    let (mut out, mut since) = (vec![], since);
+    loop {
+        let mut r = ag.get(&format!("{}/v1/list?since={since}&prefix={}", a.server, url_escape(prefix))).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+        if !r.status().is_success() {
+            return Err(err_of(r));
+        }
+        let v: Value = r.body_mut().read_json().map_err(|e| e.to_string())?;
+        let items = v["items"].as_array().cloned().unwrap_or_default();
+        let full = items.len() >= 5000;
+        since = items.last().and_then(|x| x["updated"].as_i64()).unwrap_or(since);
+        out.extend(items);
+        if !full {
+            return Ok(out);
+        }
+    }
+}
+
+/// 服务器上这个账号存了什么：{items: [{device, kind, count, bytes, oldest, newest}], audio_max_days}
+pub fn usage(root: &Path) -> Result<Value, String> {
+    let a = logged_in(root)?;
+    let mut r = agent().get(&format!("{}/v1/usage", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(err_of(r));
+    }
+    r.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// 官方服务（模型、地图）用的：同步服务器地址和这台设备的认证头。没登录返回 None；令牌只在 Rust 里用，不给网页
+pub fn official_auth(root: &Path) -> Option<(String, String)> {
+    load(root).map(|a| (a.server.clone(), a.auth()))
+}
+
+/// 官方模型的代理地址和认证头（同步服务 /v2/llm/chat/completions，按账号开通）。没登录返回 None；令牌只在 Rust 里用，不给网页
+pub fn official_llm(root: &Path) -> Option<(String, String)> {
+    load(root).map(|a| (format!("{}/v2/llm/chat/completions", a.server), a.auth()))
+}
+
+/// 转写票据（1 小时有效）：(票据, 到期毫秒)
+pub fn ticket(root: &Path) -> Result<(String, i64), String> {
+    ticket_for(root, "asr")
+}
+
+/// 官方服务的票据（1 小时有效）：kind＝asr（转写）或 map（地图），同步服务按那一项的开通和额度发
+pub fn ticket_for(root: &Path, kind: &str) -> Result<(String, i64), String> {
+    let a = logged_in(root)?;
+    let mut r = agent().get(&format!("{}/v2/ticket?for={kind}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(err_of(r));
+    }
+    let v: Value = r.body_mut().read_json().map_err(|e| e.to_string())?;
+    Ok((v["ticket"].as_str().ok_or("服务器没给票据")?.to_string(), v["expires"].as_i64().unwrap_or(0)))
 }
 
 /// 取一块密文并解开
@@ -829,5 +949,31 @@ mod tests {
         let w = wrap_key(&key, &[1; 32]).unwrap();
         assert_eq!(unwrap_key(&w, &[1; 32]).unwrap(), key);
         assert!(unwrap_key(&w, &[2; 32]).is_err());
+    }
+
+    /// 给别的端（iPhone 的 Swift）对照的测试向量：cargo test -p beayy-sync vectors -- --nocapture
+    #[test]
+    fn vectors() {
+        let (auth, wrap) = derive("correct horse battery", "00112233445566778899aabbccddeeff").unwrap();
+        let key = [0x42u8; 32];
+        let nonce = [9u8; 24];
+        let wrapped = {
+            let ct = XChaCha20Poly1305::new((&wrap).into()).encrypt(XNonce::from_slice(&nonce), Payload { msg: &key[..], aad: b"beayy-data-key" }).unwrap();
+            B64.encode([nonce.to_vec(), ct].concat())
+        };
+        assert_eq!(unwrap_key(&wrapped, &wrap).unwrap(), key);
+        let a = Account { server: "x".into(), user: "u".into(), email: None, token: "t".into(), key };
+        let plain = b"{\"id\":\"watch-20261021T010000Z\"}\nhello";
+        let packed = miniz_oxide::deflate::compress_to_vec(plain, 6);
+        let ct = a.cipher().encrypt(XNonce::from_slice(&nonce), Payload { msg: &packed, aad: b"watch-1a2b3c4d/audio.watch-20261021T010000Z" }).unwrap();
+        let blob = [nonce.to_vec(), ct].concat();
+        assert_eq!(open(&a, "watch-1a2b3c4d", "audio.watch-20261021T010000Z", &blob).unwrap(), plain);
+        println!("password=correct horse battery salt=00112233445566778899aabbccddeeff");
+        println!("auth={auth}");
+        println!("wrap={}", hex_encode(&wrap));
+        println!("data_key={}", hex_encode(&key));
+        println!("wrapped_key(b64url nopad, nonce 0909..)={wrapped}");
+        println!("blob device=watch-1a2b3c4d name=audio.watch-20261021T010000Z hex={}", hex_encode(&blob));
+        println!("blob plaintext={}", String::from_utf8_lossy(plain));
     }
 }

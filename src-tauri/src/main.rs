@@ -4,6 +4,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod amap;
+mod storage;
 mod daily;
 mod data;
 mod icons;
@@ -28,13 +30,15 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 const PRODUCT: &str = "Be Authentic. Your Yesterdays.";
 const PHONE_EVERY: Duration = Duration::from_secs(300);
-/// 手表对话、iPhone 停留点：录音服务器每 10 分钟转写一轮，这边也每 10 分钟拉一次
-const RELAY_EVERY: Duration = Duration::from_secs(600);
+/// 手表对话、iPhone 停留点：每 2 分钟一轮（账号同步的列表接口便宜，停留点早点到）
+const RELAY_EVERY: Duration = Duration::from_secs(120);
 
 struct AppState {
     log: Arc<EventLog>,
     phone: Mutex<PhoneSync>,
     relay: Mutex<Relay>,
+    /// 录音和停留点走账号同步的上一轮结果（设置「连接」和「数据」页显示）
+    cloud: Mutex<String>,
     paused: Arc<AtomicBool>,
     /// 定时暂停到这个时刻自动继续；None＝一直暂停（或没暂停）
     paused_until: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
@@ -75,6 +79,7 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
         "login_item": login_item(),
         "phone_sync": state.phone.lock().unwrap().last_summary.clone(),
         "relay_sync": state.relay.lock().unwrap().last_summary.clone(),
+        "cloud_sync": state.cloud.lock().unwrap().clone(),
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
@@ -145,7 +150,20 @@ fn dev_report(name: String, text: String) {
 
 #[tauri::command]
 fn open_permission(kind: String) {
+    // 屏幕使用时间（iCloud 跨设备共享）不是权限，但也在系统设置里：「怎么设置」弹层用
+    if kind == "screentime" {
+        let _ = std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Screen-Time-Settings.extension").spawn();
+        return;
+    }
     beayy_capture::open_permission(&kind);
+}
+
+/// 「现在读取」：iPhone 屏幕使用时间不等 5 分钟，马上读一次
+static PHONE_NOW: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn phone_read_now() {
+    PHONE_NOW.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -277,6 +295,23 @@ fn main() {
         }
         return;
     }
+    // 调试和迁移：beayy --sync-put <设备> <块名> <文件>，把本地文件加密后放到同步服务；--sync-delete <设备> <块名>；beayy --ticket-file <文件>，把转写票据写进文件（1 小时有效，不打印）
+    if args.get(1).map(|a| a == "--sync-put").unwrap_or(false) {
+        let (d, n, f) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default(), args.get(4).cloned().unwrap_or_default());
+        let r = std::fs::read(&f).map_err(|e| e.to_string()).and_then(|b| beayy_sync::put_named(&data_root(), &d, &n, &b));
+        println!("{}", r.map(|_| "已传".to_string()).unwrap_or_else(|e| e));
+        return;
+    }
+    if args.get(1).map(|a| a == "--sync-delete").unwrap_or(false) {
+        let (d, n) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default());
+        println!("{}", beayy_sync::delete_named(&data_root(), &d, &n).map(|_| "已删".to_string()).unwrap_or_else(|e| e));
+        return;
+    }
+    if args.get(1).map(|a| a == "--ticket-file").unwrap_or(false) {
+        let r = beayy_sync::ticket(&data_root()).and_then(|(t, _)| std::fs::write(args.get(2).cloned().unwrap_or_default(), t).map_err(|e| e.to_string()));
+        println!("{}", r.map(|_| "已写".to_string()).unwrap_or_else(|e| e));
+        return;
+    }
     if args.get(1).map(|a| a == "--relay-import").unwrap_or(false) {
         // 调试用：beayy --relay-import transcripts|places <文件>，把本地 jsonl 当成服务器上的数据写进去
         let (kind, file) = (args.get(2).cloned().unwrap_or_default(), args.get(3).cloned().unwrap_or_default());
@@ -306,7 +341,18 @@ fn main() {
             Some("list_projects") => json!(data::list_projects()),
             Some("get_profile") => data::get_profile(),
             Some("recent_events") => data::recent_events(args.get(3).cloned().unwrap_or_default(), None, Some(5), None).unwrap_or_else(|e| json!({ "error": e })),
-            _ => json!({"error": "用法：--dump list_days|get_day 日期|get_settings|get_rules"}),
+            Some("place_stats") => data::place_stats(None),
+            Some("cloud_round") => match beayy_remote::cloud::round(&mut Relay::default(), &data_root(), Duration::from_secs(600)) {
+                Ok(n) => json!({"added": n.added, "places": n.places, "transcribed": n.transcribed, "fetched": n.fetched, "deleted": n.deleted, "waiting": n.waiting, "errors": n.errors}),
+                Err(e) => json!({"error": e}),
+            },
+            Some("storage_stats") => tauri::async_runtime::block_on(storage::storage_stats()),
+            Some("test_model") => json!(tauri::async_runtime::block_on(data::test_model()).map(|_| "通了".to_string()).unwrap_or_else(|e| e)),
+            Some("amap_search") => amap::amap_search(args.get(3).cloned().unwrap_or_default(), Some(32.0475), Some(118.9215)).map(|v| json!(v.len())).unwrap_or_else(|e| json!({ "error": e })),
+            Some("amap_js") => tauri::async_runtime::block_on(amap::amap_js_config()).as_object().map(|o| json!(o.keys().collect::<Vec<_>>())).unwrap_or(json!(null)),
+            Some("sync_usage") => beayy_sync::usage(&beayy_core::data_root()).unwrap_or_else(|e| json!({ "error": e })),
+            Some("ticket") => beayy_sync::ticket(&beayy_core::data_root()).map(|(t, exp)| json!({ "len": t.len(), "expires": exp })).unwrap_or_else(|e| json!({ "error": e })),
+            _ => json!({"error": "用法：--dump list_days|get_day 日期|get_settings|get_rules|place_stats"}),
         };
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
@@ -318,9 +364,9 @@ fn main() {
     };
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_status, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
+            get_status, phone_read_now, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, icons::get_icons, daily::generate_daily, data::test_model,
+            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
@@ -332,7 +378,7 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let root = data_root();
-            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), relay: Mutex::new(Relay::default()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
+            let state = Arc::new(AppState { log: Arc::new(EventLog::new(root.clone(), local_device())), phone: Mutex::new(PhoneSync::default()), relay: Mutex::new(Relay::default()), cloud: Mutex::new(String::new()), paused: Arc::new(AtomicBool::new(false)), paused_until: Mutex::new(None), today_base: Mutex::new(None) });
             #[allow(unused_mut)]
             let mut launch = fields! {
                 "version" => env!("CARGO_PKG_VERSION"),
@@ -443,17 +489,28 @@ fn main() {
                 }
                 let _ = phone_item.set_text(format!("iPhone：{}", st.phone.lock().unwrap().last_summary));
                 let mut waited = Duration::ZERO;
-                while waited < PHONE_EVERY && !phone_now2.swap(false, Ordering::Relaxed) {
+                while waited < PHONE_EVERY && !phone_now2.swap(false, Ordering::Relaxed) && !PHONE_NOW.swap(false, Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_secs(1));
                     waited += Duration::from_secs(1);
                 }
             });
-            // 后台：手表对话、iPhone 停留点每 10 分钟从录音服务器拉一次（没设置服务器就什么都不做）
+            // 后台：手表对话、iPhone 停留点每 2 分钟一轮（账号同步的新链路，加上过渡期的旧录音服务器；没登录、没设置就什么都不做）
             let st = state.clone();
             let relay_root = data_root();
             std::thread::spawn(move || {
                 let mut last_err = String::new();
+                // 走账号同步的录音和停留点（新）：自己一个写入器，和旧的拉取在同一个线程里先后跑，不会同时写同一台设备
+                let mut cloud = Relay::default();
                 loop {
+                    match beayy_remote::cloud::round(&mut cloud, &relay_root, Duration::from_secs(8 * 60)) {
+                        Ok(n) => {
+                            if n.added > 0 || !n.errors.is_empty() {
+                                st.log.write("cloud.sync", fields! {"added" => n.added, "transcribed" => n.transcribed, "errors" => n.errors.join("；")}, None);
+                            }
+                            *st.cloud.lock().unwrap() = n.summary();
+                        }
+                        Err(e) => *st.cloud.lock().unwrap() = e,
+                    }
                     let r = st.relay.lock().unwrap().pull(&relay_root);
                     match r {
                         Ok(n) => {

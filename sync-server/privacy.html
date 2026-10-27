@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beayy 隐私政策</title>
+<style>
+  body { margin: 0; background: #fcfcfb; color: #1f1e1c; font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 20px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 32px 0 8px; }
+  .meta { color: #6b6a66; font-size: 13px; } ul { padding-left: 20px; } li { margin: 4px 0; }
+  @media (prefers-color-scheme: dark) { body { background: #1b1b1a; color: #ecebe8; } .meta { color: #9a9894; } }
+</style>
+</head>
+<body><main>
+<h1>Beayy 隐私政策</h1>
+<p class="meta">Be Authentic. Your Yesterdays. · 2026 年 10 月 22 日更新</p>
+
+<p>Beayy 帮你记下自己的一天：电脑上做了什么、手机用了多久、去了哪些地方、说了哪些话，再汇成每天的时间线和总结。这些记录只属于你。下面写清楚记什么、存在哪、谁经手、留多久。</p>
+
+<h2>记什么</h2>
+<ul>
+  <li><b>电脑</b>：前台用的应用和窗口标题、界面上的文字、打字和点击（用来计时和写摘要），是否在电脑前。你可以设置不记录某些应用，也可以随时暂停或删除最近的记录。</li>
+  <li><b>iPhone 屏幕使用</b>：苹果经 iCloud 同步到你 Mac 上的屏幕使用时间，由电脑版读取。</li>
+  <li><b>位置</b>：iPhone 在后台记下你停留过的地方（到达、离开的时刻和坐标），只用来显示你在哪儿待了多久。</li>
+  <li><b>录音</b>：只在你用 Apple Watch 的 Beayy 录音、或在手机上打开「用这台 iPhone 录」时录。录音用来转成带说话人的文字。</li>
+</ul>
+
+<h2>存在哪</h2>
+<ul>
+  <li><b>你自己的设备</b>：全部记录都在你的电脑和手机上。</li>
+  <li><b>同步服务</b>（Cloudflare 托管）：登录账号后，记录在设备上先加密再上传，用来在你的设备之间同步。加密的钥匙只在你的设备上，服务器读不到内容。录音转写完 7 天后删除，没转写的最多留 30 天。</li>
+</ul>
+
+<h2>谁会经手你的内容</h2>
+<p>下面这些服务要看到内容才能工作，只在处理时经手、不保存：</p>
+<ul>
+  <li><b>转写服务</b>：录音交给我们的转写服务转成文字，转完立即删除音频，结果被你的设备取走就删除，最多保留 7 天。</li>
+  <li><b>摘要模型</b>：选用「官方」模型时，电脑上 10 分钟的活动摘要材料经我们的服务转给大模型服务商生成摘要；选用你自己的网关时直接发给你配置的服务。</li>
+  <li><b>地图（高德）</b>：为了显示地名、附近的店和地图，停留点的坐标会发给高德地图；选用「官方」地图时经我们的服务转发。</li>
+</ul>
+<p>我们不出售你的数据，不用来做广告，不和其他人共享。官方服务只按账号记用量（多少 token、多少分钟、多少次），不记内容。</p>
+
+<h2>你可以做什么</h2>
+<ul>
+  <li>在电脑设置里暂停记录、设置不记录的应用、删除最近的记录。</li>
+  <li>在 iPhone 系统设置里随时关闭位置或麦克风权限。</li>
+  <li>退出账号后，设备上的数据仍归你所有；需要删除账号和服务器上的全部数据，通过 TestFlight 的「发送 Beta 版反馈」告诉我们，我们会在 7 天内删除。</li>
+</ul>
+
+<h2>English summary</h2>
+<p>Beayy is a personal life-logging app. Activity on your computer, iPhone screen time, the places you stay (background location) and audio you choose to record are stored on your own devices. When you sign in, data is encrypted on your device before it is synced, and the sync server cannot read it. Audio is sent to our transcription service only to be transcribed and is deleted right after; transcribed audio blobs in sync are removed after 7 days. Place coordinates are sent to AMap (Gaode) to show place names and maps. If you use the official model, summary material is passed through our service to an LLM provider and not stored. We never sell or share your data. To delete your account and all server data, contact us via TestFlight feedback.</p>
+</main></body>
+</html>

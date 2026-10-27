@@ -1,4 +1,4 @@
--- Beayy 同步服务的账号、设备登录和索引（数据块本身在 R2，都是密文）。新建库用这个；已有的库跑过 migrate_v2.sql
+-- Beayy 同步服务的账号、设备登录和索引（数据块本身在 R2，都是密文）。新建库用这个；已有的库按顺序跑 migrate_v2.sql、v3、v4、v5
 CREATE TABLE IF NOT EXISTS users (
   user TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL,      -- v1 的共用令牌（迁移到邮箱登录前的设备还在用）
@@ -13,7 +13,20 @@ CREATE TABLE IF NOT EXISTS users (
   locked_until INTEGER NOT NULL DEFAULT 0,
   display_name TEXT,             -- 账号显示名称（v3）
   avatar TEXT,                   -- 头像 data URL（v3）
-  profile_updated INTEGER NOT NULL DEFAULT 0
+  profile_updated INTEGER NOT NULL DEFAULT 0,
+  llm_plan TEXT,                 -- 官方模型：空＝没开通，official＝开通，stopped＝停用（v4）
+  llm_quota INTEGER NOT NULL DEFAULT 0,  -- 每月 token 额度（v4）
+  llm_used INTEGER NOT NULL DEFAULT 0,   -- 本月已用（v4）
+  llm_month TEXT,                -- llm_used 记的是哪个月，YYYY-MM（v4，v5 起用量记在 usage 表）
+  asr_quota INTEGER NOT NULL DEFAULT 0,  -- 每月转写秒数上限（v5）
+  map_quota INTEGER NOT NULL DEFAULT 0   -- 每月地图调用次数上限（v5）
+);
+CREATE TABLE IF NOT EXISTS usage (
+  user TEXT NOT NULL,
+  month TEXT NOT NULL,
+  service TEXT NOT NULL,         -- llm（token）／asr（音频秒）／map（次）
+  used INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user, month, service)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users (email);
 CREATE TABLE IF NOT EXISTS sessions (
