@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Be Authentic. Your Yesterdays.",
-  "version": "0.2.14",
   "identifier": "com.fengli.beayy",
   "build": {
     "frontendDist": "../ui"
