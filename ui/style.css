@@ -60,20 +60,14 @@ body { padding: 0; overflow: hidden; }
 .strip-rows { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: var(--space-2); align-items: center; row-gap: 3px; }
 .strip-rows > .k { font-size: 11px; line-height: 16px; color: var(--ink-4); white-space: nowrap; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
-/* 按真实起止画的一排：小时格当底，起止块盖在上面；今天还没到的小时格只留空框 */
+/* 今天还没到的小时格只留空框 */
 .strip span.fut { background: transparent; box-shadow: inset 0 0 0 1px var(--rec-track); }
+/* 地点这一排：每小时一格填待得最久的地方，相邻两段交替深浅；地名写在段首，压在格子上、不挡悬停 */
+.strip span.pl { background: var(--rec-place); }
+.strip span.pl.alt { background: var(--rec-place-alt); }
 .strip-track { position: relative; }
-.spans { position: absolute; inset: 0; pointer-events: none; }
-.spans i { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; pointer-events: auto; cursor: pointer; }
-.spans.computer i { background: var(--rec-computer); }
-.spans.phone i { background: var(--rec-phone); }
-.spans.talk i { background: var(--rec-watch); }
-.spans i:hover { outline: 1px solid var(--ink); outline-offset: 0; }
-/* 地点这一排和别的排一样高、一样是小时格，每段停留按起止盖在上面、相邻两段交替深浅，够宽的写地名（窄的只在悬停里有）；
-   两段之间的路上是一条细线 */
-.spans.place i { box-sizing: border-box; padding: 0 4px; background: var(--rec-place); font: 11px/22px var(--font-sans); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.spans.place i.alt { background: var(--rec-place-alt); }
-.spans.place b { position: absolute; top: 10.5px; height: 1px; background: var(--ink-4); }
+.strip-names { position: absolute; inset: 0; pointer-events: none; }
+.strip-names em { position: absolute; top: 0; bottom: 0; box-sizing: border-box; padding: 0 4px; font: 11px/22px var(--font-sans); font-style: normal; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 「现在」：一条竖线贯穿各排，时刻写在轴上 */
 .strip-rows { position: relative; }
 .now-line, .now-tag { position: absolute; left: calc(30px + var(--space-2) + (100% - 30px - var(--space-2)) * var(--f)); }
@@ -93,9 +87,9 @@ body { padding: 0; overflow: hidden; }
 .rd-col.is-cur .rd-d { color: var(--ink); font-weight: 600; }
 .rd-col.none .rd-d { opacity: 0.5; }
 .strip-axis, .acto-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
-/* 一天的形状的钟点：每 3 小时一个，写成 03:00，左边一道短竖线当刻度、对准那个小时格的左边，和数字同一行 */
+/* 一天的形状的钟点：每 3 小时一个，写成 03:00，左对齐那个小时格的左边（不画刻度线） */
 .strip-axis { margin-top: var(--space-1); font-size: 12px; color: var(--ink-3); }
-.strip-axis span.t { padding-left: 4px; border-left: 1px solid var(--ink-4); white-space: nowrap; }
+.strip-axis span.t { white-space: nowrap; }
 .strip-axis span.t small { font-size: inherit; }
 .acto { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; row-gap: 6px; align-items: center; }
 .acto-axis { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; }
@@ -108,7 +102,6 @@ body { padding: 0; overflow: hidden; }
 .cell.n { border-bottom-color: var(--rec-night); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); font-size: 13px; line-height: 20px; color: var(--ink-3); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: var(--space-1); vertical-align: -1px; }
-.legend i.line { width: 12px; height: 1px; border-radius: 0; background: var(--ink-4); vertical-align: 4px; }
 
 /* ---------- 时间线：电脑、手机按时间穿插，新的在上 ---------- */
 .tl-row { position: relative; border-bottom: 1px solid var(--line); }
