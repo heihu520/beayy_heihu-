@@ -1,56 +1,107 @@
-# Beayy — Be Authentic. Your Yesterdays.
+<div align="center">
 
-<p align="center">
-<a href="https://linux.do" alt="LINUX DO">
-<img
-src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+" /></a>
-</p>
+<img src="docs/images/logo.svg" alt="Beayy" width="72">
 
-在后台记下你一天在电脑和手机上做了什么，每 10 分钟写一段摘要、每小时合成一段、每晚写一份日总结；告诉你时间花在了哪些领域和项目上，对照你自己定的规矩。
+# Beayy
 
-*Beayy quietly records what you do on your Mac and iPhone, writes a summary every 10 minutes and a journal every evening, and shows where your time actually went. Everything stays on your machine; optional end-to-end encrypted sync between devices.*
+**Be Authentic. Your Yesterdays.**
 
-## 能做什么
+自动记下你的一天：几点、在哪、在做什么。<br>
+每 10 分钟写一段摘要，每晚写一份日总结，再汇成周和月。
 
-- **今天**：在电脑前多久、手机多久、切换了多少次；一天的形状（每小时电脑和手机的使用）；时间花在哪（领域 · 项目、类型，两级分类）。
-- **时间线**：按小时看在做什么，点开看每 10 分钟的摘要、每次拿起手机用了哪些 app、手表录到的对话；全部、电脑、手机、手表分开看，每小时行首标当时在哪。
-- **总结**：每天的日总结（今天的一句话、时间去向、做成了什么、规矩、偏离、明天），最近 14 天作息图。
-- **规矩**：用自己的话写，比如「22:00 以后不开电脑」「手机每天不超过 3 小时」「抖音每天不超过 30 分钟」，当天就对照。
-- **设备与同步**：多台电脑登录同一个账号，记录在本机加密后同步，服务器读不到内容。
+*Beayy records your day on Mac, Windows and iPhone — when, where, and what you were doing — and writes the journal for you. Local-first, open source, self-hostable.*
+
+**简体中文** · [English](README.en.md)
+
+[![Release](https://img.shields.io/github/v/release/hengfengliya/beayy?label=%E4%B8%8B%E8%BD%BD&color=0b0b0b)](https://github.com/hengfengliya/beayy/releases/latest)
+[![License](https://img.shields.io/github/license/hengfengliya/beayy?color=0b0b0b)](LICENSE)
+![Platform](https://img.shields.io/badge/macOS%2014%2B%20%C2%B7%20Windows%2010%2F11%20%C2%B7%20iPhone-0b0b0b)
+[![LINUX DO](https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+)](https://linux.do/t/topic/3081565)
+
+[下载 Mac / Windows 版](https://github.com/hengfengliya/beayy/releases/latest) · [iPhone 和手表（TestFlight）](https://testflight.apple.com/join/Ptzqu4q8) · [beayy.com](https://beayy.com)
+
+<img src="docs/images/hero.gif" alt="Beayy 今天页：一天的形状" width="860">
+
+</div>
+
+每天晚上回想「今天到底干了啥」，常常想不起来。屏幕使用时间只告诉你用了几小时 Chrome，说不清在 Chrome 里做了什么。Beayy 在后台记下电脑、手机和手表上的事，让模型替你写流水账，你只管看。
+
+## 一天的形状
+
+在电脑前多久、手机多久、切了多少次 app、去了几个地方。「一天」按小时排开地点、电脑、手机和说话，时间按项目和类型归好类。
+
+<p align="center"><img src="docs/images/today.png" alt="今天页" width="860"></p>
+
+## 每 10 分钟一段
+
+时间线按小时列出在做什么，点开一小时，能看到每 10 分钟的摘要、用了哪些 app、那会儿拿起手机做了什么。
+
+<p align="center"><img src="docs/images/timeline.png" alt="时间线" width="860"></p>
+
+## 去了哪
+
+装上 iPhone app，记下每天到过哪些地方、几点到几点走，自动认出是哪家店，常去的地方可以起名。只记停留点，不记路上的轨迹。
+
+<p align="center"><img src="docs/images/places.png" alt="地点" width="860"></p>
+
+## 日、周、月总结
+
+每晚写日总结：一句话、一段点评（引一句诗文或名人的话）、做成了什么、偏离了什么、明天做什么，再加上这天去了哪、时间花在哪。一周过完写周总结，一个月过完写月总结。iPhone 数据晚到了，点「重新生成」重写。
+
+规矩用自己的话写，比如「22:00 以后不开电脑」「手机每天不超过 3 小时」，总结里当天对照。
+
+<p align="center"><img src="docs/images/summary-day.png" alt="日总结" width="860"></p>
+
+## 问你自己的过去
+
+Beayy 自带一个本机 MCP 服务。接到 Claude Code、Claude 桌面版或 Cursor 以后，直接问「上周三下午我在忙什么」「这个月哪天熬夜最多」。只读，数据不出这台电脑。
+
+```bash
+claude mcp add beayy -- "/Applications/Beayy.app/Contents/MacOS/beayy" --mcp
+```
+
+Claude 桌面版、Cursor 的配置在「设置 → 连接 → 接到 AI 里」，复制粘贴即可。提供的工具：`list_days`（最近每天概况）、`get_day`（某天的时长、每小时在做什么、时间花在哪、日总结）、`search`（在 10 分钟摘要里搜关键词）、`get_rules_and_projects`。
+
+<p align="center"><img src="docs/images/mcp.png" alt="接到 AI 里" width="860"></p>
+
+## 数据在你手里
+
+记录全部存在本机。多台设备之间要同步，有三种方式：
+
+- **官方服务器**：开放注册，不要邀请码，每个账号 100MB 同步空间，先开 50 个名额
+- **自己部署**：服务端代码在 [`server/`](server/README.md)，`docker compose up -d` 就能起
+- **同步文件夹**：选一个 iCloud 云盘、OneDrive、坚果云、Syncthing 这类会同步的文件夹，不经过任何服务器
+
+不管哪种，记录都在本机压缩、加密后再传出去，服务器和网盘只拿到密文。不同步也能用。
+
+<p align="center"><img src="docs/images/sync.png" alt="同步方式" width="860"></p>
 
 ## 记什么、存在哪
 
 | | |
 |---|---|
 | 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（macOS 辅助功能、Windows UI Automation 读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
-| 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久（看不到 app 里的内容） |
-| 手表（可选） | Apple Watch 全天录音，传到**你自己的**录音服务器转写、分说话人；这里只拉回文字（谁在几点说了什么），音频不经过这台电脑 |
-| 位置（可选） | iPhone app 记下的停留点（几点到、几点走、地名），加密后经同步服务传到电脑；路上的轨迹不记 |
+| 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久，看不到 app 里的内容 |
+| 位置（可选） | iPhone app 记下的停留点（几点到、几点走、地名），加密后经同步传到电脑；路上的轨迹不记 |
+| 手表（可选） | Apple Watch 全天录音，传到转写服务（官方的或你自己部署的）转写、分说话人；电脑上只有文字（谁在几点说了什么） |
 | 存储 | 全部在本机 `~/Library/Application Support/Beayy/`，按设备、每 10 分钟一个文件，只追加 |
-| 摘要 | 把那 10 分钟的记录（有手表、位置时连同那 10 分钟的对话原文和地名）发给**你自己配置**的模型服务（任何 OpenAI 兼容接口），写回本机 |
+| 摘要 | 把那 10 分钟的记录发给**你自己配置**的模型（任何 OpenAI 兼容接口），写回本机。「设置 → 连接 → 模型 → 用量」看每天花了多少 token |
 | 同步（可选） | 本机压缩、XChaCha20-Poly1305 加密后上传；主密码只在设备上用（Argon2id 派生），服务器只存密文和登录校验值的哈希 |
 
 ## 安装
 
-到 [Releases](../../releases) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。装好以后会自动检查更新，有新版本时左下角菜单里出现「重启更新」。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。
+到 [Releases](https://github.com/hengfengliya/beayy/releases/latest) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。装好以后会自动检查更新，有新版本时左下角菜单里出现「重启更新」。
 
-iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.apple.com/join/Ptzqu4q8 （源码在 `ios/`）。
+iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.apple.com/join/Ptzqu4q8 （源码在 [`ios/`](ios/)）。
 
-要求 macOS 14 以上，或 Windows 10／11（64 位）。Windows 版记的和 Mac 一样（键鼠钩子＋UI Automation），还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）。
+要求 macOS 14 以上，或 Windows 10／11（64 位）。
 
-## 让 AI 读你的记录（MCP）
+## 还不支持的
 
-Beayy 自带一个本机 MCP 服务，Claude Code、Claude 桌面版这类本机 AI 可以直接查你的记录，数据不出这台电脑（只读）：
-
-```bash
-claude mcp add beayy -- ~/Applications/Beayy.app/Contents/MacOS/beayy --mcp
-```
-
-工具：`list_days`（最近每天概况）、`get_day`（某天的时长、每小时在做什么、时间花在哪、日总结）、`search`（在 10 分钟摘要里搜关键词）、`get_rules_and_projects`。
-
-## 自己部署服务端
-
-同步和录音转写默认用官方服务器，也可以换成自己的：`server/` 用 Docker 在自己的电脑或 VPS 上跑（`docker compose up -d`，转写加 `--profile asr`），然后在「设置 → 连接」里把同步服务器、转写服务换成自己的地址。步骤见 [server/README.md](server/README.md)。
+- 安卓手机、Linux 电脑
+- iPhone 的屏幕使用时间只能在 Mac 上读；只有 Windows 电脑的话，看不到手机用了哪些 app（位置不受影响）
+- Windows 版还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）
+- 开放注册只送同步空间，不送模型；模型自己配
 
 ## 从源码编译
 
@@ -71,7 +122,8 @@ open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Ru
 
 只看界面：用浏览器打开 `ui/index.html`，读 `ui/mock/` 里的虚构样例数据（`python3 ui/mock/make_mock.py` 重新生成）。
 
-## 结构
+<details>
+<summary>代码结构</summary>
 
 | 目录 | 内容 |
 |---|---|
@@ -80,13 +132,20 @@ open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Ru
 | `crates/beayy-phone` | 读 iPhone 经 iCloud 同步来的屏幕使用时间（macOS） |
 | `crates/beayy-remote` | 从录音服务器拉手表对话转写和 iPhone 停留点（HTTPS＋口令） |
 | `crates/beayy-summary` | 10 分钟摘要、小时摘要、两级分类（类型、领域 · 项目）、项目名合并 |
-| `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载 |
-| `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日总结 |
+| `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载、同步文件夹 |
+| `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日周月总结、MCP 服务 |
 | `ui` | 网页界面：纯 HTML＋CSS＋JS，电脑和 iPhone 共用 |
 | `mobile` | iPhone 版的 Rust 核心（静态库），直接编 `src-tauri` 的数据代码，和电脑同一份 |
 | `ios` | iPhone 和 Apple Watch app 的 Swift 外壳（XcodeGen）：定位记停留点、手表录音、登录账号加密上传；界面是网页视图加载 `ui/` |
 | `server` | 服务端：同步（只存密文）＋录音转写＋可选的模型、地图代理，Python（FastAPI＋SQLite＋本地文件）。用 Docker 在自己的电脑或服务器上跑，见 [`server/README.md`](server/README.md)；官方实例跑的也是它 |
 | `sync-server` | 同步服务的旧 Cloudflare 版（Workers＋R2＋D1），接口和 `server` 相同，不再维护 |
+| `docs/images` | README 里的图，界面里是虚构的样例数据 |
+
+</details>
+
+## 反馈
+
+有 bug 或想要的功能，开 [issue](https://github.com/hengfengliya/beayy/issues)，或者到 [linux.do 的帖子](https://linux.do/t/topic/3081565)里说。
 
 ## 许可
 
