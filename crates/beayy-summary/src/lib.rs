@@ -1023,16 +1023,19 @@ const PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上 10 
   prior_context: 一两句，承接上一段的背景（没有上一段就空字符串）
   context: 3–6 条字符串数组，每条「名称：说明」，写出现的文档、项目、会话、联系人这类以后回看需要的线索
   recording: 1–3 个对象的数组，每个 {\"heading\": 小标题, \"bullets\": [2–5 条具体经过]}
-  parts: 1–3 个对象的数组，这 10 分钟的时间花在哪，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1
+  parts: 0–3 个对象的数组，这 10 分钟的时间花在哪，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1；人不在电脑前（离开电脑、只有后台程序在跑）返回空数组 []
 ";
 
-/// 类型（在做什么）：两级，互不重叠、合起来不遗漏。一级按「这段时间的主要产出」分，判定顺序见 ACTIVITY_GUIDE
+/// 类型（在做什么）：两级，互不重叠、合起来不遗漏，只按行为和产出分（为了什么交给领域）。判定顺序见 ACTIVITY_GUIDE。
+/// 2026-10-29 调整：加「决策」（和 AI 讨论方案、审阅产出原先散在调研、事务、规划、整理里，约占两成）；
+/// 二级改准：调研、学习按「目的」分 → 检索、阅读按行为分；整理 → 配置维护；社交媒体 → 刷信息流；一级休闲 → 消遣（和领域「休闲」分开）
 pub const ACTIVITY_TREE: &[(&str, &[&str])] = &[
     ("创作", &["编码", "写作", "设计", "数据分析"]),
+    ("决策", &["方案讨论", "评审验收"]),
     ("沟通", &["即时消息", "邮件", "会议通话"]),
-    ("获取", &["调研", "学习"]),
-    ("管理", &["规划", "事务", "整理"]),
-    ("休闲", &["影音", "游戏", "社交媒体"]),
+    ("获取", &["检索", "阅读"]),
+    ("管理", &["规划", "事务", "配置维护"]),
+    ("消遣", &["影音", "刷信息流", "游戏"]),
     ("其他", &["其他"]),
 ];
 
@@ -1058,21 +1061,26 @@ pub fn canon_activity(raw: &str) -> String {
     if let Some(x) = ACTIVITY_TREE.iter().flat_map(|(_, xs)| xs.iter()).find(|x| **x != "其他" && s.contains(**x)) {
         return x.to_string();
     }
+    // 旧叫法（含 2026-10-29 改名前的二级、一级）归到现在的二级；按顺序匹配，先到先得
     const OLD: &[(&str, &str)] = &[
-        ("开发", "编码"), ("代码", "编码"), ("调试", "编码"), ("部署", "编码"), ("数据", "数据分析"), ("会议", "会议通话"), ("通话", "会议通话"),
-        ("沟通", "即时消息"), ("聊天", "即时消息"), ("娱乐", "影音"), ("视频", "影音"), ("阅读", "调研"), ("浏览", "调研"), ("文档", "写作"),
-        ("配置", "整理"), ("安排", "规划"), ("测试", "编码"), ("审阅", "调研"), ("评审", "调研"),
+        ("调研", "检索"), ("学习", "阅读"), ("整理", "配置维护"), ("社交媒体", "刷信息流"), ("休闲", "消遣"),
+        ("讨论", "方案讨论"), ("审阅", "评审验收"), ("评审", "评审验收"), ("验收", "评审验收"),
+        ("开发", "编码"), ("代码", "编码"), ("调试", "编码"), ("部署", "编码"), ("测试", "编码"), ("数据", "数据分析"), ("会议", "会议通话"), ("通话", "会议通话"),
+        ("沟通", "即时消息"), ("聊天", "即时消息"), ("娱乐", "影音"), ("视频", "影音"), ("看剧", "影音"), ("搜索", "检索"), ("浏览", "阅读"), ("文档", "写作"),
+        ("配置", "配置维护"), ("安排", "规划"),
     ];
     OLD.iter().find(|(k, _)| s.contains(k)).map(|(_, v)| v.to_string()).unwrap_or_else(|| "其他".into())
 }
 
-const ACTIVITY_GUIDE: &str = "    activity 只能填下面的二级类型（如「编码」，不要只填一级「创作」）。按这个顺序判断，落进第一个符合的：
-      1 创作——这段时间产出了东西：编码（写代码、调试、部署，包括让 AI 代写代码）、写作（文档、方案、报告、笔记）、设计（界面、图形、样式）、数据分析（报表、表格、算数据）
-      2 沟通——对象是具体的人、要对方回应：即时消息（微信、飞书等聊天）、邮件、会议通话
-      3 获取——只输入信息、没有产出：调研（为手头的事查资料、读网页）、学习（为长期能力：课程、读书、练习）
-      4 管理——安排和维护，不产出主体内容：规划（日程、任务、排期）、事务（行政、财务、购物、办手续）、整理（文件、系统、工具配置）
-      5 休闲——不为任何目的：影音、游戏、社交媒体（刷信息流）
+const ACTIVITY_GUIDE: &str = "    activity 只能填下面的二级类型（如「编码」「方案讨论」），不要只填一级（「创作」「决策」）。只看这段时间人在做什么、产出了什么，不看为了什么。按这个顺序判断，落进第一个符合的：
+      1 创作——产出了东西：编码（写代码、调试、测试、部署，包括让 AI 写代码、改代码）、写作（文档、方案、报告、笔记、话术）、设计（界面、原型、图形、样式）、数据分析（写查询、做表格和报表、算数据）
+      2 决策——没有直接产出，但形成了判断：方案讨论（和 AI 或自己推敲方案、比较做法、定下怎么做）、评审验收（看 AI 或别人的产出和进展，检查对不对、提修改意见、确认通过）
+      3 沟通——对象是具体的人、要对方回应：即时消息（微信、飞书、企业微信等聊天）、邮件、会议通话
+      4 获取——只输入信息、没有形成判断：检索（带着具体问题搜索、查文档和帮助页）、阅读（读文章、帖子、论坛、书、教程，没有当下要解决的问题）
+      5 管理——安排和维护：规划（日程、待办、排期）、事务（账号、行政、财务、购物、办手续）、配置维护（装软件、改设置、排查电脑和工具的问题、整理文件）
+      6 消遣——放松，按形式分：影音（看剧、视频、直播、听音乐）、刷信息流（刷社交媒体、短视频的推荐流）、游戏
       都不是：其他
+    人不在电脑前（离开电脑、锁屏、只有后台程序在跑）的部分不算，不要填「其他」。
     domain 是这件事为了什么，只能填：工作（为收入或职业：雇主、客户、自己的产品）、成长（为提升自己）、生活（家庭、财务、住行等个人事务）、健康（身体和心理）、关系（家人朋友、社交）、休闲（纯放松）
     project 是这段在推进的具体项目、产品、客户或事情，用最短的常用叫法（如「官网改版」「张三的合同」）；不要拿聊天会话、文档、窗口的标题当项目名，要写这件事本身；同一件事优先沿用「已有的项目名」里的写法；看不出就写空字符串。
 ";
@@ -1091,7 +1099,7 @@ const ALIAS_PROMPT: &str = "下面是一个人最近用过的项目名（括号�
 ";
 
 const TAG_PROMPT: &str = "下面是用户电脑上一段 10 分钟活动的摘要。判断这段时间花在哪。只返回一个 JSON 对象，不要代码块，字段：
-  parts: 1–3 个对象的数组，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1
+  parts: 0–3 个对象的数组，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1；人不在电脑前（离开电脑、只有后台程序在跑）返回空数组 []
 ";
 
 /// 设备目录是不是电脑（mac-<主机名>、win-<计算机名>）；iPhone 的 iphone-* 不算，手机另算
@@ -1387,6 +1395,48 @@ impl Summarizer {
         v.into_iter().take(30).map(|x| x.0).collect()
     }
 
+    /// 调试用：拿现在的判定说明把最近 days 天的 10 分钟摘要重新打一遍标签，只返回新旧对比，不写文件。
+    /// 返回 (分段名, 在电脑前秒数, 旧 parts, 新 parts 或 {"error"})；workers 个线程并发问模型
+    pub fn retag_dry(&self, days: i64, workers: usize) -> Vec<(String, i64, Value, Value)> {
+        let cutoff = Utc::now() - Duration::days(days);
+        let mut jobs = vec![];
+        for p in read_dir_sorted(&self.out_dir()) {
+            let f = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if !f.ends_with("-10min-memory-summary.md") || f.len() < 19 || NaiveDateTime::parse_from_str(&f[..19], "%Y-%m-%dT%H-%M-%S").map(|t| t.and_utc() < cutoff).unwrap_or(true) {
+                continue;
+            }
+            let md = fs::read_to_string(&p).unwrap_or_default();
+            let fm = front(&md);
+            let active = fm.get("active_sec").and_then(Value::as_i64).unwrap_or(0);
+            if active == 0 || fm.get("title").and_then(Value::as_str) == Some(IDLE_TITLE) {
+                continue;
+            }
+            // 去掉旧标签再给模型，免得照抄
+            let text: String = md.split("## Citations").next().unwrap_or(&md).lines().filter(|l| !l.starts_with("parts:") && !l.starts_with("active_sec:")).collect::<Vec<_>>().join("\n");
+            jobs.push((format!("{}Z", &f[..19]), active, fm.get("parts").cloned().unwrap_or(json!([])), text));
+        }
+        let known = self.known_projects();
+        let pre = if known.is_empty() { String::new() } else { format!("已有的项目名（同一件事请沿用这里的写法）：{}\n\n", known.join("、")) };
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let out = std::sync::Mutex::new(vec![]);
+        std::thread::scope(|sc| {
+            for _ in 0..workers.max(1) {
+                sc.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let Some((name, active, old, text)) = jobs.get(i) else { break };
+                    let new = match self.chat(&format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &format!("{pre}{text}")) {
+                        Ok((j, _)) => Value::Array(norm_parts(j.get("parts"))),
+                        Err(e) => json!({ "error": e }),
+                    };
+                    out.lock().unwrap().push((name.clone(), *active, old.clone(), new));
+                });
+            }
+        });
+        let mut v = out.into_inner().unwrap();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
     /// 给还没有 parts 的旧摘要补上（只用摘要文字问一次模型，便宜），顺带补 active_sec。返回补了几段
     pub fn tag_backfill(&self, mut log: impl FnMut(String)) -> usize {
         let names = self.segment_names();
@@ -1546,6 +1596,19 @@ mod tests {
         assert!(!JUNK.is_match("正常一行字"));
         assert_eq!(py_round(2.5), 2);
         assert_eq!(py_round(3.5), 4);
+    }
+
+    /// 2026-10-29 改名前的二级、一级，读历史记录时归到现在的类型
+    #[test]
+    fn old_activity_names() {
+        for (old, new) in [("调研", "检索"), ("学习", "阅读"), ("整理", "配置维护"), ("社交媒体", "刷信息流"), ("审阅", "评审验收"), ("开发", "编码"), ("方案讨论", "方案讨论"), ("决策", "决策")] {
+            assert_eq!(canon_activity(old), new, "{old}");
+        }
+        assert_eq!(canon_activity("休闲"), "消遣");
+        assert_eq!(activity_group("消遣"), "消遣");
+        assert_eq!(activity_group(&canon_activity("社交媒体")), "消遣");
+        assert_eq!(activity_group("评审验收"), "决策");
+        assert!(norm_parts(Some(&json!([]))).is_empty());
     }
 
     /// Windows 版写的事件（win-* 设备，bundle_id 是程序路径）也算进电脑时长

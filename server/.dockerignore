@@ -1,6 +1,0 @@
-data/
-backup/
-models/
-.env
-__pycache__/
-*.md

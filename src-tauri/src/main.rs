@@ -286,6 +286,15 @@ fn main() {
         println!("补标签 {n} 段，小时摘要 {m} 段");
         return;
     }
+    if args.get(1).map(|a| a == "--retag-dry").unwrap_or(false) {
+        // 调试用：按现在的类型说明把最近 N 天（默认 14）的 10 分钟摘要重新打一遍标签，每段一行 JSON 打印新旧对比，不写文件
+        let days = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(14);
+        let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
+        for (name, active, old, new) in sm.retag_dry(days, 6) {
+            println!("{}", serde_json::json!({"name": name, "active_sec": active, "old": old, "new": new}));
+        }
+        return;
+    }
     if args.get(1).map(|a| a == "--summary-redo-idle").unwrap_or(false) {
         // 一次性：已写过的「整段不在电脑前」摘要换成固定版（不调模型）
         let n = beayy_summary::Summarizer::new(beayy_core::default_root()).redo_idle();

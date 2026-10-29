@@ -1,16 +1,18 @@
 /* Beayy 网页界面：壳和页面按墨线（vendor/moxian/，令牌和组件），作息图、一天的形状、读数按设计系统「人生记录」，
    实现取自 网站/static/style.css，变量加 rec- 前缀，免得和墨线同名。这里不写墨线已有的样式。 */
 
-/* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜） */
+/* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜）。
+   2026-10-29 起照 Claude 设置页的配色——电脑用 Claude 的蓝（墨线 focus）、手机用 Claude 的琥珀（墨线 warn）、
+   说话用同样轻重的绿、熬夜用墨线 risk；轨道和地点是不带色偏的中性灰 */
 :root {
-  --rec-computer: #2b4cc2; --rec-phone: #e08a1e; --rec-night: #c42a50; --rec-track: #eceee9;
-  --rec-watch: #2f8a57; --rec-place: #cdd2d6; --rec-place-alt: #b3bac0;
+  --rec-computer: #2a78d6; --rec-phone: #fab219; --rec-night: #d03b3b; --rec-track: #efefed;
+  --rec-watch: #26a269; --rec-place: #dededb; --rec-place-alt: #cbcac6;
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #3b4248; --rec-place-alt: #4d555c; }
+  :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49; }
 }
-:root[data-theme="dark"] { --rec-computer: #8ea6ff; --rec-phone: #f2a93b; --rec-night: #ff7a95; --rec-track: #22262a; --rec-watch: #5fd08f; --rec-place: #3b4248; --rec-place-alt: #4d555c; }
+:root[data-theme="dark"] { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49; }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
 html, body { height: 100%; }
@@ -41,34 +43,60 @@ body { padding: 0; overflow: hidden; }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .mx-sec-head h3 { font-size: 15px; }
 .mx-empty-inline { margin: 0; }
+/* 今天页「全面」：段与段之间只靠留白，不画分割线（2026-10-29 起；墨线这里是留白加细线） */
+.secs-plain > .mx-sec + .mx-sec { margin-top: var(--space-7); padding-top: 0; border-top: 0; }
 .mx-confirm { margin-bottom: var(--space-5); }
 
 /* ---------- Readout 读数（人生记录） ---------- */
-.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-5); border-top: 1px solid var(--ink); padding-top: var(--space-4); }
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-5); }
 .ro .label { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--ink-3); }
 .ro .v { font: 500 30px/34px var(--font-mono); font-variant-numeric: tabular-nums; margin: var(--space-1) 0; }
 .ro .v small { font: 400 13px/20px var(--font-sans); color: var(--ink-3); margin-left: var(--space-1); }
-.ro .caption { font-size: 13px; line-height: 20px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ro.over .v { color: var(--rec-night); }
 
 /* ---------- DayStrip 一天的形状、Actogram 作息图（人生记录） ---------- */
 .strip, .strip-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); column-gap: 2px; }
 .strip { row-gap: 3px; }
-/* 地点色带：底色画到现在；每段停留按起止画在 0–24 点上，相邻两段交替深浅；够宽的地名写在段上，窄的写在下面一行；
-   两段之间的路上是一条细线，「现在」是一条竖线 */
-.places { position: relative; height: 18px; }
-.places .bg { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 2px; background: var(--rec-track); }
-.places .st { position: absolute; top: 0; bottom: 0; box-sizing: border-box; background: var(--rec-place); font: 11px/18px var(--font-sans); color: var(--ink); padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.places .st.alt { background: var(--rec-place-alt); }
-.places .go { position: absolute; top: 8.5px; height: 1px; background: var(--ink-4); }
-.places .now { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--ink); }
-.pl-names { position: relative; height: 16px; margin-bottom: 2px; font-size: 11px; line-height: 16px; color: var(--ink-4); }
-.pl-names span { position: absolute; top: 0; white-space: nowrap; }
 .strip-rows { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: var(--space-2); align-items: center; row-gap: 3px; }
 .strip-rows > .k { font-size: 11px; line-height: 16px; color: var(--ink-4); white-space: nowrap; }
-.strip-rows > .k-pl { align-self: start; line-height: 18px; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
+/* 按真实起止画的一排：小时格当底，起止块盖在上面；今天还没到的小时格只留空框 */
+.strip span.fut { background: transparent; box-shadow: inset 0 0 0 1px var(--rec-track); }
+.strip-track { position: relative; }
+.spans { position: absolute; inset: 0; pointer-events: none; }
+.spans i { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; pointer-events: auto; cursor: pointer; }
+.spans.computer i { background: var(--rec-computer); }
+.spans.phone i { background: var(--rec-phone); }
+.spans.talk i { background: var(--rec-watch); }
+.spans i:hover { outline: 1px solid var(--ink); outline-offset: 0; }
+/* 地点这一排和别的排一样高、一样是小时格，每段停留按起止盖在上面、相邻两段交替深浅，够宽的写地名（窄的只在悬停里有）；
+   两段之间的路上是一条细线 */
+.spans.place i { box-sizing: border-box; padding: 0 4px; background: var(--rec-place); font: 11px/22px var(--font-sans); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spans.place i.alt { background: var(--rec-place-alt); }
+.spans.place b { position: absolute; top: 10.5px; height: 1px; background: var(--ink-4); }
+/* 「现在」：一条竖线贯穿各排，时刻写在轴上 */
+.strip-rows { position: relative; }
+.now-line, .now-tag { position: absolute; left: calc(30px + var(--space-2) + (100% - 30px - var(--space-2)) * var(--f)); }
+.now-line { top: 0; bottom: 20px; width: 1px; background: var(--ink); pointer-events: none; }
+.now-tag { bottom: 0; transform: translateX(-50%); padding: 0 var(--space-1); font-size: 12px; line-height: 16px; color: var(--ink); background: var(--page); }
+/* 最近 14 天（照 Wise 支出洞察）：每天两根柱子，看的这一天实色、其他天淡 */
+.rd { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); column-gap: var(--space-1); }
+.rd-col { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); padding: var(--space-1) 0 0; border: 0; border-radius: var(--radius-sm); background: none; font: inherit; color: inherit; cursor: pointer; }
+.rd-col:hover:not(:disabled) { background: var(--hover); }
+.rd-col:disabled { cursor: default; }
+.rd-bars { display: flex; justify-content: center; align-items: flex-end; gap: 2px; height: 56px; border-bottom: 1px solid var(--line); }
+.rd-bars i { width: 30%; max-width: 10px; border-radius: 2px 2px 0 0; opacity: 0.35; }
+.rd-bars i.c { background: var(--rec-computer); }
+.rd-bars i.p { background: var(--rec-phone); }
+.rd-col.is-cur .rd-bars i { opacity: 1; }
+.rd-d { font-size: 11px; line-height: 16px; color: var(--ink-4); text-align: center; font-variant-numeric: tabular-nums; }
+.rd-col.is-cur .rd-d { color: var(--ink); font-weight: 600; }
+.rd-col.none .rd-d { opacity: 0.5; }
 .strip-axis, .acto-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
+/* 一天的形状的钟点：每 3 小时一个，写成 03:00，左边一道短竖线当刻度、对准那个小时格的左边，和数字同一行 */
+.strip-axis { margin-top: var(--space-1); font-size: 12px; color: var(--ink-3); }
+.strip-axis span.t { padding-left: 4px; border-left: 1px solid var(--ink-4); white-space: nowrap; }
+.strip-axis span.t small { font-size: inherit; }
 .acto { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; row-gap: 6px; align-items: center; }
 .acto-axis { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; }
 .acto .d { font: 12px/16px var(--font-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; text-decoration: none; white-space: nowrap; }
@@ -192,7 +220,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .ico[data-p="1"] img { border-radius: 4px; }
 .strip [data-h] { cursor: pointer; }
 .strip [data-h]:hover { outline: 1px solid var(--ink-4); outline-offset: -1px; }
-@media (prefers-reduced-motion: reduce) { .tl-row .chev, .bar-chev .mx-ico { transition: none; } .tl-row.flash { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .tl-row .chev { transition: none; } .tl-row.flash { animation: none; } }
 
 /* ---------- Markdown（日总结、经过） ---------- */
 .md { font-size: 14px; line-height: 22px; max-width: 72em; }
@@ -307,12 +335,9 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .work { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
 .work h4 { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 400; color: var(--ink-4); }
 .bars { display: flex; flex-direction: column; gap: 6px; }
-.bar-row { display: grid; grid-template-columns: 16px 112px 1fr 40px 32px; gap: var(--space-2); align-items: center; padding: 2px 0; font-size: 13px; line-height: 20px; }
+.bar-row { display: grid; grid-template-columns: 112px 1fr 40px 32px; gap: var(--space-2); align-items: center; padding: 2px 0; font-size: 13px; line-height: 20px; }
 button.bar-row { width: 100%; margin: 0; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 button.bar-row:hover { background: var(--hover); }
-.bar-chev { display: inline-flex; color: var(--ink-4); }
-.bar-chev .mx-ico { width: 14px; height: 14px; transition: transform .15s; }
-.bar-row[aria-expanded="true"] .bar-chev .mx-ico { transform: rotate(90deg); }
 .bar-kids { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .bar-kids[hidden] { display: none; }
 .bar-p { text-align: right; color: var(--ink-4); font-size: 12px; }
@@ -575,6 +600,7 @@ a.mx-btn { text-decoration: none; }
   .tabs { overflow-x: auto; max-width: 100%; }
   .tb-sep { display: none; }
   .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .strip-axis span.t small { display: none; } /* 窄屏只写小时，免得挤在一起 */
   .mx-setting { flex-wrap: wrap; }
   .mx-setting .btns { flex-wrap: wrap; }
   .mx-dialog { width: calc(100vw - 24px) !important; max-width: none; }

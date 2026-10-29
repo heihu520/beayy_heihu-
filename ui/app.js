@@ -257,24 +257,83 @@ const dlgVal = (el, id) => { const x = el.querySelector("#" + id); return x ? x.
 const shade = (min, v) => (min ? `background:color-mix(in srgb, var(${v}) ${Math.round(30 + (Math.min(min, 60) / 60) * 70)}%, var(--rec-track))` : "");
 const isNight = (h) => h >= 21 || h < 5;
 
-/** 读数：标签、数值、单位、下面一行小字；tip 是悬停提示（墨线：读数不配解释文字，要解释放悬停） */
+/** 读数：两行，标签和数值（单位跟在后面）。caption（时段、同步时刻这类补充）和 tip 都放悬停里，不占第三行
+ *  （三行太累赘；墨线：读数不配解释文字，要解释放悬停） */
 function readout(k, v, unit, caption = "", over = false, tip = "") {
-  return `<div class="ro${over ? " over" : ""}"${tip ? ` title="${esc(tip)}"` : ""}><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div><div class="caption" title="${esc(caption)}">${esc(caption) || "&nbsp;"}</div></div>`;
+  const hint = [caption, tip].filter(Boolean).join("\n");
+  return `<div class="ro${over ? " over" : ""}"${hint ? ` title="${esc(hint)}"` : ""}><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div></div>`;
 }
 
 /** 一天的形状。只给电脑、手机两排时照旧（上排电脑、下排手机）；给了 opt（手表说话的分钟数 hw、停留点 visits、日期 date）
- *  就按设备一排一排、行首写设备名，最上面一条地点色带 */
+ *  就按设备一排一排、行首写设备名，最上面一排地点。opt.spans 给了某排的真实起止（[开始 ms, 结束 ms, 浓淡 0–1]），
+ *  这一排就按起止画在小时格上（照 Square 排班：几点几分开始、结束一眼看出来），没给的照旧按每小时分钟数深浅；
+ *  今天还没到的小时格只留空框，一条「现在」竖线贯穿各排；轴上每 3 小时一个刻度，写成 03:00 */
 function dayStrip(hc, hp, clickable = false, opt = null) {
-  const cells = (arr, v, name, unit = "分钟") => arr.map((m, h) => `<span style="${shade(m, v)}" title="${h}:00 ${name} ${m} ${unit}"${clickable ? ` data-h="${h}"` : ""}></span>`).join("");
-  const axis = (n) => `<div class="strip-axis" aria-hidden="true">${Array.from({ length: n }, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div>`;
+  const day0 = opt && opt.date ? toDate(opt.date).getTime() : 0, now = Date.now(), today = opt && now >= day0 && now < day0 + 864e5;
+  const futH = today ? new Date(now).getHours() : 24;
+  const cells = (arr, v, name, unit = "分钟", flat = false) => arr.map((m, h) => `<span${h > futH ? ' class="fut"' : ""} style="${flat ? "" : shade(m, v)}" title="${h}:00 ${name} ${m} ${unit}"${clickable ? ` data-h="${h}"` : ""}></span>`).join("");
+  // 今天离「现在」不到 1.5 小时的钟点只留刻度，免得和轴上的现在时刻叠在一起
+  const nowH = today ? (now - day0) / 3600e3 : -9;
+  const axis = (n) => `<div class="strip-axis" aria-hidden="true">${Array.from({ length: n }, (_, h) => (h % 3 ? "<span></span>" : `<span class="t">${Math.abs(h - nowH) < 1.5 ? "" : `${pad2(h)}<small>:00</small>`}</span>`)).join("")}</div>`;
   if (!opt) return `<div role="img" aria-label="一天的形状：上排电脑，下排手机"><div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>${axis(24)}</div>`;
+  const frac = (ms) => Math.max(0, Math.min(1, (ms - day0) / 864e5));
+  const track = (arr, v, name, cls) => {
+    const sp = ((opt.spans || {})[cls] || []).filter(([a, z]) => z > day0 && a < day0 + 864e5);
+    if (!sp.length) return `<div class="strip">${cells(arr, v, name)}</div>`;
+    const bars = sp.map(([a, z, k]) => `<i style="left:${(frac(a) * 100).toFixed(3)}%;width:${((frac(z) - frac(a)) * 100).toFixed(3)}%${k < 1 ? `;opacity:${(0.35 + 0.65 * k).toFixed(2)}` : ""}" title="${name} ${hmMs(a)}–${hmMs(z)}"${clickable ? ` data-h="${new Date(Math.max(a, day0)).getHours()}"` : ""}></i>`).join("");
+    return `<div class="strip-track"><div class="strip">${cells(arr, v, name, "分钟", true)}</div><div class="spans ${cls}">${bars}</div></div>`;
+  };
+  // 地点：和别的排一样高、一样是小时格，每段停留按起止盖在上面、相邻两段交替深浅；够宽的地名写在段上，
+  // 窄的只在悬停里有；两段之间的路上画一条细线
+  const placeRow = () => {
+    const pos = (a, z) => `left:${(frac(a) * 100).toFixed(3)}%;width:${(Math.max(frac(z) - frac(a), 0.002) * 100).toFixed(3)}%`;
+    let i = 0;
+    const bars = placeBlocks(opt.visits, opt.date).map((b) => {
+      if (b.kind === "go") return `<b style="${pos(b.a, b.z)}" title="路上 ${spanText((b.z - b.a) / 1000)}"></b>`;
+      if (b.kind !== "stay") return "";
+      const name = placeName(b.v), wide = (b.z - b.a) / 3600e3 >= 1.2;
+      return `<i class="${i++ % 2 ? "alt" : ""}" style="${pos(b.a, b.z)}" title="${esc(name)} ${visitSpan(b.v)}"${clickable ? ` data-h="${new Date(Math.max(b.a, day0)).getHours()}"` : ""}>${wide ? esc(name) : ""}</i>`;
+    }).join("");
+    const grid = Array.from({ length: 24 }, (_, h) => `<span${h > futH ? ' class="fut"' : ""}></span>`).join("");
+    return `<div class="strip-track"><div class="strip">${grid}</div><div class="spans place">${bars}</div></div>`;
+  };
   const rows = [];
-  if (opt.visits && opt.visits.length) rows.push(["地点", placeBand(opt.visits, opt.date), "k-pl"]);
-  rows.push(["电脑", `<div class="strip">${cells(hc, "--rec-computer", "电脑")}</div>`]);
-  rows.push(["手机", `<div class="strip">${cells(hp, "--rec-phone", "手机")}</div>`]);
+  if (opt.visits && opt.visits.length) rows.push(["地点", placeRow()]);
+  rows.push(["电脑", track(hc, "--rec-computer", "电脑", "computer")]);
+  rows.push(["手机", track(hp, "--rec-phone", "手机", "phone")]);
   // 说话：手表录的，和没戴手表时 iPhone 自己录的，合在一排
-  if (opt.hw) rows.push(["说话", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
-  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
+  if (opt.hw) rows.push(["说话", track(opt.hw, "--rec-watch", "说话", "talk")]);
+  // 「现在」：竖线从第一排画到最后一排，时刻写在轴上（盖住那里的钟点）
+  const nowLine = today ? `<span class="now-line" style="--f:${frac(now).toFixed(5)}"></span><span class="now-tag mono" style="--f:${frac(now).toFixed(5)}">${hmMs(now)}</span>` : "";
+  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows${today ? " is-today" : ""}">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}${nowLine}</div></div>`;
+}
+
+/** 一排的真实起止：按开始排好，前后相隔不到 gap 毫秒且浓淡一样的并成一段，免得画上百个小块 */
+function mergeSpans(list, gap = 60e3) {
+  const out = [];
+  for (const s of [...list].filter(([a, z]) => z > a).sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && s[0] - last[1] <= gap && last[2] === s[2]) last[1] = Math.max(last[1], s[1]);
+    else out.push([...s]);
+  }
+  return out;
+}
+
+/** 「最近」：最近 14 天（照 Wise 支出洞察），每天一组两根柱子（电脑、手机），看的这一天实色、其他天淡；点哪天去哪天；
+ *  不配平均之类的说明（不加非必要的注释）。范围到今天为止，看的这一天太早就以它为最后一天；没有记录的天不画柱子 */
+function recentDays(date, cur) {
+  const by = Object.fromEntries(S.days.map((x) => [x.date, x]));
+  by[date] = { ...(by[date] || {}), date, active_sec: cur.c ?? (by[date] || {}).active_sec, phone_sec: cur.p ?? (by[date] || {}).phone_sec };
+  const now = localDay(), end = date >= addDays(now, -13) ? now : date;
+  const ds = Array.from({ length: 14 }, (_, i) => addDays(end, i - 13));
+  const has = (x) => by[x] && (by[x].active_sec != null || by[x].phone_sec != null);
+  const max = Math.max(3600, ...ds.filter(has).flatMap((x) => [by[x].active_sec || 0, by[x].phone_sec || 0]));
+  const bar = (sec, cls) => `<i class="${cls}" style="height:${sec ? Math.max(2, Math.round((sec / max) * 100)) : 0}%"></i>`;
+  const cols = ds.map((x) => {
+    const v = by[x], ok = has(x), tip = ok ? `${short(x)} · 电脑 ${hh(v.active_sec)}h · 手机 ${hh(v.phone_sec)}h` : `${short(x)} · 取不到`;
+    return `<button class="rd-col${x === date ? " is-cur" : ""}${ok ? "" : " none"}" ${ok || x === now ? `data-day="${x}"` : "disabled"} title="${esc(tip)}"><span class="rd-bars">${ok ? bar(v.active_sec, "c") + bar(v.phone_sec, "p") : ""}</span><span class="rd-d mono">${x === now ? "今" : +x.slice(8)}</span></button>`;
+  }).join("");
+  return section("最近", `<div class="rd" role="group" aria-label="最近 14 天每天在电脑前和用手机的时长">${cols}</div>`);
 }
 
 /** 两个停留点之间不超过 3 小时算「路上」，更长的和首尾算「没记到」（同 脚本/日数据包.py 的 TRANSIT_MAX） */
@@ -347,45 +406,6 @@ function placeBlocks(visits, date) {
   if (stop > cur) out.push({ kind: "none", a: cur, z: stop });
   return out.filter((b) => b.z > b.a);
 }
-
-/** 地点色带：底色只画到现在；每段停留按起止画在当天 0–24 点上，相邻两段交替深浅；够宽的地名写在段上，
- *  窄的写在下面一行（layoutPlaceNames 排）；两段之间的路上画一条细线；今天画一条「现在」竖线 */
-function placeBand(visits, date) {
-  const day0 = toDate(date).getTime(), now = Date.now(), today = now < day0 + 864e5;
-  const pct = (ms) => `${(Math.max(0, Math.min(1, (ms - day0) / 864e5)) * 100).toFixed(3)}%`;
-  const wid = (a, z) => `${(Math.max((z - a) / 864e5, 0.002) * 100).toFixed(3)}%`;
-  const blocks = placeBlocks(visits, date);
-  let html = `<span class="bg" style="width:${today ? pct(now) : "100%"}"></span>`, i = 0;
-  const narrow = [];
-  for (const b of blocks) {
-    if (b.kind === "go") html += `<span class="go" style="left:${pct(b.a)};width:${wid(b.a, b.z)}" title="路上 ${spanText((b.z - b.a) / 1000)}"></span>`;
-    if (b.kind !== "stay") continue;
-    const name = placeName(b.v), wide = (b.z - b.a) / 3600e3 >= 1.2;
-    html += `<span class="st${i++ % 2 ? " alt" : ""}" style="left:${pct(b.a)};width:${wid(b.a, b.z)}" title="${esc(name)} ${visitSpan(b.v)}">${wide ? esc(name) : ""}</span>`;
-    if (!wide) narrow.push([((b.a - day0) / 864e5), name]);
-  }
-  if (today) html += `<span class="now" style="left:${pct(now)}" title="现在 ${hmMs(now)}"></span>`;
-  return `<div><div class="places">${html}</div><div class="pl-names" data-names="${esc(JSON.stringify(narrow))}"></div></div>`;
-}
-
-/** 窄段的地名写在色带下面：从左往右排，和前一个挤在一起或超出右边就不写（悬停里有）。页面画好以后、窗口变宽窄时调用 */
-function layoutPlaceNames(root = document) {
-  for (const box of root.querySelectorAll(".pl-names[data-names]")) {
-    const names = JSON.parse(box.dataset.names || "[]"), W = box.getBoundingClientRect().width;
-    box.innerHTML = "";
-    const m = document.createElement("span"); box.appendChild(m);
-    let right = -Infinity, html = "";
-    for (const [f, n] of names) {
-      m.textContent = n;
-      const w = m.getBoundingClientRect().width, x = f * W;
-      if (x < right + 8 || x + w > W) continue;
-      html += `<span style="left:${x.toFixed(1)}px">${esc(n)}</span>`; right = x + w;
-    }
-    box.innerHTML = html;
-  }
-}
-let PL_RESIZE = null;
-window.addEventListener("resize", () => { clearTimeout(PL_RESIZE); PL_RESIZE = setTimeout(() => layoutPlaceNames(), 120); });
 
 /** 某段时间里待得最久的停留点 */
 function placeAt(visits, a, z) {
@@ -472,7 +492,7 @@ function bindOften() {
   if (add) add.onclick = addPlaceDialog;
 }
 
-/** 全面页的「去了哪」：按地点合计的条形图（加上路上、没记到），明细在地点页 */
+/** 全面页的「地点」：按地点合计的条形图（加上路上、没记到），明细在地点页签；不放跳转按钮 */
 function placeTotals(visits, date) {
   if (!visits.length) return "";
   const tot = new Map();
@@ -488,8 +508,8 @@ function placeTotals(visits, date) {
   if (none) rows.push({ n: "没记到", sec: none, c: "none" });
   const max = Math.max(...rows.map((r) => r.sec), 1), all = rows.reduce((a, r) => a + r.sec, 0) || 1;
   const pct = (sec) => { const p = (sec / all) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
-  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-chev"></span><span class="bar-name${r.c === "pl" ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
-  return section("去了哪", bars, { aside: `<button class="mx-btn mx-btn--text" id="to-places">看地点${ICON.chevR}</button>` });
+  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-name${r.c === "pl" ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
+  return section("地点", bars);
 }
 
 /** 时间线上的一段停留 */
@@ -786,8 +806,18 @@ async function renderToday() {
   const sp = d.speech, visits = (d.places && d.places.visits) || [];
   // 说话按分钟画，不满 1 分钟的也算 1 分钟，免得零碎的几句看不见
   const hw = sp ? Array.from({ length: 24 }, (_, i) => Math.min(60, Math.ceil(((sp.hours || {})[pad2(i)] || 0) / 60))) : null;
+  // 一天的形状按真实起止画：电脑用实时的活动区间，没有（有数据包的以前的日子）用 10 分钟摘要、按在电脑前的比例深浅；
+  // 手机用每次拿起；说话用每一句
+  const ms = (iso) => Date.parse(iso);
+  const liveSpans = (d.live && d.live.spans) || [];
+  const spans = {
+    computer: mergeSpans(liveSpans.length ? liveSpans.map(([a, z]) => [ms(a), ms(z), 1])
+      : (d.segments || []).filter((s) => s.kind === "10min" && s.active_sec).map((s) => [ms(s.start), ms(s.end), Math.round(Math.min(1, s.active_sec / Math.max(1, (ms(s.end) - ms(s.start)) / 1000)) * 4) / 4])),
+    phone: mergeSpans(((ph && ph.sessions) || []).map((x) => [ms(x.start), ms(x.end), 1])),
+    talk: mergeSpans(((sp && sp.conversations) || []).flatMap((x) => (x.lines || []).map((l) => [ms(l.start), ms(l.end), 1])), 120e3),
+  };
   const items = timelineItems(d);
-  const counts = { all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone" && !x.visit).length };
+  const counts ={ all: items.length, computer: items.filter((x) => x.dev === "computer").length, phone: items.filter((x) => x.dev === "phone" && !x.visit).length };
   if (sp) counts.watch = items.filter((x) => x.dev === "watch").length;
   const tab = TL.tab in counts ? TL.tab : "all";
   const shown = items.filter((x) => tab === "all" || x.dev === tab);
@@ -810,8 +840,9 @@ async function renderToday() {
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
         ${visits.length ? readout("去了", new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size, "处", `${visits.length} 段停留`) : ""}
       </div>
-      <div style="margin-top:var(--space-6)">`
-    + section("一天的形状", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span><span><i class="line"></i>路上</span>` : ""}</div>`)
+      <div class="secs-plain" style="margin-top:var(--space-6)">`
+    + recentDays(today, { c: c.active_sec, p: ph ? ph.total_sec : (pack.phone || {}).total_sec })
+    + section("一天", dayStrip(hc, hp, true, { hw, visits, date: today, spans }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-place-alt)"></i>地点</span><span><i class="line"></i>路上</span>` : ""}</div>`)
     + placeTotals(visits, today)
     + workSection(d.work) + `</div>`;
   if (view === "places" && (pview === "often" || !PL.stats || Date.now() - (PL.at || 0) > 600e3)) {
@@ -839,8 +870,6 @@ async function renderToday() {
     try { localStorage.setItem("place-view", TL.pview); } catch (err) {}
     renderToday();
   };
-  const toPlaces = document.getElementById("to-places");
-  if (toPlaces) toPlaces.onclick = () => { TL.view = "places"; try { localStorage.setItem("today-view", "places"); } catch (e) {} renderToday(); window.scrollTo(0, 0); };
 
   document.getElementById("view-tabs").onclick = (e) => {
     const b = e.target.closest("[data-view]"); if (!b) return;
@@ -855,7 +884,6 @@ async function renderToday() {
     try { localStorage.setItem("tl-tab", TL.tab); } catch (err) {}
     renderToday();
   };
-  layoutPlaceNames($app);
   bindPick(document.getElementById("day-pick"));
   $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => goDay(b.dataset.day)));
   $app.querySelectorAll("[data-chip]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); pickChip(visits, +b.dataset.chip, b.dataset.shop); }));
@@ -871,7 +899,7 @@ async function renderToday() {
   }));
   if (pview === "map" && PL_SEL.date === today && PL_SEL.i != null) { const li = $app.querySelector(`[data-sel="${PL_SEL.i}"]`); if (li) li.classList.add("is-sel"); }
   // 点一天的形状里的某个小时：切到时间线，滚到那个小时
-  $app.querySelectorAll(".strip [data-h]").forEach((cell) => (cell.onclick = () => {
+  $app.querySelectorAll(".strip [data-h], .spans [data-h]").forEach((cell) => (cell.onclick = () => {
     TL.view = "timeline"; TL.jump = +cell.dataset.h;
     renderToday();
   }));
@@ -889,26 +917,44 @@ async function renderToday() {
 
 // ---------- 时间花在哪：按项目、按类型（10 分钟摘要里模型给的标签 × 在电脑前的秒数） ----------
 
-/** 展开着的一级（「domains:工作」这样的键），记在本机，每分钟自动刷新后保持 */
+/** 展开着的一级（「activities:创作」这样的键），记在本机，每分钟自动刷新后保持 */
 const WORK_OPEN = new Set((() => { try { return JSON.parse(localStorage.getItem("work-open") || "[]"); } catch (e) { return []; } })());
 
 function workSection(w) {
   if (!w || !((w.domains || []).length || (w.activities || []).length)) return "";
   const dur = (sec) => (sec < 3600 ? Math.round(sec / 60) + "m" : hh(sec) + "h");
-  // 两级：一级一行，有二级的点开才列；条长按这一列最长的一级比，百分比按这一列合计算
+  // 两级：一级一行，有二级的点整行展开（不画箭头）；条长按这一列最长的一级比，百分比按这一列合计算
   const tree = (kind, rows) => {
     const max = Math.max(...rows.map((r) => r.sec), 1), total = rows.reduce((a, r) => a + r.sec, 0) || 1;
     const pct = (sec) => { const p = (sec / total) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
-    const cells = (r) => `<span class="bar-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${dur(r.sec)}</span><span class="bar-p mono">${pct(r.sec)}</span>`;
+    const cells = (r) => `<span class="bar-name${r.dim ? " dim" : ""}" title="${esc(r.name)}">${esc(r.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%"></i></span><span class="bar-v mono">${dur(r.sec)}</span><span class="bar-p mono">${pct(r.sec)}</span>`;
     return `<div class="bars">${rows.map((r) => {
-      const kids = r.children.length > 1 || (r.children[0] && r.children[0].name !== r.name) ? r.children.slice(0, 6) : [];
-      if (!kids.length) return `<div class="bar-row"><span class="bar-chev"></span>${cells(r)}</div>`;
+      const kids = r.children.length > 1 || (r.children[0] && r.children[0].name !== r.name) ? r.children.slice(0, kind === "projects" ? undefined : 6) : [];
+      if (!kids.length) return `<div class="bar-row">${cells(r)}</div>`;
       const k = `${kind}:${r.name}`, open = WORK_OPEN.has(k);
-      return `<div class="bar-grp"><button class="bar-row top" data-work="${esc(k)}" aria-expanded="${open}"><span class="bar-chev">${ICON.chevR}</span>${cells(r)}</button>
-        <div class="bar-kids"${open ? "" : " hidden"}>${kids.map((c) => `<div class="bar-row kid"><span class="bar-chev"></span>${cells(c)}</div>`).join("")}</div></div>`;
+      return `<div class="bar-grp"><button class="bar-row top" data-work="${esc(k)}" aria-expanded="${open}">${cells(r)}</button>
+        <div class="bar-kids"${open ? "" : " hidden"}>${kids.map((c) => `<div class="bar-row kid">${cells(c)}</div>`).join("")}</div></div>`;
     }).join("")}</div>`;
   };
-  return section("时间花在哪", `<div class="work"><div><h4>为了什么（领域 · 项目）</h4>${tree("domains", w.domains || [])}</div><div><h4>在做什么（类型）</h4>${tree("activities", w.activities || [])}</div></div>`);
+  // 项目：不再先分领域，所有项目按时长排，占时间长的在前。没归到项目的工作时间叫「未归项目」、灰字放最后；
+  // 别的领域（休闲、关系……）里没归到项目的按领域名算一行。项目这列的行数和类型那列一样（类型全列），
+  // 放不下的合成「其他 N 个项目」，点开看是哪些（两列一样多）
+  const pj = new Map();
+  const add = (name, sec) => pj.set(name, (pj.get(name) || 0) + sec);
+  for (const d of w.domains || []) {
+    const named = d.children.filter((c) => c.name !== "未归项目");
+    for (const c of named) add(c.name, c.sec);
+    const rest = d.sec - named.reduce((a, c) => a + c.sec, 0);
+    if (rest >= 30) add(d.name === "工作" ? "未归项目" : d.name, rest);
+  }
+  const projects = [...pj].filter(([n]) => n !== "未归项目").map(([name, sec]) => ({ name, sec, children: [] })).sort((a, b) => b.sec - a.sec);
+  const slots = Math.max((w.activities || []).length, 3) - (pj.has("未归项目") ? 1 : 0);
+  if (projects.length > slots) {
+    const more = projects.splice(slots - 1);
+    projects.push({ name: `其他 ${more.length} 个项目`, sec: more.reduce((a, r) => a + r.sec, 0), children: more, dim: true });
+  }
+  if (pj.has("未归项目")) projects.push({ name: "未归项目", sec: pj.get("未归项目"), children: [], dim: true });
+  return section("时间", `<div class="work"><div><h4>项目</h4>${tree("projects", projects)}</div><div><h4>类型</h4>${tree("activities", w.activities || [])}</div></div>`);
 }
 
 // 展开／收起一级：直接改这一块，不重画整页
@@ -2384,7 +2430,7 @@ function amapDialog() {
   });
 }
 
-/** 同步服务器：默认官方的，自己部署了服务端（app/server）可以换。只能在登录前换 */
+/** 同步服务器：默认官方的，自己部署了同步服务（app/sync-server）可以换。只能在登录前换 */
 function syncServerDialog() {
   const cf = S.settings;
   openDialog({
