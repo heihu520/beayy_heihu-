@@ -1,0 +1,4 @@
+# torch、torchaudio 在 Dockerfile.asr 里从 PyTorch 的 CPU 源装（不带 CUDA，小很多）
+funasr==1.4.16
+modelscope==1.40.2
+numpy==2.5.4

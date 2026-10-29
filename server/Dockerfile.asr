@@ -1,0 +1,13 @@
+# beayy-asr：转写（FunASR：Paraformer＋标点、FSMN-VAD、CAM++ 认人），CPU 跑。镜像约 3G，模型第一次启动时下载到 /models（约 2G），常驻约 3G 内存
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/home/beayy \
+    BEAYY_SYNC_DIR=/data/sync BEAYY_JOBS_DIR=/data/jobs BEAYY_BACKUP_DIR=/backup MODELSCOPE_CACHE=/models
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 1000 --create-home beayy
+WORKDIR /app
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+COPY requirements.txt requirements-asr.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-asr.txt
+COPY entrypoint.sh worker.py asr.py usage.py syncapi.py schema.sql ./
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["python", "worker.py"]
