@@ -1,0 +1,6 @@
+# 口令不进 git
+Config/Secrets.xcconfig
+# 工程由 project.yml 生成（xcodegen）
+*.xcodeproj/
+build/
+DerivedData/

@@ -58,27 +58,41 @@ async function call(cmd, args = {}) {
     case "get_day": return (await loadMock("get_day"))[args.date] || null;
     case "daily_status": return null;
     case "get_week": {
+      // 样例里有这一周就用（按周一取），没有就给空的一周
       const m = addDays(args.date, -((toDate(args.date).getDay() + 6) % 7));
-      return { monday: m, sunday: addDays(m, 6), summary_md: null, error: null, days: Array.from({ length: 7 }, (_, k) => ({ date: addDays(m, k), line: null })) };
+      return (await loadMock("get_week"))[m] || { monday: m, sunday: addDays(m, 6), summary_md: null, error: null, days: Array.from({ length: 7 }, (_, k) => ({ date: addDays(m, k), line: null })) };
     }
     case "get_month": {
       const first = args.date.slice(0, 8) + "01", last = addDays(addDays(first, 32).slice(0, 8) + "01", -1);
+      const got = (await loadMock("get_month"))[first.slice(0, 7)];
+      if (got) return got;
       const weeks = [];
       for (let m = addDays(first, -((toDate(first).getDay() + 6) % 7)); m <= last; m = addDays(m, 7)) weeks.push({ monday: m, sunday: addDays(m, 6), line: null });
       return { first, last, summary_md: null, error: null, weeks };
     }
     case "get_range": {
-      // 样例：用 get_day 样例里有的那几天拼
-      const all = await loadMock("get_day"), days = [];
+      // 样例：用 get_day 样例里有的那几天拼，时间分类按天加起来
+      const all = await loadMock("get_day"), days = [], sum = { domains: {}, activities: {} };
+      let tagged = 0;
       for (let d = args.from; d <= args.to; d = addDays(d, 1)) {
         const x = all[d]; if (!x) continue;
-        const c = (x.pack && x.pack.computer) || x.live || {}, ph = x.phone;
-        days.push({ date: d, active_sec: c.active_sec ?? null, phone_sec: ph ? ph.total_sec : null, pickups: ph ? ph.pickups : null, night_sec: ph ? (ph.late_sec || 0) : null, visits: (x.places && x.places.visits) || [] });
+        const c = x.live || (x.pack && x.pack.computer) || {}, ph = x.phone;
+        days.push({ date: d, active_sec: c.active_sec ?? null, phone_sec: ph ? ph.total_sec : null, pickups: ph ? ph.pickups : null, night_sec: ph ? (ph.late_sec || 0) + (ph.night_sec || 0) : null, visits: (x.places && x.places.visits) || [] });
+        if (!x.work) continue;
+        tagged += x.work.tagged_sec || 0;
+        for (const k of ["domains", "activities"]) for (const g of x.work[k]) for (const c2 of g.children) {
+          const o = (sum[k][g.name] = sum[k][g.name] || {});
+          o[c2.name] = (o[c2.name] || 0) + c2.sec;
+        }
       }
-      const w = Object.values(all).find((x) => x.work) || {};
-      return { from: args.from, to: args.to, days, work: w.work || null };
+      const tree = (o) => Object.entries(o).map(([name, ch]) => ({ name, sec: Object.values(ch).reduce((a, b) => a + b, 0), children: Object.entries(ch).map(([n, s]) => ({ name: n, sec: s })).sort((a, b) => b.sec - a.sec) })).sort((a, b) => b.sec - a.sec);
+      return { from: args.from, to: args.to, days, work: { domains: tree(sum.domains), activities: tree(sum.activities), tagged_sec: tagged, untagged_sec: 0 } };
     }
-    case "llm_usage": return { official: false, days: Array.from({ length: 30 }, (_, k) => ({ date: addDays(localDay(), k - 29), in: 250000 + (k % 7) * 12000, out: 42000 + (k % 5) * 3000, kinds: { segment: { in: 230000, out: 38000, calls: 60 }, hourly: { in: 15000, out: 3000, calls: 12 }, daily: { in: 6000, out: 1200, calls: 1 } } })) };
+    case "get_icons": {
+      // 样例默认不带图标（显示首字母）；mock/get_icons.json 放了图标就用
+      const all = await loadMock("get_icons").catch(() => null);
+      return all ? Object.fromEntries(args.ids.filter((b) => all[b]).map((b) => [b, all[b]])) : {};
+    }
     default: return loadMock(cmd);
   }
 }
@@ -402,7 +416,7 @@ function guessLine(v) {
 }
 /** 区域名（常去按它合计）：电脑取的分级里的区域，没有就用地名的第二层 */
 const areaOf = (v) => (v.admin && v.admin.area) || ((v.place_name || v.name || "").split(" · ")[1]) || (v.place_name || v.name || "").split(" · ")[0];
-/** 完整分级「中国 › 江苏省 › 南京市 › 江宁区 › 麒麟街道 › 南京江宁宝龙广场」（直辖市省市同名只写一次） */
+/** 完整分级「中国 › 浙江省 › 杭州市 › 西湖区 › 北山街道 › 万象广场」（直辖市省市同名只写一次） */
 function chainOf(v) {
   const a = v.admin || {};
   const xs = [a.country, a.province, a.city !== a.province ? a.city : null, a.district, a.township, a.area].filter(Boolean);
@@ -474,7 +488,7 @@ function placesSection(visits, date, convs, mode = "stays") {
   for (const b of blocks) if (b.kind === "go") go += (b.z - b.a) / 1000;
   const spots = new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size;
   const talk = (convs || []).length;
-  // 当天在哪些城市、区：一个城市写「南京 · 江宁区、栖霞区」，跨城写「南京 → 上海」
+  // 当天在哪些城市、区：一个城市写「杭州 · 西湖区、滨江区」，跨城写「杭州 → 上海」
   const cities = [...new Set(visits.map((v) => v.admin && v.admin.city).filter(Boolean))];
   const where = cities.length > 1 ? cities.map(cityShort).join(" → ")
     : cities.length ? `${cityShort(cities[0])} · ${[...new Set(visits.map((v) => v.admin && v.admin.district).filter(Boolean))].join("、")}` : "";
@@ -696,7 +710,8 @@ function renderSide() {
   const av = document.getElementById("me-avatar");
   if (av) av.innerHTML = avatarHtml(pf);
   const nm = document.getElementById("me-name");
-  if (nm) nm.textContent = pf.name || "我";
+  // 窄屏（手机）底栏这一格是「我的」页签，不写名字
+  if (nm) nm.textContent = NARROW.matches ? "我的" : pf.name || "我";
   const sub = document.getElementById("me-sub");
   // 正常记录时不写；暂停、缺权限、没在记录才提示
   if (sub) sub.textContent = st.mobile ? "" : st.paused ? " · 已暂停" : !perm.accessibility || !perm.input_monitoring ? " · 缺权限" : st.capturing ? "" : " · 没在记录";
@@ -779,8 +794,9 @@ function toggleMe(open) {
   btn.setAttribute("aria-expanded", String(!menu.hidden));
 }
 
-/** 手机（窄屏、iPhone 版）：左下角菜单变成底部页签里的「我」，点了直接进设置 */
+/** 手机（窄屏、iPhone 版）：左下角菜单变成底部页签里的「我的」，点了直接进设置 */
 const NARROW = window.matchMedia("(max-width: 760px)");
+NARROW.addEventListener("change", () => { if (S.status) renderSide(); });
 document.getElementById("me").onclick = (e) => { e.stopPropagation(); if (NARROW.matches) { location.hash = "#/settings"; return; } toggleMe(); };
 document.getElementById("me-menu").onclick = async (e) => {
   const b = e.target.closest("[data-me]"); if (!b) return;
@@ -1284,7 +1300,7 @@ async function loadIcons() {
   for (const p of [0, 1]) {
     const els = [...$app.querySelectorAll(`.ico[data-p="${p}"]`)];
     const need = [...new Set(els.map((e) => e.dataset.b))].filter((b) => !(b in ICONS[p]));
-    if (need.length && TAURI) Object.assign(ICONS[p], await call("get_icons", { ids: need, phone: !!p }).catch(() => ({})));
+    if (need.length) Object.assign(ICONS[p], await call("get_icons", { ids: need, phone: !!p }).catch(() => ({})));
     for (const e of $app.querySelectorAll(`.ico[data-p="${p}"]`)) {
       const got = ICONS[p][e.dataset.b];
       // 名字表里没有的 app，用 App Store 上的名字

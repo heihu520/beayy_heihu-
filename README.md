@@ -25,7 +25,7 @@ src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;
 | 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（macOS 辅助功能、Windows UI Automation 读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
 | 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久（看不到 app 里的内容） |
 | 手表（可选） | Apple Watch 全天录音，传到**你自己的**录音服务器转写、分说话人；这里只拉回文字（谁在几点说了什么），音频不经过这台电脑 |
-| 位置（可选） | iPhone 记下的停留点（几点到、几点走、地名），同样经你自己的录音服务器拉回来；路上的轨迹不记 |
+| 位置（可选） | iPhone app 记下的停留点（几点到、几点走、地名），加密后经同步服务传到电脑；路上的轨迹不记 |
 | 存储 | 全部在本机 `~/Library/Application Support/Beayy/`，按设备、每 10 分钟一个文件，只追加 |
 | 摘要 | 把那 10 分钟的记录（有手表、位置时连同那 10 分钟的对话原文和地名）发给**你自己配置**的模型服务（任何 OpenAI 兼容接口），写回本机 |
 | 同步（可选） | 本机压缩、XChaCha20-Poly1305 加密后上传；主密码只在设备上用（Argon2id 派生），服务器只存密文和登录校验值的哈希 |
@@ -33,6 +33,8 @@ src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;
 ## 安装
 
 到 [Releases](../../releases) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。装好以后会自动检查更新，有新版本时左下角菜单里出现「重启更新」。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。
+
+iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.apple.com/join/Ptzqu4q8 （源码在 `ios/`）。
 
 要求 macOS 14 以上，或 Windows 10／11（64 位）。Windows 版记的和 Mac 一样（键鼠钩子＋UI Automation），还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）。
 
@@ -60,6 +62,13 @@ git clone https://github.com/hengfengliya/beayy && cd beayy
 ./build.sh --dmg      # 打安装包 target/Beayy-<版本>.dmg；用 Developer ID 签名并给了公证凭据就自动公证
 ```
 
+iPhone 和手表 app（要 Xcode 26、[XcodeGen](https://github.com/yonaskolb/XcodeGen)，Rust 加上 `aarch64-apple-ios`、`aarch64-apple-ios-sim` 两个目标）：
+
+```bash
+cd ios && xcodegen          # 生成 BeayyRecorder.xcodeproj；project.yml 里的 DEVELOPMENT_TEAM 换成自己的
+open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Rust 核心
+```
+
 只看界面：用浏览器打开 `ui/index.html`，读 `ui/mock/` 里的虚构样例数据（`python3 ui/mock/make_mock.py` 重新生成）。
 
 ## 结构
@@ -73,7 +82,9 @@ git clone https://github.com/hengfengliya/beayy && cd beayy
 | `crates/beayy-summary` | 10 分钟摘要、小时摘要、两级分类（类型、领域 · 项目）、项目名合并 |
 | `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载 |
 | `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日总结 |
-| `ui` | 网页界面：纯 HTML＋CSS＋JS |
+| `ui` | 网页界面：纯 HTML＋CSS＋JS，电脑和 iPhone 共用 |
+| `mobile` | iPhone 版的 Rust 核心（静态库），直接编 `src-tauri` 的数据代码，和电脑同一份 |
+| `ios` | iPhone 和 Apple Watch app 的 Swift 外壳（XcodeGen）：定位记停留点、手表录音、登录账号加密上传；界面是网页视图加载 `ui/` |
 | `server` | 服务端：同步（只存密文）＋录音转写＋可选的模型、地图代理，Python（FastAPI＋SQLite＋本地文件）。用 Docker 在自己的电脑或服务器上跑，见 [`server/README.md`](server/README.md)；官方实例跑的也是它 |
 | `sync-server` | 同步服务的旧 Cloudflare 版（Workers＋R2＋D1），接口和 `server` 相同，不再维护 |
 

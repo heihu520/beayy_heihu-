@@ -1,1 +1,1 @@
-[{"id": "r1", "text": "22:00 以后不开电脑", "enabled": true}, {"id": "r2", "text": "手机每天不超过 3 小时", "enabled": true}]
+[{"id": "r1", "text": "23:00 以后不用手机", "enabled": true}, {"id": "r2", "text": "手机每天不超过 4 小时", "enabled": true}, {"id": "r3", "text": "抖音每天不超过 30 分钟", "enabled": true}, {"id": "r4", "text": "工作日 22:30 以后不开电脑", "enabled": false}]

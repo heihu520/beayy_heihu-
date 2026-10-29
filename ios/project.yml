@@ -1,0 +1,78 @@
+# Beayy 录音：手表录、iPhone 加密后传同步服务（sync.beayy.com）。生成工程：cd app/ios && xcodegen
+# 测试（同步加密对照电脑的测试向量）：xcodebuild test -project BeayyRecorder.xcodeproj -scheme BeayyPhone -destination 'platform=iOS Simulator,name=iPhone 17'
+name: BeayyRecorder
+options:
+  bundleIdPrefix: com.fengli.beayy
+  deploymentTarget:
+    iOS: "26.0"
+    watchOS: "26.0"
+packages:
+  Sodium:
+    url: https://github.com/jedisct1/swift-sodium
+    from: 0.11.0
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    DEVELOPMENT_TEAM: 8R7XUVNM53   # 自己编译换成自己的 Apple 开发者团队 ID
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.2"
+    CURRENT_PROJECT_VERSION: "16"
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  BeayyPhone:
+    type: application
+    platform: iOS
+    sources:
+      - Phone
+      - Shared
+      # 界面：和电脑同一套网页（app/ui），打进包里的 ui/ 目录，WebScreen.swift 加载
+      - path: ../ui
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: BeayyWatch
+      - package: Sodium
+    # 数据代码：和电脑同一份 Rust（app/mobile → libbeayy_mobile.a），每次编译前按真机／模拟器编好
+    preBuildScripts:
+      - name: 编 Rust 核心
+        basedOnDependencyAnalysis: false
+        script: |
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/opt/rustup/bin:/opt/homebrew/bin:$PATH"
+          if [ "$PLATFORM_NAME" = iphonesimulator ]; then T=aarch64-apple-ios-sim; else T=aarch64-apple-ios; fi
+          cd "$SRCROOT/.." && IPHONEOS_DEPLOYMENT_TARGET=26.0 cargo build -p beayy-mobile --release --target "$T"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fengli.beayy.ios
+        PRODUCT_NAME: Beayy
+        INFOPLIST_FILE: Phone/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: Phone/BeayyCore.h
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": $(SRCROOT)/../target/aarch64-apple-ios/release
+        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": $(SRCROOT)/../target/aarch64-apple-ios-sim/release
+        OTHER_LDFLAGS: -lbeayy_mobile -framework Security -framework SystemConfiguration
+    scheme:
+      testTargets: [BeayyPhoneTests]
+  # 同步加密（Phone/SyncCrypto.swift）对照测试向量，不挂 app
+  BeayyPhoneTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests, Phone/SyncCrypto.swift]
+    dependencies:
+      - package: Sodium
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fengli.beayy.ios.tests
+  BeayyWatch:
+    type: application
+    platform: watchOS
+    sources: [Watch, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fengli.beayy.ios.watchkitapp
+        PRODUCT_NAME: Beayy
+        INFOPLIST_FILE: Watch/Info.plist
+        SKIP_INSTALL: YES

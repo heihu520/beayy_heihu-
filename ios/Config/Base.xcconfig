@@ -1,0 +1,7 @@
+// 同步账号（邮箱＋主密码）在 app 的「我」里登录，不编进来。本机可选的配置写在同目录 Secrets.xcconfig（.gitignore 已忽略），格式见 Secrets.example.xcconfig。
+// 高德 Web 服务 Key 的兜底：登录后用电脑推来的（account/config.json），没登录或电脑没配时才用这里编进去的；不进 git，写进 Secrets.xcconfig
+BEAYY_AMAP_KEY =
+// 这台 iPhone 的设备名（和桌面版 devices/ 同名：iphone-<iCloud 同步目录 UUID 前 8 位>），停留点和这台录的音归到它名下。
+// 空着就第一次启动时生成 iphone-<8 位十六进制> 存在手机上；要沿用已有的名字写进 Secrets.xcconfig
+BEAYY_DEVICE_ID =
+#include? "Secrets.xcconfig"
