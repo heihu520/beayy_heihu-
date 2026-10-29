@@ -83,6 +83,8 @@ fn get_status(state: tauri::State<'_, Arc<AppState>>) -> Value {
         "device": state.log.device,
         "version": env!("CARGO_PKG_VERSION"),
         "shadow": shadow_mode(),
+        // 本机 MCP 服务就是这个程序加 --mcp（设置里给 AI 接入的命令）
+        "exe": std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
     })
 }
 
@@ -268,6 +270,15 @@ fn main() {
         }
         return;
     }
+    if args.get(1).map(|a| a == "--monthly").unwrap_or(false) {
+        // 调试用：写某天所在那个月的月总结（默认上个月）并打印
+        let d = args.get(2).and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or_else(|| daily::first_of(chrono::Local::now().date_naive()) - chrono::Duration::days(1));
+        match daily::generate_month(d) {
+            Ok(md) => println!("{md}"),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
     if args.get(1).map(|a| a == "--daily").unwrap_or(false) {
         // 调试用：写某天的日总结（默认今天）并打印
         let d = args.get(2).and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or_else(|| chrono::Local::now().date_naive());
@@ -365,6 +376,10 @@ fn main() {
             Some("get_profile") => data::get_profile(),
             Some("recent_events") => data::recent_events(args.get(3).cloned().unwrap_or_default(), None, Some(5), None).unwrap_or_else(|e| json!({ "error": e })),
             Some("place_stats") => data::place_stats(None),
+            Some("get_range") => data::get_range(args.get(3).cloned().unwrap_or_default(), args.get(4).cloned().unwrap_or_default()).unwrap_or_else(|e| json!({ "error": e })),
+            Some("get_week") => daily::get_week(args.get(3).cloned().unwrap_or_default()).unwrap_or_else(|e| json!({ "error": e })),
+            Some("get_month") => daily::get_month(args.get(3).cloned().unwrap_or_default()).unwrap_or_else(|e| json!({ "error": e })),
+            Some("llm_usage") => data::llm_usage(),
             Some("cloud_round") => match beayy_remote::cloud::round(&mut Relay::default(), &data_root(), Duration::from_secs(600)) {
                 Ok(n) => json!({"added": n.added, "places": n.places, "transcribed": n.transcribed, "fetched": n.fetched, "deleted": n.deleted, "waiting": n.waiting, "errors": n.errors}),
                 Err(e) => json!({"error": e}),
@@ -375,7 +390,7 @@ fn main() {
             Some("amap_js") => tauri::async_runtime::block_on(amap::amap_js_config()).as_object().map(|o| json!(o.keys().collect::<Vec<_>>())).unwrap_or(json!(null)),
             Some("sync_usage") => beayy_sync::usage(&beayy_core::data_root()).unwrap_or_else(|e| json!({ "error": e })),
             Some("ticket") => beayy_sync::ticket(&beayy_core::data_root()).map(|(t, exp)| json!({ "len": t.len(), "expires": exp })).unwrap_or_else(|e| json!({ "error": e })),
-            _ => json!({"error": "用法：--dump list_days|get_day 日期|get_settings|get_rules|place_stats"}),
+            _ => json!({"error": "用法：--dump list_days|get_day 日期|get_range 起 止|get_week 日期|get_month 日期|llm_usage|get_settings|get_rules|place_stats"}),
         };
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
@@ -389,11 +404,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, phone_read_now, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, daily::daily_status, daily::get_week, daily::generate_weekly, data::test_model,
+            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, daily::daily_status, daily::get_week, daily::generate_weekly, daily::get_month, daily::generate_monthly, data::get_range, data::llm_usage, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
-            sync::account_info, sync::account_remove_device, sync::account_logout, sync::account_recovery_code,
+            sync::account_info, sync::account_remove_device, sync::account_logout, sync::account_recovery_code, sync::signup_info, sync::folder_state, sync::folder_create, sync::folder_join, sync::folder_recover, sync::pick_folder,
             update::update_status, update::update_check, update::update_apply
         ])
         .setup(|app| {

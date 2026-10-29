@@ -61,6 +61,7 @@ fn cloud(root: &Path) -> Value {
     let names = [
         ("segment", "电脑和手机记录", "长期"),
         ("summary", "10 分钟摘要", "长期"),
+        ("daily", "日、周、月总结", "长期"),
         ("audio", "录音", keep_audio.as_str()),
         ("transcript", "对话转写", "长期"),
         ("places", "停留点", "长期"),

@@ -392,6 +392,9 @@ a.mx-btn { text-decoration: none; }
 .ac-msg { margin: var(--space-3) 0 0; }
 .mx-setting > .profile { flex: 1; min-width: 0; }
 .gen-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+/* 总结末尾：口径说明＋「重新生成」，一行小字，不抢正文 */
+.sum-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-4) 0 0; }
+.secs-plain > .sum-foot + .mx-sec { margin-top: var(--space-7); }
 .week-days { display: flex; flex-direction: column; }
 .week-days a { display: grid; grid-template-columns: 7.5em 1fr; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 14px; line-height: 20px; }
 .week-days a:hover { background: var(--hover); }
@@ -614,3 +617,13 @@ a.mx-btn { text-decoration: none; }
   .mx-setting .btns { flex-wrap: wrap; }
   .mx-dialog { width: calc(100vw - 24px) !important; max-width: none; }
 }
+
+/* 模型用量（设置 → 连接 → 模型 → 用量）：30 天柱子、按用途的表 */
+.ub-ro { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; margin-bottom: var(--space-4); }
+.ub-cols { display: grid; grid-template-columns: repeat(30, 1fr); gap: 2px; align-items: end; height: 72px; }
+.ub-cols span { height: 100%; display: flex; align-items: flex-end; }
+.ub-cols i { display: block; width: 100%; min-height: 1px; background: var(--rec-computer); border-radius: 2px 2px 0 0; }
+.ub-axis { display: flex; justify-content: space-between; margin: var(--space-1) 0 var(--space-4); font-size: 12px; color: var(--ink-3); }
+.ub-table { margin-bottom: var(--space-3); table-layout: auto; width: 100%; }
+.ub-table td:first-child, .ub-table th:first-child { white-space: nowrap; overflow: visible; }
+.code-box code { white-space: pre-wrap; word-break: break-all; }

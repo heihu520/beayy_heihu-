@@ -750,16 +750,34 @@ impl Summarizer {
             user += &format!("上一段摘要：{prior}\n\n");
         }
         user += pack;
-        self.chat(&format!("{PROMPT}{ACTIVITY_GUIDE}"), &user)
+        self.chat("segment", &format!("{PROMPT}{ACTIVITY_GUIDE}"), &user)
     }
 
     /// 给别处用：问一次模型，要一个 JSON 对象回来
     pub fn ask(&self, system: &str, user: &str) -> Result<Map<String, Value>, String> {
-        self.chat(system, user).map(|x| x.0)
+        self.chat("other", system, user).map(|x| x.0)
     }
 
-    /// 调网关，要一个 JSON 对象回来；返回（对象，用量）
-    fn chat(&self, system: &str, user: &str) -> Result<(Map<String, Value>, Value), String> {
+    /// 同 ask，用量记在 kind 名下（daily、weekly、monthly……，设置里看模型用量按它分）
+    pub fn ask_as(&self, kind: &str, system: &str, user: &str) -> Result<Map<String, Value>, String> {
+        self.chat(kind, system, user).map(|x| x.0)
+    }
+
+    /// 记一次模型用量：logs/llm_usage.jsonl 一行 {at, kind, model, official, in, out}
+    fn note_usage(&self, kind: &str, model: &str, usage: &Value) {
+        let n = |k: &str| usage.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let line = json!({"at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), "kind": kind, "model": model,
+            "official": self.official(), "in": n("prompt_tokens"), "out": n("completion_tokens")});
+        let dir = self.root.join("logs");
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dir.join("llm_usage.jsonl")) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
+    /// 调网关，要一个 JSON 对象回来；返回（对象，用量）。kind 是这次干什么用的，记用量用
+    fn chat(&self, kind: &str, system: &str, user: &str) -> Result<(Map<String, Value>, Value), String> {
         let (gateway, model) = self.settings();
         // 官方：地址是同步服务的代理，认证用账号令牌（模型由服务器定）；自己的网关：地址、模型、密钥都用设置里的
         let (url, auth) = if self.official() {
@@ -801,6 +819,9 @@ impl Summarizer {
             }
             match r {
                 Ok(v) => {
+                    // 没出 JSON 重试的那几次也花了 token，一样记
+                    let usage = v.get("usage").cloned().unwrap_or(json!({}));
+                    self.note_usage(kind, v["model"].as_str().unwrap_or(&model), &usage);
                     let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
                     let text = fence.replace_all(&text, "").to_string();
                     let (Some(a), Some(b)) = (text.find('{'), text.rfind('}')) else {
@@ -808,7 +829,7 @@ impl Summarizer {
                         continue;
                     };
                     match serde_json::from_str::<Value>(&text[a..=b]) {
-                        Ok(Value::Object(j)) => return Ok((j, v.get("usage").cloned().unwrap_or(json!({})))),
+                        Ok(Value::Object(j)) => return Ok((j, usage)),
                         Ok(_) => err = "模型返回的不是对象".into(),
                         Err(e) => err = e.to_string(),
                     }
@@ -1335,7 +1356,7 @@ impl Summarizer {
         let mut names: Vec<(String, usize)> = count.into_iter().collect();
         names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let list = names.iter().map(|(n, c)| format!("{n}（{c} 次，{}）", seen_dom.get(n).map(String::as_str).unwrap_or("未判断"))).collect::<Vec<_>>().join("\n");
-        match self.chat(ALIAS_PROMPT, &list) {
+        match self.chat("alias", ALIAS_PROMPT, &list) {
             Ok((j, _)) => {
                 let valid: HashSet<&str> = names.iter().map(|x| x.0.as_str()).collect();
                 let aliases: Map<String, Value> = j
@@ -1424,7 +1445,7 @@ impl Summarizer {
                 sc.spawn(|| loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let Some((name, active, old, text)) = jobs.get(i) else { break };
-                    let new = match self.chat(&format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &format!("{pre}{text}")) {
+                    let new = match self.chat("tag", &format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &format!("{pre}{text}")) {
                         Ok((j, _)) => Value::Array(norm_parts(j.get("parts"))),
                         Err(e) => json!({ "error": e }),
                     };
@@ -1464,7 +1485,7 @@ impl Summarizer {
                     user += &format!("已有的项目名（同一件事请沿用这里的写法）：{}\n\n", known.join("、"));
                 }
                 user += &md.split("## Citations").next().unwrap_or(&md).to_string();
-                match self.chat(&format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &user) {
+                match self.chat("tag", &format!("{TAG_PROMPT}{ACTIVITY_GUIDE}"), &user) {
                     Ok((j, _)) => {
                         let raw: Vec<String> = j.get("parts").and_then(Value::as_array).map(|a| a.iter().map(|x| x["activity"].as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
                         let n = norm_parts(j.get("parts"));
@@ -1554,7 +1575,7 @@ impl Summarizer {
                     let g = |k: &str| fm.get(k).and_then(Value::as_str).unwrap_or("").to_string();
                     user += &format!("{}–{} 〔{}〕{}\n", hms(t)[..5].to_string(), hms(t + Duration::minutes(10))[..5].to_string(), g("title"), g("description"));
                 }
-                match self.chat(ROLLUP_PROMPT, &user) {
+                match self.chat("hourly", ROLLUP_PROMPT, &user) {
                     Ok((j, _)) => (
                         j.get("title").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "),
                         j.get("description").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "),

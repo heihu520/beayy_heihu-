@@ -1016,11 +1016,96 @@ fn pack_of(repo: &Option<PathBuf>, date: &str) -> Option<Value> {
 }
 
 fn summary_of(repo: &Option<PathBuf>, date: &str) -> Option<String> {
-    // 以 app 自己写的（Beayy/daily/）为准；没有再看外部目录里的（app 以前、外部脚本写的）
+    // 以 app 自己写的（Beayy/daily/）为准；没有再看别的设备同步来的，再看外部目录里的（app 以前、外部脚本写的）
     let name = format!("日总结_{}.md", date.replace('-', ""));
-    fs::read_to_string(default_root().join("daily").join(&name))
-        .ok()
-        .or_else(|| repo.as_ref().and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok()))
+    daily_md(&name).or_else(|| repo.as_ref().and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok()))
+}
+
+/// 日／周／月总结：本机写的（Beayy/daily/<文件名>）为准；本机没有（手机、没开 app 的那几天）就用别的设备同步来的
+/// （devices/<设备>/daily/<文件名>），几台都有取最后改的
+pub fn daily_md(name: &str) -> Option<String> {
+    if let Ok(t) = fs::read_to_string(default_root().join("daily").join(name)) {
+        return Some(t);
+    }
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for dev in fs::read_dir(default_root().join("devices")).into_iter().flatten().flatten() {
+        let p = dev.path().join("daily").join(name);
+        if let Ok(t) = fs::metadata(&p).and_then(|m| m.modified()) {
+            if best.as_ref().map(|b| t > b.0).unwrap_or(true) {
+                best = Some((t, p));
+            }
+        }
+    }
+    best.and_then(|(_, p)| fs::read_to_string(p).ok())
+}
+
+/// 区间 [[ISO, ISO]] 落在 [from, to) 里的秒数
+fn spans_in(spans: &Value, from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
+    spans.as_array().into_iter().flatten().filter_map(|x| {
+        let a = DateTime::parse_from_rfc3339(x[0].as_str()?).ok()?.with_timezone(&Utc);
+        let b = DateTime::parse_from_rfc3339(x[1].as_str()?).ok()?.with_timezone(&Utc);
+        Some((b.min(to) - a.max(from)).num_milliseconds().max(0) as f64 / 1000.0)
+    }).sum()
+}
+
+/// 一段日子（周、月总结页用）：每天的在电脑前、手机、拿起、熬夜（这一晚＝当天 21:00 以后＋次日 0–5 点，同日总结）、停留点，
+/// 加上整段的时间花在哪（项目、类型）。今天以后的日子不算
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn get_range(from: String, to: String) -> Result<Value, String> {
+    let a = NaiveDate::parse_from_str(&from, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    let z = NaiveDate::parse_from_str(&to, "%Y-%m-%d").map_err(|e| e.to_string())?.min(Local::now().date_naive());
+    let repo = repo_path();
+    let names = app_names();
+    let ev = phone_events();
+    let mut mine = self_segments();
+    // 电脑：数据包的为准，没有（或只到一半）用自采事件实时算；连带次日，算凌晨
+    let computer = |d: NaiveDate| -> Option<Value> {
+        let ds = d.format("%Y-%m-%d").to_string();
+        let pack = pack_of(&repo, &ds);
+        let pc = pack.as_ref().map(|p| p["computer"].clone()).filter(|c| !c["active_sec"].is_null());
+        match pc {
+            Some(c) if pack.as_ref().map(|p| p["partial"] != true).unwrap_or(false) => Some(c),
+            _ => live_computer(d).or(pc),
+        }
+    };
+    let mut days = vec![];
+    let mut segs: Vec<Value> = vec![];
+    let mut d = a;
+    while d <= z {
+        let ds = d.format("%Y-%m-%d").to_string();
+        let (s, e) = day_bounds(d);
+        let (s, e) = (s.with_timezone(&Utc), e.with_timezone(&Utc));
+        let c = computer(d);
+        let n = computer(d + Duration::days(1));
+        let ph = phone_day(ev.as_slice(), d, &names);
+        let nph = phone_day(ev.as_slice(), d + Duration::days(1), &names);
+        let stop = s + Duration::hours(HARD_STOP as i64);
+        let late_c = c.as_ref().map(|c| c["late_sec"].as_f64().unwrap_or_else(|| spans_in(&c["spans"], stop, e))).unwrap_or(0.0);
+        let dawn_c = n.as_ref().map(|n| {
+            let h = &n["active_hours"];
+            (0..5).map(|k| h[format!("{k:02}")].as_f64().unwrap_or(0.0)).sum::<f64>()
+        }).unwrap_or(0.0);
+        let late_p = ph.as_ref().map(|p| p["late_sec"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
+        let dawn_p = nph.as_ref().map(|p| p["night_sec"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
+        let visits = places_day_opt(d, false).map(|p| p["visits"].clone()).unwrap_or(json!([]));
+        // 时间花在哪：同 get_day，自采摘要为准，数据包里同一段的不重复算
+        let own = mine.remove(&ds).unwrap_or_default();
+        let taken: HashSet<String> = own.iter().filter_map(|s| s["start"].as_str().map(String::from)).collect();
+        if let Some(p) = pack_of(&repo, &ds) {
+            segs.extend(codex_segments(&p, d).into_iter().filter(|s| !taken.contains(s["start"].as_str().unwrap_or(""))));
+        }
+        segs.extend(own);
+        days.push(json!({
+            "date": ds,
+            "active_sec": c.as_ref().and_then(|c| c["active_sec"].as_i64()),
+            "phone_sec": ph.as_ref().and_then(|p| p["total_sec"].as_i64()),
+            "pickups": ph.as_ref().and_then(|p| p["pickups"].as_i64()),
+            "night_sec": if c.is_some() || ph.is_some() { json!((late_c + dawn_c + late_p + dawn_p).round() as i64) } else { Value::Null },
+            "visits": visits,
+        }));
+        d += Duration::days(1);
+    }
+    Ok(json!({"from": from, "to": z.format("%Y-%m-%d").to_string(), "days": days, "work": work_of(&segs)}))
 }
 
 fn computer_hours(c: &Value) -> Value {
@@ -1252,6 +1337,10 @@ pub fn get_settings() -> Value {
         "default_transcribe_server": beayy_core::DEFAULT_TRANSCRIBE,
         "speaker_name": beayy_remote::cloud::speaker_name(),
         "sync_server": crate::sync::server(),
+        "sync_mode": crate::sync::mode(),
+        "sync_folder": crate::sync::folder(),
+        // 选同步文件夹时给的默认：iCloud 云盘里的 Beayy 文件夹（只有 Mac 有）
+        "icloud_folder": if cfg!(target_os = "macos") { std::env::var("HOME").map(|h| format!("{h}/Library/Mobile Documents/com~apple~CloudDocs/Beayy")).unwrap_or_default() } else { String::new() },
         "default_sync_server": beayy_sync::DEFAULT_SERVER,
         "repo_path": get("repo_path", ""),
         "onboarded": s.get("onboarded").and_then(Value::as_bool).unwrap_or(false),
@@ -1272,7 +1361,7 @@ pub fn get_settings() -> Value {
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn save_settings(settings: Value) -> Result<(), String> {
     let mut s = read_settings_raw();
-    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server"), ("sync_server", "sync_server"), ("transcribe_server", "transcribe_server"), ("speaker_name", "speaker_name"), ("model_mode", "model_mode"), ("map_mode", "map_mode")];
+    let map = [("gateway", "gateway"), ("model_segment", "summary_model"), ("model_daily", "daily_model"), ("repo_path", "repo_path"), ("blocklist", "blacklist"), ("onboarded", "onboarded"), ("relay_server", "relay_server"), ("sync_server", "sync_server"), ("transcribe_server", "transcribe_server"), ("speaker_name", "speaker_name"), ("model_mode", "model_mode"), ("map_mode", "map_mode"), ("sync_mode", "sync_mode"), ("sync_folder", "sync_folder")];
     for (from, to) in map {
         if let Some(mut v) = settings.get(from).cloned() {
             // 同步服务器、转写服务填的就是官方的，存成空（官方地址以后变了跟着变）
@@ -1592,6 +1681,51 @@ pub async fn llm_status() -> Value {
         Ok(a) => a.get("services").cloned().unwrap_or(json!({"plan": null})),
         Err(e) => json!({"error": e}),
     }
+}
+
+/// 模型用量（设置 → 连接 → 模型 → 用量）：最近 30 天每天的输入、输出 token，按用途分。
+/// 记在 logs/llm_usage.jsonl（0.2.26 起每次调模型记一行）；那以前的只有 10 分钟摘要，从 summarizer.log 的「用量 a+b token」补
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn llm_usage() -> Value {
+    let logs = default_root().join("logs");
+    let since = Local::now().date_naive() - Duration::days(29);
+    // 日期 → 用途 → [输入, 输出, 次数]
+    let mut days: BTreeMap<String, BTreeMap<String, [i64; 3]>> = BTreeMap::new();
+    let mut add = |t: DateTime<Utc>, kind: &str, i: i64, o: i64| {
+        let d = t.with_timezone(&Local).date_naive();
+        if d >= since {
+            let x = days.entry(d.format("%Y-%m-%d").to_string()).or_default().entry(kind.to_string()).or_default();
+            x[0] += i;
+            x[1] += o;
+            x[2] += 1;
+        }
+    };
+    let mut first: Option<DateTime<Utc>> = None;
+    for line in fs::read_to_string(logs.join("llm_usage.jsonl")).unwrap_or_default().lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Some(t) = v["at"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc)) else { continue };
+        first = Some(first.map(|f| f.min(t)).unwrap_or(t));
+        add(t, v["kind"].as_str().unwrap_or("other"), v["in"].as_i64().unwrap_or(0), v["out"].as_i64().unwrap_or(0));
+    }
+    let re = Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})Z：.*用量 (\d+)\+(\d+) token").unwrap();
+    for line in fs::read_to_string(logs.join("summarizer.log")).unwrap_or_default().lines() {
+        let Some(c) = re.captures(line) else { continue };
+        let Ok(t) = chrono::NaiveDateTime::parse_from_str(&c[1], "%Y-%m-%dT%H-%M-%S").map(|t| t.and_utc()) else { continue };
+        if first.map(|f| t < f).unwrap_or(true) {
+            add(t, "segment", c[2].parse().unwrap_or(0), c[3].parse().unwrap_or(0));
+        }
+    }
+    let list: Vec<Value> = (0..30).map(|k| {
+        let d = (since + Duration::days(k)).format("%Y-%m-%d").to_string();
+        let m = days.get(&d).cloned().unwrap_or_default();
+        json!({
+            "date": d,
+            "in": m.values().map(|x| x[0]).sum::<i64>(),
+            "out": m.values().map(|x| x[1]).sum::<i64>(),
+            "kinds": m.iter().map(|(k, x)| (k.clone(), json!({"in": x[0], "out": x[1], "calls": x[2]}))).collect::<Map<_, _>>(),
+        })
+    }).collect();
+    json!({"days": list, "official": read_settings_raw().get("model_mode").and_then(Value::as_str) == Some("official")})
 }
 
 #[cfg_attr(not(beayy_mobile), tauri::command)]

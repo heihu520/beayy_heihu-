@@ -114,6 +114,66 @@ pub fn server() -> String {
     crate::data::read_settings_raw().get("sync_server").and_then(|v| v.as_str()).map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| beayy_sync::DEFAULT_SERVER.to_string())
 }
 
+/// 同步方式：server（官方或自建服务器，默认）或 folder（同步文件夹，设置里的 sync_folder）
+pub fn mode() -> String {
+    crate::data::read_settings_raw().get("sync_mode").and_then(|v| v.as_str()).filter(|s| *s == "folder").unwrap_or("server").to_string()
+}
+
+pub fn folder() -> String {
+    crate::data::read_settings_raw().get("sync_folder").and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+/// 注册框用：这台服务器要不要邀请码、每个账号能存多少
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn signup_info() -> Value {
+    beayy_sync::signup_info(&server())
+}
+
+/// 设置里选的同步文件夹：路径、在不在、里面开没开过同步（账号页据此给「新开」还是「加入」）
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn folder_state() -> Value {
+    beayy_sync::folder_state(&folder())
+}
+
+/// 第一台设备在同步文件夹里新开同步，返回恢复码
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn folder_create(password: String) -> Result<String, String> {
+    let code = beayy_sync::folder_create(&data_root(), &folder(), &password)?;
+    kick();
+    Ok(code)
+}
+
+/// 别的设备加入同步文件夹里已有的同步
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn folder_join(password: String) -> Result<(), String> {
+    beayy_sync::folder_join(&data_root(), &folder(), &password)?;
+    kick();
+    Ok(())
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn folder_recover(code: String, password: String) -> Result<(), String> {
+    beayy_sync::folder_recover(&data_root(), &folder(), &code, &password)?;
+    kick();
+    Ok(())
+}
+
+/// 选一个文件夹（系统的选文件夹窗口）：macOS 用 AppleScript，Windows 用 PowerShell；取消返回 None
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn pick_folder() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    let o = std::process::Command::new("/usr/bin/osascript").args(["-e", "POSIX path of (choose folder with prompt \"选一个同步文件夹\")"]).output();
+    #[cfg(target_os = "windows")]
+    let o = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }"])
+        .output();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let o: std::io::Result<std::process::Output> = Err(std::io::Error::other("这个系统没有选文件夹窗口，直接填路径"));
+    let o = o.map_err(|e| e.to_string())?;
+    let p = String::from_utf8_lossy(&o.stdout).trim().trim_end_matches('/').to_string();
+    Ok(Some(p).filter(|p| o.status.success() && !p.is_empty()))
+}
+
 /// 注册新账号，返回恢复码
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn account_signup(invite: String, email: String, password: String) -> Result<String, String> {

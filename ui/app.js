@@ -61,6 +61,24 @@ async function call(cmd, args = {}) {
       const m = addDays(args.date, -((toDate(args.date).getDay() + 6) % 7));
       return { monday: m, sunday: addDays(m, 6), summary_md: null, error: null, days: Array.from({ length: 7 }, (_, k) => ({ date: addDays(m, k), line: null })) };
     }
+    case "get_month": {
+      const first = args.date.slice(0, 8) + "01", last = addDays(addDays(first, 32).slice(0, 8) + "01", -1);
+      const weeks = [];
+      for (let m = addDays(first, -((toDate(first).getDay() + 6) % 7)); m <= last; m = addDays(m, 7)) weeks.push({ monday: m, sunday: addDays(m, 6), line: null });
+      return { first, last, summary_md: null, error: null, weeks };
+    }
+    case "get_range": {
+      // 样例：用 get_day 样例里有的那几天拼
+      const all = await loadMock("get_day"), days = [];
+      for (let d = args.from; d <= args.to; d = addDays(d, 1)) {
+        const x = all[d]; if (!x) continue;
+        const c = (x.pack && x.pack.computer) || x.live || {}, ph = x.phone;
+        days.push({ date: d, active_sec: c.active_sec ?? null, phone_sec: ph ? ph.total_sec : null, pickups: ph ? ph.pickups : null, night_sec: ph ? (ph.late_sec || 0) : null, visits: (x.places && x.places.visits) || [] });
+      }
+      const w = Object.values(all).find((x) => x.work) || {};
+      return { from: args.from, to: args.to, days, work: w.work || null };
+    }
+    case "llm_usage": return { official: false, days: Array.from({ length: 30 }, (_, k) => ({ date: addDays(localDay(), k - 29), in: 250000 + (k % 7) * 12000, out: 42000 + (k % 5) * 3000, kinds: { segment: { in: 230000, out: 38000, calls: 60 }, hourly: { in: 15000, out: 3000, calls: 12 }, daily: { in: 6000, out: 1200, calls: 1 } } })) };
     default: return loadMock(cmd);
   }
 }
@@ -343,6 +361,11 @@ const hashStr = (s) => [...s].reduce((h, c) => (h * 31 + c.codePointAt(0)) >>> 0
 function placeTones(visits, date) {
   const tot = new Map();
   for (const b of placeBlocks(visits, date)) if (b.kind === "stay") tot.set(placeKey(b.v), (tot.get(placeKey(b.v)) || 0) + (b.z - b.a));
+  return toneMap(tot);
+}
+
+/** 地点 → 颜色序号：待得久的先挑（按地名哈希，撞了往后挪） */
+function toneMap(tot) {
   const used = new Set(), out = new Map();
   for (const [k] of [...tot].sort((a, b) => b[1] - a[1])) {
     let t = hashStr(k) % PLACE_TONES;
@@ -511,22 +534,30 @@ function bindOften() {
 
 /** 全面页的「地点」：按地点合计的条形图（加上路上、没记到），明细在地点页签；不放跳转按钮 */
 function placeTotals(visits, date) {
-  if (!visits.length) return "";
+  return placeTotalsDays([{ visits, date }]);
+}
+
+/** 「地点」：几天的停留合在一起算（周、月总结用），每天按自己那天的起止切；没有停留点的日子不算 */
+function placeTotalsDays(days) {
+  days = days.filter((d) => d.visits && d.visits.length);
+  if (!days.length) return "";
   const tot = new Map();
   let go = 0, none = 0;
-  for (const b of placeBlocks(visits, date)) {
+  for (const d of days) for (const b of placeBlocks(d.visits, d.date)) {
     const sec = (b.z - b.a) / 1000;
     if (b.kind === "go") go += sec;
     else if (b.kind === "none") none += sec;
     else { const n = placeKey(b.v); tot.set(n, (tot.get(n) || 0) + sec); }
   }
-  const tones = placeTones(visits, date);
-  const rows = [...tot].sort((a, b) => b[1] - a[1]).map(([n, sec]) => ({ n, sec, c: "pl", tone: tones.get(n) }));
+  const tones = toneMap(tot);
+  let rows = [...tot].sort((a, b) => b[1] - a[1]).map(([n, sec]) => ({ n, sec, c: "pl", tone: tones.get(n) }));
+  // 几天合起来地方多：列前 10 个，其余合成一行
+  if (days.length > 1 && rows.length > 11) rows = [...rows.slice(0, 10), { n: `其他 ${rows.length - 10} 个地方`, sec: rows.slice(10).reduce((a, r) => a + r.sec, 0), c: "pl", other: true }];
   if (go) rows.push({ n: "路上", sec: go, c: "go" });
   if (none) rows.push({ n: "没记到", sec: none, c: "none" });
   const max = Math.max(...rows.map((r) => r.sec), 1), all = rows.reduce((a, r) => a + r.sec, 0) || 1;
   const pct = (sec) => { const p = (sec / all) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
-  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-name${r.c === "pl" ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%${r.tone ? `;background:var(--pl-${r.tone})` : ""}"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
+  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-name${r.c === "pl" && !r.other ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%${r.tone ? `;background:var(--pl-${r.tone})` : ""}"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
   return section("地点", bars);
 }
 
@@ -1267,17 +1298,49 @@ async function loadIcons() {
 
 const SUM = { err: null };
 
-/** 日／周／月 页签（月后续做；周总结电脑上写，手机上还没有） */
-const summaryTabs = (on, date) => `<div class="tabs" role="tablist">
-  <button role="tab" aria-selected="${on === "day"}" class="${on === "day" ? "is-on" : ""}" data-tab="day">日</button>
-  <button role="tab" aria-selected="${on === "week"}" class="${on === "week" ? "is-on" : ""}" data-tab="week" ${S.status && S.status.mobile ? "disabled" : ""}>周</button>
-  <button role="tab" aria-selected="false" disabled title="后续做">月</button></div>`;
+/** 日／周／月 页签。总结都在电脑上写，手机上看同步过来的 */
+const summaryTabs = (on) => `<div class="tabs" role="tablist">${[["day", "日"], ["week", "周"], ["month", "月"]].map(([k, v]) =>
+  `<button role="tab" aria-selected="${on === k}" class="${on === k ? "is-on" : ""}" data-tab="${k}">${v}</button>`).join("")}</div>`;
 function bindTabs(date) {
-  for (const b of document.querySelectorAll("[data-tab]")) b.onclick = () => { location.hash = b.dataset.tab === "week" ? `#/summary/week/${date}` : `#/summary/${date}`; };
+  for (const b of document.querySelectorAll("[data-tab]")) b.onclick = () => { location.hash = b.dataset.tab === "day" ? `#/summary/${date}` : `#/summary/${b.dataset.tab}/${date}`; };
+}
+/** 手机不写总结（电脑端为准），只看电脑同步来的：不放「现在生成」「重新生成」 */
+const canWrite = () => !(S.status && S.status.mobile);
+/** 总结末尾一行：口径说明（由 Beayy 用……生成，数据截至……）＋「重新生成」 */
+const sumFoot = (note, id) => `<p class="note sum-foot">${esc(note || "")}${canWrite() ? `<button class="mx-btn mx-btn--text mx-btn--sm" id="${id}">重新生成</button>` : ""}</p>`;
+/** 还没有总结：一句说明＋「现在生成」（手机上只有说明） */
+const sumEmpty = (title, text, id, err) => section(title, `<div class="gen-empty"><p class="mx-empty-inline">${canWrite() ? text : "总结在电脑上写，写好会同步过来"}</p>
+  ${canWrite() ? `<button class="mx-btn mx-btn--primary mx-btn--sm" id="${id}">现在生成</button>` : ""}${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`);
+/** 一句话（蜡笔横线）＋点评 */
+const sumLead = (sum, lineTitle) => {
+  const one = sum.parts.find((p) => p.title === lineTitle), rm = sum.parts.find((p) => p.title === "点评");
+  return (one ? `<p class="lead"><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : "") + (rm && rm.body ? remarkHtml(rm.body) : "");
+};
+/** 生成按钮：点了先变「生成中…」，写完重画这一页 */
+function bindGen(id, cmd, date, redraw) {
+  const b = document.getElementById(id);
+  if (b) b.onclick = async () => {
+    b.disabled = true; b.textContent = "生成中…"; SUM.err = null;
+    try { await call(cmd, { date }); } catch (x) { SUM.err = String(x); }
+    redraw();
+  };
+}
+
+/** 周、月总结的读数：每天平均（有记录的日子才算进分母），悬停写合计 */
+function rangeReadouts(days) {
+  const avg = (k) => { const xs = days.map((d) => d[k]).filter((v) => v != null); return xs.length ? [xs.reduce((a, b) => a + b, 0) / xs.length, xs.reduce((a, b) => a + b, 0), xs.length] : null; };
+  const c = avg("active_sec"), p = avg("phone_sec"), k = avg("pickups"), n = avg("night_sec");
+  return `<div class="readouts">
+    ${readout("日均电脑", c ? hh(c[0]) : "—", "h", c ? `共 ${hh(c[1])} 小时 · ${c[2]} 天有记录` : "取不到")}
+    ${readout("日均手机", p ? hh(p[0]) : "—", "h", p ? `共 ${hh(p[1])} 小时 · ${p[2]} 天有记录` : "取不到")}
+    ${readout("日均拿起", k ? Math.round(k[0]) : "—", "次", k ? `共 ${numText(k[1])} 次` : "", false, "按前台空档推算")}
+    ${readout("日均熬夜", n ? Math.round(n[0] / 60) : "—", "分钟", n ? `每晚 21:00–5:00 · 共 ${numText(Math.round(n[1] / 60))} 分钟` : "21:00–5:00", n && n[0] / 60 > 10)}
+  </div>`;
 }
 
 async function renderSummary(arg, arg2) {
   if (arg === "week") return renderWeek(arg2);
+  if (arg === "month") return renderMonth(arg2);
   const dates = S.days.map((x) => x.date);
   const date = dates.includes(arg) ? arg : dates[0];
   if (!date) { $app.innerHTML = header("总结") + emptyInline("还没有日数据。"); return; }
@@ -1301,7 +1364,7 @@ async function renderSummary(arg, arg2) {
   const hasNight = c.late_sec != null || (d && d.live) || ph || pp.late_sec != null;
   const sum = d && d.summary_md ? splitSummary(d.summary_md) : null;
   // 没写成的原因（模型出错、这一天没记录）：自动重试前先让人看到
-  const failed = sum || !TAURI ? null : await call("daily_status", { date }).catch(() => null);
+  const failed = sum || !TAURI || !canWrite() ? null : await call("daily_status", { date }).catch(() => null);
   const isToday = date === localDay();
 
   // 翻日期和今天页同一个组件（‹ 日期 ▾ ›，以前的日子左边多一个「今天」）
@@ -1315,7 +1378,7 @@ async function renderSummary(arg, arg2) {
   const storyParts = parts.filter((p) => p !== one && p !== remark && p.body);
 
   // 布局照 Claude「自定义」页：标题单独一行；下面一行左边 日／周／月 页签（月后续做），右边翻日期
-  const kinds = summaryTabs("day", date);
+  const kinds = summaryTabs("day");
   $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<div class="toolbar-right">${right}</div></div>` + `<div class="reading">
     <div class="readouts">
       ${readout("在电脑前", hh(c.active_sec ?? idx.active_sec), "h", c.first ? `${c.first}–${c.last}` : "取不到")}
@@ -1323,22 +1386,17 @@ async function renderSummary(arg, arg2) {
       ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "", false, "按前台空档推算")}
       ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00–5:00", night > 10)}
     </div>
-    ${one ? `<p class="lead"${sum.note ? ` title="${esc(sum.note)}"` : ""}><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : ""}
+    ${one ? `<p class="lead"><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : ""}
     ${remark && remark.body ? remarkHtml(remark.body) : ""}
     <div class="secs-plain" style="margin-top:var(--space-6)">
-      ${sum ? story(storyParts)
-            : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">${isToday ? "还没有日总结，21:30 自动生成" : failed ? "日总结没写成，稍后自动重试" : "还没有日总结，稍后自动补上"}</p>
-                <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err || (failed && failed.error) ? `<div class="mx-field-error">${esc(SUM.err || failed.error)}</div>` : ""}</div>`)}
+      ${sum ? story(storyParts) + sumFoot(sum.note, "gen-daily")
+            : sumEmpty("这一天", isToday ? "还没有日总结，21:30 自动生成" : failed ? "日总结没写成，稍后自动重试" : "还没有日总结，稍后自动补上", "gen-daily", SUM.err || (failed && failed.error))}
       ${placeTotals(visits, date)}
       ${workSection(d && d.work)}
     </div></div>`;
 
-  const gen = document.getElementById("gen-daily");
-  if (gen) gen.onclick = async () => {
-    gen.disabled = true; gen.textContent = "生成中…"; SUM.err = null;
-    try { await call("generate_daily", { date }); } catch (x) { SUM.err = String(x); }
-    renderSummary(date);
-  };
+  SUM.err = null;
+  bindGen("gen-daily", "generate_daily", date, () => renderSummary(date));
   bindTabs(date);
   bindPick(document.getElementById("day-pick"));
   $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => { location.hash = `#/summary/${b.dataset.day}`; }));
@@ -1346,8 +1404,9 @@ async function renderSummary(arg, arg2) {
 
 async function renderWeek(arg) {
   markNav("summary");
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : (S.days[0] && S.days[0].date) || localDay();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : localDay();
   const w = await call("get_week", { date });
+  const r = await call("get_range", { from: w.monday, to: w.sunday }).catch(() => null);
   const prev = addDays(w.monday, -7), next = addDays(w.monday, 7);
   const done = w.sunday < localDay();
   const sum = w.summary_md ? splitSummary(w.summary_md) : null;
@@ -1355,28 +1414,58 @@ async function renderWeek(arg) {
   const thisWeek = w.monday <= localDay() && localDay() <= w.sunday;
   const right = `${thisWeek ? "" : `<button class="mx-btn mx-btn--secondary dn-today" data-week="${localDay()}">本周</button>`}
     <div class="daynav"><button class="dn-step" aria-label="前一周" title="前一周" data-week="${prev}">${ICON.chevL}</button>
-      <span class="dn-date mono">${w.monday.slice(5)}–${w.sunday.slice(5)}</span>
+      <span class="dn-date">${w.monday.slice(5)}–${w.sunday.slice(5)}</span>
       <button class="dn-step" aria-label="后一周" title="后一周" ${next > localDay() ? "disabled" : `data-week="${next}"`}>${ICON.chevR}</button></div>`;
   const days = `<div class="week-days">${w.days.map((x) => `<a href="#/summary/${x.date}"><span class="mono">${short(x.date)}</span><span class="${x.line ? "" : "muted"}">${esc(x.line || "没有日总结")}</span></a>`).join("")}</div>`;
   const err = SUM.err || w.error;
-  $app.innerHTML = header("总结") + `<div class="toolbar">${summaryTabs("week", date)}<div class="toolbar-right">${right}</div></div><div class="reading">
-    ${sum ? (() => { const one = sum.parts.find((p) => p.title === "这周的一句话"), rm = sum.parts.find((p) => p.title === "点评");
-      return (one ? `<p class="lead"${sum.note ? ` title="${esc(sum.note)}"` : ""}><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : "") + (rm && rm.body ? remarkHtml(rm.body) : ""); })() : ""}
+  // 布局同日总结：读数（这周每天平均）、一句话、点评、叙述段，再是这周的地点、时间
+  $app.innerHTML = header("总结") + `<div class="toolbar">${summaryTabs("week")}<div class="toolbar-right">${right}</div></div><div class="reading">
+    ${r ? rangeReadouts(r.days) : ""}
+    ${sum ? sumLead(sum, "这周的一句话") : ""}
     <div class="secs-plain" style="margin-top:var(--space-6)">
-      ${sum ? story(sum.parts.filter((p) => p.title !== "这周的一句话" && p.title !== "点评" && p.body))
-            : section("这一周", `<div class="gen-empty"><p class="mx-empty-inline">${done ? "还没有周总结，稍后自动补上" : "这周还没过完，过完自动生成"}</p>
-                <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-weekly">现在生成</button>${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`)}
+      ${sum ? story(sum.parts.filter((p) => p.title !== "这周的一句话" && p.title !== "点评" && p.body)) + sumFoot(sum.note, "gen-weekly")
+            : sumEmpty("这一周", done ? "还没有周总结，稍后自动补上" : "这周还没过完，过完自动生成", "gen-weekly", err)}
+      ${r ? placeTotalsDays(r.days) : ""}
+      ${r ? workSection(r.work) : ""}
       ${section("每天", days)}
     </div></div>`;
   SUM.err = null;
   bindTabs(date);
-  const gen = document.getElementById("gen-weekly");
-  if (gen) gen.onclick = async () => {
-    gen.disabled = true; gen.textContent = "生成中…";
-    try { await call("generate_weekly", { date }); } catch (x) { SUM.err = String(x); }
-    renderWeek(date);
-  };
+  bindGen("gen-weekly", "generate_weekly", date, () => renderWeek(date));
   $app.querySelectorAll("[data-week]").forEach((b) => (b.onclick = () => { location.hash = `#/summary/week/${b.dataset.week}`; }));
+}
+
+/** 月总结：和周总结同一个样子，底下列这个月的几周（点进周总结） */
+async function renderMonth(arg) {
+  markNav("summary");
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : localDay();
+  const m = await call("get_month", { date });
+  const r = await call("get_range", { from: m.first, to: m.last }).catch(() => null);
+  const prev = addDays(m.first, -1).slice(0, 8) + "01", next = addDays(m.last, 1);
+  const done = m.last < localDay();
+  const sum = m.summary_md ? splitSummary(m.summary_md) : null;
+  const thisMonth = localDay().slice(0, 7) === m.first.slice(0, 7);
+  const label = `${+m.first.slice(0, 4)} 年 ${+m.first.slice(5, 7)} 月`;
+  const right = `${thisMonth ? "" : `<button class="mx-btn mx-btn--secondary dn-today" data-month="${localDay()}">本月</button>`}
+    <div class="daynav"><button class="dn-step" aria-label="前一个月" title="前一个月" data-month="${prev}">${ICON.chevL}</button>
+      <span class="dn-date">${label}</span>
+      <button class="dn-step" aria-label="后一个月" title="后一个月" ${next > localDay() ? "disabled" : `data-month="${next}"`}>${ICON.chevR}</button></div>`;
+  const weeks = `<div class="week-days">${m.weeks.map((x) => `<a href="#/summary/week/${x.monday}"><span class="mono">${x.monday.slice(5)}–${x.sunday.slice(5)}</span><span class="${x.line ? "" : "muted"}">${esc(x.line || "没有周总结")}</span></a>`).join("")}</div>`;
+  const err = SUM.err || m.error;
+  $app.innerHTML = header("总结") + `<div class="toolbar">${summaryTabs("month")}<div class="toolbar-right">${right}</div></div><div class="reading">
+    ${r ? rangeReadouts(r.days) : ""}
+    ${sum ? sumLead(sum, "这个月的一句话") : ""}
+    <div class="secs-plain" style="margin-top:var(--space-6)">
+      ${sum ? story(sum.parts.filter((p) => p.title !== "这个月的一句话" && p.title !== "点评" && p.body)) + sumFoot(sum.note, "gen-monthly")
+            : sumEmpty("这个月", done ? "还没有月总结，稍后自动补上" : "这个月还没过完，过完自动生成", "gen-monthly", err)}
+      ${r ? placeTotalsDays(r.days) : ""}
+      ${r ? workSection(r.work) : ""}
+      ${section("每周", weeks)}
+    </div></div>`;
+  SUM.err = null;
+  bindTabs(date);
+  bindGen("gen-monthly", "generate_monthly", date, () => renderMonth(date));
+  $app.querySelectorAll("[data-month]").forEach((b) => (b.onclick = () => { location.hash = `#/summary/month/${b.dataset.month}`; }));
 }
 
 // ---------- 规矩 ----------
@@ -1505,6 +1594,8 @@ async function renderDevices() {
   // 登录着的设备：进页面取一次，失败（没网、令牌失效）就不显示
   if (sy.email && !sy.need_login && !DS.account) { DS.account = {}; call("account_info").then((a) => { DS.account = a; if (S.page === "devices" && !DEV.id) renderDevices(); }).catch(() => {}); }
   S.status = st; S.sync = sy; renderSide();
+  // 没开同步时要知道选的是不是同步文件夹（「去开」指到账号页）
+  if (!sy.configured && !S.settings) { S.settings = await call("get_settings").catch(() => null); if (S.settings) S.draft = JSON.parse(JSON.stringify(S.settings)); }
   // 登录着的设备列表也用改过的名字
   DS.names = Object.fromEntries(devs.filter((d) => d.custom).map((d) => [d.id, d.name]));
   DS.devs = devs;
@@ -1772,9 +1863,12 @@ function syncSection(sy) {
   const msg = DS.err ? `<div class="mx-field-error">${esc(DS.err)}</div>` : DS.msg ? `<p class="note">${esc(DS.msg)}</p>` : "";
   const row = (name, desc, side) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${side}</div>`;
   const wrap = (rows) => section("同步", `<div class="rows">${rows}</div>${msg}`).replace('<section class="mx-sec"', '<section class="mx-sec" id="sync-sec"');
+  const cf = S.settings || {};
+  if (!sy.configured && cf.sync_mode === "folder") return wrap(row("多设备同步", `同步文件夹 <span class="mono">${esc(tildePath(cf.sync_folder))}</span>`,
+    `<span class="mx-status">没开</span><a class="mx-btn mx-btn--secondary mx-btn--sm" href="#/settings" data-set-tab="account">去开</a>`));
   if (!sy.configured) return wrap(row("多设备同步", "登录后，多台设备的记录会同步",
     `<span class="mx-status">没登录</span><span class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-signup">注册</button><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">登录</button></span>`));
-  if (!sy.email) return wrap(row("多设备同步", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录",
+  if (!sy.email && !sy.folder) return wrap(row("多设备同步", "旧版配对码账号，设好邮箱和主密码就能在别的设备登录",
     `<span class="mx-status mx-status--warn">要设账号</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-claim">设好账号</button>`));
   if (sy.need_login) return wrap(row("多设备同步", "登录已失效，重新登录后接着同步",
     `<span class="mx-status mx-status--warn">要重新登录</span><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ac-login">重新登录</button>`));
@@ -1784,7 +1878,7 @@ function syncSection(sy) {
   const going = busy && pg.phase && pg.total > 0;
   const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? "上传" : "下载"}</span><span class="mono">${numText(pg.done)} / ${numText(pg.total)} 段</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
   const state = busy ? `<span class="mx-status">同步中…</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">上次有错</span>` : `<span class="mx-status mx-status--ok">已开${sy.last ? ` · 上次 ${ymdhm(sy.last)}` : ""}</span>`;
-  return wrap(row("账号", esc(sy.email), state)
+  return wrap((sy.folder ? row("同步文件夹", `<span class="mono">${esc(tildePath(sy.folder))}</span>`, state) : row("账号", esc(sy.email), state))
     + (bar ? `<div class="sync-bar-row">${bar}</div>` : "")
     + (sy.last_error ? `<div class="mx-error">${esc(sy.last_error)}</div>` : "")
     + (sessions.length ? row("登录着的设备", "", `<button class="mx-btn mx-btn--text mx-btn--sm" id="sess-open">${sessions.length} 台${ICON.chevR}</button>`) : "")
@@ -1824,6 +1918,7 @@ function bindSync() {
   on("ac-signup", () => loginDialog("signup"));
   on("ac-claim", claimDialog);
   on("sess-open", sessionsDialog);
+  $app.querySelectorAll("[data-set-tab]").forEach((a) => (a.onclick = () => { SS.tab = a.dataset.setTab; try { localStorage.setItem("settings-tab", SS.tab); } catch (x) {} }));
   on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = null; renderDevices(); try { const r = await call("sync_now"); DS.msg = `上传 ${r.uploaded} 段，下载 ${r.downloaded} 段${r.errors.length ? "，有错：" + r.errors.join("；") : ""}`; } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
 }
 
@@ -1957,6 +2052,17 @@ function accountBody(sy) {
   const msg = AC.msg ? `<p class="note ac-msg">${esc(AC.msg)}</p>` : "";
   const row = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div><div class="mx-setting-desc">${desc}</div></div>${right}</div>`;
   const btn = (id, text) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}">${text}</button>`;
+  // 同步文件夹：没有邮箱，靠文件夹＋主密码；第一台「新开」，别的「加入」
+  if (sy.configured && sy.folder) return row("同步文件夹", `<span class="mono">${esc(tildePath(sy.folder))}</span> · 别的设备选同一个文件夹、输主密码加入`,
+      AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">停止同步</button></div>` : btn("ac-logout", "停止同步"))
+    + row("主密码", "加密写进文件夹的数据用它解开，网盘读不到内容。", btn("ac-password", "改主密码"))
+    + row("恢复码", "忘了主密码时用它重设。", btn("ac-show-code", "查看")) + msg;
+  const cf = S.settings || {};
+  if (!sy.configured && cf.sync_mode === "folder") {
+    const fs = AC.folder || {};
+    return row("同步文件夹", `<span class="mono">${esc(tildePath(cf.sync_folder))}</span><br>${fs.vault ? "里面已经开过同步：输主密码加入" : "第一台设备在这里新开同步，别的设备再加入"} · 在「连接 → 同步方式」里换`,
+      `<div class="btns">${fs.vault ? btn("fd-join", "加入") : btn("fd-create", "新开同步")}</div>`) + msg;
+  }
   if (sy.configured && sy.email && !sy.need_login) return row(esc(sy.email), "别的设备用这个邮箱登录",
       AC.confirmLogout ? `<div class="btns"><button class="mx-btn mx-btn--text mx-btn--sm" id="logout-keep">取消</button><button class="mx-btn mx-btn--danger mx-btn--sm" id="logout-go">退出登录</button></div>` : btn("ac-logout", "退出登录"))
     + row("主密码", "只在设备上用，不会发给服务器。", btn("ac-password", "改主密码"))
@@ -1989,7 +2095,8 @@ function loginDialog(mode = "login", email = "") {
   const pw2 = dlgField("pw2", "再输一次", { type: "password" });
   const forms = {
     login: ["登录", em + dlgField("pw1", "主密码", { type: "password" }), "登录", "登录中…"],
-    signup: ["注册", em + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + pw2 + dlgField("inv", "邀请码", { type: "password", ph: "现在注册要邀请码" }), "注册并登录", "注册中…"],
+    signup: ["注册", em + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + pw2
+      + `<div id="inv-box" hidden>${dlgField("inv", "邀请码", { type: "password", ph: "这台服务器注册要邀请码" })}</div><p class="note" id="inv-note"></p>`, "注册并登录", "注册中…"],
     recover: ["用恢复码重设主密码", em + dlgField("rc", "恢复码", { ph: "XXXX-XXXX-…", mono: true }) + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + pw2, "重设并登录", "重设中…"],
   };
   const links = { login: [["signup", "没有账号？注册"], ["recover", "忘了主密码"]], signup: [["login", "已经有账号？登录"]], recover: [["login", "想起来了？登录"]] }[mode];
@@ -1998,7 +2105,18 @@ function loginDialog(mode = "login", email = "") {
     title, ok, busy,
     body: (mode === "recover" ? `<p class="note">重设后，其他设备要重新登录</p>` : `<p class="note">记录在本机加密后再同步，服务器读不到内容</p>`) + body
       + `<div class="dlg-links">${links.map(([k, v]) => `<button class="mx-btn mx-btn--text mx-btn--sm" data-to="${k}">${v}</button>`).join("")}</div>`,
-    onOpen: (el) => el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => loginDialog(b.dataset.to, dlgVal(el, "em")))),
+    onOpen: (el) => {
+      el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => loginDialog(b.dataset.to, dlgVal(el, "em"))));
+      // 注册：问服务器要不要邀请码；开放注册的写明每个账号能存多少，满了怎么办
+      if (mode === "signup") call("signup_info").then((i) => {
+        const box = el.querySelector("#inv-box"), note = el.querySelector("#inv-note");
+        if (!box) return;
+        box.hidden = !i.invite;
+        note.textContent = i.invite ? "没有邀请码也能用：记录都在本机；要多台设备同步，可以在「设置 → 连接 → 同步方式」里选同步文件夹，或自己部署服务端"
+          : i.open === false ? "这台服务器暂停注册了。可以先不登录（记录都在本机），或者在「设置 → 连接 → 同步方式」里选同步文件夹"
+          : i.quota ? `每个账号能存 ${bytesText(i.quota)}，满了以后新记录只在本机，不再上传` : "";
+      }).catch(() => { const b = el.querySelector("#inv-box"); if (b) b.hidden = false; });
+    },
     submit: async (el) => {
       const email = checkEmail(dlgVal(el, "em"));
       AC.msg = null;
@@ -2046,11 +2164,35 @@ function codeDialog(code, fresh) {
   });
 }
 
+/** 同步文件夹：新开（设主密码，给恢复码）、加入（输主密码）、用恢复码重设 */
+function folderDialog(mode) {
+  const forms = {
+    create: ["新开同步", `<p class="note">记录加密后写进这个文件夹，交给网盘同步；主密码用来解开，别的设备加入时要输</p>` + dlgField("pw1", "主密码", { type: "password", ph: "至少 8 位，记得住又别人猜不到" }) + dlgField("pw2", "再输一次", { type: "password" }), "新开同步"],
+    join: ["加入同步", `<p class="note">输这个文件夹的主密码（在第一台设备上设的）</p>` + dlgField("pw1", "主密码", { type: "password" }), "加入"],
+    recover: ["用恢复码重设主密码", `<p class="note">重设后，别的设备下次加入用新主密码</p>` + dlgField("rc", "恢复码", { ph: "XXXX-XXXX-…", mono: true }) + dlgField("pw1", "新主密码", { type: "password", ph: "至少 8 位" }) + dlgField("pw2", "再输一次", { type: "password" }), "重设并加入"],
+  };
+  const [title, body, ok] = forms[mode];
+  openDialog({
+    title, ok, busy: "处理中…",
+    body: body + (mode === "join" ? `<div class="dlg-links"><button class="mx-btn mx-btn--text mx-btn--sm" data-to="recover">忘了主密码</button></div>` : ""),
+    onOpen: (el) => el.querySelectorAll("[data-to]").forEach((b) => (b.onclick = () => folderDialog(b.dataset.to))),
+    submit: async (el) => {
+      AC.msg = null;
+      if (mode === "create") { const code = await call("folder_create", { password: checkPw(el) }); setTimeout(() => codeDialog(code, true)); }
+      else if (mode === "join") await call("folder_join", { password: el.querySelector("#pw1").value });
+      else { await call("folder_recover", { code: dlgVal(el, "rc"), password: checkPw(el) }); AC.msg = "已重设主密码"; }
+      AC.folder = null; accountChanged();
+    },
+  });
+}
+
 function bindAccount() {
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
   on("ac-login", () => loginDialog("login"));
   on("ac-signup", () => loginDialog("signup"));
   on("ac-claim", claimDialog);
+  on("fd-create", () => folderDialog("create"));
+  on("fd-join", () => folderDialog("join"));
   on("ac-password", passwordDialog);
   on("ac-show-code", async () => { try { codeDialog(await call("account_recovery_code"), false); } catch (x) { AC.msg = `取不到恢复码：${x}`; renderSettings(); } });
   on("ac-logout", () => { AC.confirmLogout = true; renderSettings(); });
@@ -2129,6 +2271,8 @@ function addPlaceDialog() {
 const SET_TABS = [["general", "通用"], ["account", "账号"], ["record", "记录"], ["connect", "连接"], ["data", "数据"], ["projects", "项目"]];
 try { SS.tab = localStorage.getItem("settings-tab") || "general"; } catch (e) { SS.tab = "general"; }
 const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return u || ""; } };
+/** 路径里的家目录写成 ~，iCloud 云盘写成「iCloud 云盘」 */
+const tildePath = (p) => String(p || "").replace(/^\/Users\/[^/]+\/Library\/Mobile Documents\/com~apple~CloudDocs/, "iCloud 云盘").replace(/^\/Users\/[^/]+/, "~");
 const setRow = (name, desc, right) => `<div class="mx-setting"><div class="mx-setting-main"><div class="mx-setting-name">${name}</div>${desc ? `<div class="mx-setting-desc">${desc}</div>` : ""}</div>${right}</div>`;
 const smallBtn = (id, text, attrs = "") => `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="${id}" ${attrs}>${text}</button>`;
 const pill = (ok, text) => `<span class="mx-status mx-status--${ok ? "ok" : "warn"}">${text}</span>`;
@@ -2166,6 +2310,7 @@ async function renderSettings() {
         + setRow("主题", "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`))
       + (mobile ? section("关于", setRow(`版本 ${esc(st.version || "")}`, "手机版跟着 TestFlight 更新。", "")) : aboutSection());
   } else if (tab === "account") {
+    if (cf.sync_mode === "folder" && !sy.configured && !AC.folder) AC.folder = await call("folder_state").catch(() => ({}));
     body = sy.shadow ? section("账号", emptyInline("测试版不登录账号")) : section("账号与同步", accountBody(sy));
   } else if (tab === "record") {
     const pause = st.paused
@@ -2197,12 +2342,15 @@ async function renderSettings() {
     body = section("官方服务", setRow("这个账号", L.plan === "official" ? "模型、转写、地图都用官方的，不用填 Key" : L.plan === "stopped" ? "已停用，联系管理员" : L.error ? "登录后才能用" : "还没开通，联系管理员", planPill)
         + (L.plan === "official" ? useRow("模型", L.llm, official, tokens) + useRow("转写", L.asr, asrOfficial, minutes) + useRow("地图", L.map, mapOfficial, calls) : ""))
       + section("每一项", (official
-      ? setRow("模型", "官方", smallBtn("c-model", "设置"))
-      : setRow("模型", `自己的网关 · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || "没填模型")}</span>`, `${pill(!!ks, ks ? "密钥已存" : "没有密钥")}${smallBtn("c-model", "设置")}`))
+      ? setRow("模型", "官方", `${st.mobile ? "" : smallBtn("c-usage", "用量")}${smallBtn("c-model", "设置")}`)
+      : setRow("模型", `自己的网关 · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || "没填模型")}</span>`, `${pill(!!ks, ks ? "密钥已存" : "没有密钥")}${st.mobile ? "" : smallBtn("c-usage", "用量")}${smallBtn("c-model", "设置")}`))
       + setRow("转写服务", `${asrOfficial ? "官方" : `自建 · <span class="mono">${esc(hostOf(cf.transcribe_server))}</span>`} · 你叫「${esc(cf.speaker_name)}」${st.cloud_sync ? `<br>${esc(st.cloud_sync)}` : ""}`, smallBtn("c-asr", "设置"))
       + setRow("高德地图", mapOfficial ? "官方" : "自己的 Key", `${mapOfficial ? "" : amap}${smallBtn("c-amap", "设置")}`)
-      + setRow("同步服务器", `<span class="mono">${esc(hostOf(cf.sync_server))}</span>${cf.sync_server === cf.default_sync_server ? " · 官方" : " · 自建"}`, smallBtn("c-sync", "更改", syncLocked ? `disabled title="登录着不能换，先在「账号」里退出"` : ""))
-      );
+      + (st.mobile ? "" : setRow("同步方式", cf.sync_mode === "folder" ? `同步文件夹 · <span class="mono">${esc(tildePath(cf.sync_folder))}</span>`
+          : `<span class="mono">${esc(hostOf(cf.sync_server))}</span>${cf.sync_server === cf.default_sync_server ? " · 官方服务器" : " · 自建服务器"}`,
+        smallBtn("c-sync", "更改", syncLocked ? `disabled title="同步开着不能换，先在「账号」里退出"` : "")))
+      )
+      + (st.mobile ? "" : section("问问历史", setRow("接到 AI 里", "让 Claude、Cursor 这类本机 AI 读你的记录，直接问「上周哪天熬夜最多」「X 推进到哪了」。只读，数据不出这台电脑", smallBtn("c-mcp", "接入方法"))));
   } else if (tab === "data") {
     body = SS.storage ? storageView(SS.storage) : `<div class="form">${emptyInline("在看数据存在哪……")}</div>`;
   } else {
@@ -2279,6 +2427,8 @@ async function renderSettings() {
     on("c-asr", asrDialog);
     on("c-amap", amapDialog);
     on("c-sync", syncServerDialog);
+    on("c-usage", usageDialog);
+    on("c-mcp", mcpDialog);
   }
 }
 
@@ -2419,20 +2569,86 @@ function amapDialog() {
   });
 }
 
-/** 同步服务器：默认官方的，自己部署了服务端（app/server）可以换。只能在登录前换 */
+/** 同步方式：官方服务器（默认）、自建服务器（app/server 部署的）、同步文件夹（iCloud 云盘、网盘、NAS，不经服务器）。只能在没开同步时换 */
 function syncServerDialog() {
   const cf = S.settings;
+  let mode = cf.sync_mode === "folder" ? "folder" : cf.sync_server === cf.default_sync_server ? "official" : "custom";
+  const seg = [["official", "官方服务器"], ["custom", "自建服务器"], ["folder", "同步文件夹"]];
   openDialog({
-    title: "同步服务器", ok: "保存",
-    body: dlgField("ss", "地址", { value: cf.sync_server, mono: true, ph: cf.default_sync_server, help: `官方的是 ${esc(cf.default_sync_server)}，也可以填自己部署的` })
-      + `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="ss-reset">用官方的</button>`,
-    onOpen: (el) => { el.querySelector("#ss-reset").onclick = () => { el.querySelector("#ss").value = cf.default_sync_server; }; },
-    submit: async (el) => {
-      const v = dlgVal(el, "ss").replace(/\/+$/, "");
-      if (v && !isUrl(v)) throw "地址要以 https:// 开头。";
-      await saveSome({ sync_server: !v || v === cf.default_sync_server ? "" : v });
-      renderSettings();
+    title: "同步方式", ok: "保存",
+    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="sm-mode">${seg.map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
+      <div id="sm-official" ${mode === "official" ? "" : "hidden"}><p class="note">记录加密后存在官方服务器，服务器读不到内容。官方模型、转写、地图和 iPhone 的停留点、录音都走它</p></div>
+      <div id="sm-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>${dlgField("ss", "地址", { value: cf.sync_server === cf.default_sync_server ? "" : cf.sync_server, mono: true, ph: "https://sync.example.com", help: "自己部署的服务端（app/server，Docker 一条命令）" })}</div>
+      <div id="sm-folder" class="stack" ${mode === "folder" ? "" : "hidden"}>
+        <div class="mx-field"><label for="sf">文件夹</label><div class="inline"><input class="mx-input mono" id="sf" value="${esc(cf.sync_folder || "")}" placeholder="${esc(cf.icloud_folder || "")}"><button class="mx-btn mx-btn--secondary" id="sf-pick" type="button">选择…</button></div>
+          ${cf.icloud_folder ? `<button class="mx-btn mx-btn--text mx-btn--sm" style="align-self:flex-start" id="sf-icloud" type="button">用 iCloud 云盘</button>` : ""}</div>
+        <p class="note">选一个网盘会同步的文件夹（iCloud 云盘、OneDrive、Dropbox、坚果云、Syncthing、NAS），每台电脑选同一个。记录加密后写进去，网盘读不到内容，不经过我们的服务器。<br>没有服务器就用不了官方模型、转写、地图，iPhone 的停留点和录音也传不过来</p>
+      </div>`,
+    onOpen: (el, d) => {
+      el.querySelector("#sm-mode").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        mode = b.dataset.v;
+        el.querySelectorAll("#sm-mode button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+        for (const k of ["official", "custom", "folder"]) el.querySelector("#sm-" + k).hidden = mode !== k;
+      };
+      const ic = el.querySelector("#sf-icloud");
+      if (ic) ic.onclick = () => { el.querySelector("#sf").value = cf.icloud_folder; };
+      el.querySelector("#sf-pick").onclick = async () => { try { const p = await call("pick_folder"); if (p) el.querySelector("#sf").value = p; } catch (x) { d.setErr(String(x)); } };
     },
+    submit: async (el) => {
+      if (mode === "folder") {
+        const f = dlgVal(el, "sf") || cf.icloud_folder;
+        if (!f) throw "选一个文件夹。";
+        await saveSome({ sync_mode: "folder", sync_folder: f });
+      } else {
+        const v = mode === "official" ? "" : dlgVal(el, "ss").replace(/\/+$/, "");
+        if (mode === "custom" && !isUrl(v)) throw "地址要以 https:// 开头。";
+        await saveSome({ sync_mode: "server", sync_server: v });
+      }
+      AC.folder = null; renderSettings();
+    },
+  });
+}
+
+/** 模型用量：最近 30 天每天的 token（输入＋输出），按用途分。官方模型的本月额度在「官方服务」里 */
+const USE_KINDS = { segment: "10 分钟摘要", hourly: "小时摘要", daily: "日总结", weekly: "周总结", monthly: "月总结", tag: "补标签", alias: "项目归并", other: "其他" };
+async function usageDialog() {
+  let u;
+  try { u = await call("llm_usage"); } catch (x) { return alert(String(x)); }
+  const days = u.days || [], sum = (xs) => xs.reduce((a, d) => a + d.in + d.out, 0);
+  const tok = (n) => (n >= 1e4 ? `${(n / 1e4).toFixed(n >= 1e6 ? 0 : 1)}万` : numText(n));
+  // 读数：数字和单位分开（单位跟在大数字后面）
+  const ro = (k, n) => readout(k, n >= 1e4 ? (n / 1e4).toFixed(n >= 1e6 ? 0 : 1) : numText(n), n >= 1e4 ? "万 token" : "token");
+  const max = Math.max(1, ...days.map((d) => d.in + d.out));
+  const kinds = {};
+  for (const d of days) for (const [k, v] of Object.entries(d.kinds || {})) { const x = kinds[k] || (kinds[k] = { in: 0, out: 0, calls: 0 }); x.in += v.in; x.out += v.out; x.calls += v.calls; }
+  const all = sum(days) || 1;
+  const rows = Object.entries(kinds).sort((a, b) => b[1].in + b[1].out - (a[1].in + a[1].out));
+  openDialog({
+    title: "模型用量", cancel: "关闭", ok: null,
+    body: `<div class="readouts ub-ro">${ro("今天", sum(days.slice(-1)))}${ro("近 7 天", sum(days.slice(-7)))}${ro("近 30 天", sum(days))}</div>
+      <div class="ub-cols" role="img" aria-label="最近 30 天每天的用量">${days.map((d) => `<span title="${esc(short(d.date))}：输入 ${numText(d.in)}，输出 ${numText(d.out)} token"><i style="height:${Math.round(((d.in + d.out) / max) * 100)}%"></i></span>`).join("")}</div>
+      <div class="ub-axis"><span>${days[0] ? short(days[0].date) : ""}</span><span>今天</span></div>
+      ${rows.length ? `<table class="mx-table ub-table"><thead><tr><th>近 30 天</th><th class="num">次数</th><th class="num">输入</th><th class="num">输出</th><th class="num">占比</th></tr></thead><tbody>${rows.map(([k, v]) => `<tr><td>${esc(USE_KINDS[k] || k)}</td><td class="num mono">${numText(v.calls)}</td><td class="num mono">${tok(v.in)}</td><td class="num mono">${tok(v.out)}</td><td class="num mono">${Math.round(((v.in + v.out) / all) * 100)}%</td></tr>`).join("")}</tbody></table>` : `<p class="mx-empty-inline">最近 30 天还没用过模型</p>`}
+      <p class="note">在这台电脑上记的${u.official ? "；官方模型的本月额度看「官方服务」" : "，按你的网关怎么计费去算钱"}</p>`,
+  });
+}
+
+/** 接到 AI 里（本机 MCP 服务）：Claude Code 一条命令，Claude 桌面版、Cursor 写进配置文件 */
+function mcpDialog() {
+  const exe = (S.status && S.status.exe) || "/Applications/Beayy.app/Contents/MacOS/beayy";
+  const cli = `claude mcp add beayy -- "${exe}" --mcp`;
+  const conf = JSON.stringify({ mcpServers: { beayy: { command: exe, args: ["--mcp"] } } }, null, 2);
+  const block = (id, title, how, code) => `<div class="mx-field"><label>${title}</label><p class="note" style="margin:0">${how}</p><div class="code-box"><code class="mono" id="${id}">${esc(code)}</code><button class="mx-btn mx-btn--secondary mx-btn--sm" data-copy="${id}">复制</button></div></div>`;
+  openDialog({
+    title: "接到 AI 里", cancel: "关闭", ok: null,
+    body: `<p class="note">Beayy 自带一个本机 MCP 服务，AI 能查每天的概况、某一天的详情、搜 10 分钟摘要、看规矩和项目。只读，数据不出这台电脑</p>`
+      + block("mcp-cli", "Claude Code", "在终端里运行", cli)
+      + block("mcp-json", "Claude 桌面版、Cursor", "写进配置文件（Claude 桌面版：设置 → 开发者 → 编辑配置；Cursor：设置 → MCP），重启后生效", conf)
+      + `<p class="note">接好后直接问：「上周哪天熬夜最多？」「Beayy 这个月推进到哪了？」</p>`,
+    onOpen: (el) => el.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
+      try { await navigator.clipboard.writeText(el.querySelector("#" + b.dataset.copy).textContent); b.textContent = "已复制"; } catch (x) { b.textContent = "手动复制"; }
+    })),
   });
 }
 
@@ -2468,7 +2684,7 @@ async function renderOnboarding() {
        <div class="mx-field"><label for="ob-model">模型名</label><input class="mx-input mono" id="ob-model" value="${esc(S.draft.model_segment || "")}" placeholder="比如 gpt-4.1-mini"></div>
        <div class="mx-field"><label for="ob-key">密钥</label><input class="mx-input mono" id="ob-key" type="password" autocomplete="off" placeholder="${S.settings.has_api_key ? "已经存过一把，不改就留空" : "sk-…"}"></div>
        <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" id="ob-test" ${OB.busy ? "disabled" : ""}>${OB.busy ? "测试中…" : "存下并测试一下"}</button></div></div>`}`,
-    `<h2>同步（可选）</h2><p class="ob-lead">有好几台设备，就注册或登录一个账号；只用这一台可以跳过。</p>
+    `<h2>同步（可选）</h2><p class="ob-lead">有好几台设备，就注册或登录一个账号，或者在设置里选一个网盘文件夹同步；只用这一台可以跳过。</p>
      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="ob-account">去登录或注册</button></div>`,
   ][OB.step];
   const last = OB.step === steps.length - 1;

@@ -1,11 +1,11 @@
-//! 日总结、周总结：app 自己用记录写，不依赖外部脚本。
+//! 日总结、周总结、月总结：app 自己用记录写，不依赖外部脚本。
 //! 数字（在电脑前、手机、领域和项目、类型、规矩守没守住、去了哪、说了多少话）由代码算好填进去；模型只写一句话、做成了什么、偏离、明天。
-//! 写到 Beayy/daily/日总结_YYYYMMDD.md、周总结_YYYYMMDD.md（日期取周一）。每天 21:30 写当天，次日 0:15 以后用完整的一天重写；
+//! 写到 Beayy/daily/日总结_YYYYMMDD.md、周总结_YYYYMMDD.md（日期取周一）、月总结_YYYYMM.md。每天 21:30 写当天，次日 0:15 以后用完整的一天重写；
 //! 每 10 分钟看一遍最近 7 天：缺的补上（app 没开、模型出错），数据晚到的（手机录音、屏幕使用时间隔几天才同步过来）重写；
-//! 上一周过完写周总结，那周的日总结重写过就跟着重写。每次的结果记在 daily/state.json，失败按次数往后推着重试。页面上也可以随时生成。
+//! 上一周过完写周总结，那周的日总结重写过就跟着重写；上个月过完写月总结（用那个月的周总结和每天的一句话），同样跟着重写。每次的结果记在 daily/state.json，失败按次数往后推着重试。页面上也可以随时生成。
 
 use beayy_core::default_root;
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use regex::Regex;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
@@ -21,6 +21,25 @@ pub fn path_of(date: NaiveDate) -> PathBuf {
 
 pub fn week_path(monday: NaiveDate) -> PathBuf {
     default_root().join("daily").join(format!("周总结_{}.md", monday.format("%Y%m%d")))
+}
+
+pub fn month_path(first: NaiveDate) -> PathBuf {
+    default_root().join("daily").join(format!("月总结_{}.md", first.format("%Y%m")))
+}
+
+pub fn first_of(date: NaiveDate) -> NaiveDate {
+    date.with_day(1).unwrap_or(date)
+}
+
+/// 这个月的最后一天
+pub fn last_of(first: NaiveDate) -> NaiveDate {
+    let next = if first.month() == 12 { NaiveDate::from_ymd_opt(first.year() + 1, 1, 1) } else { NaiveDate::from_ymd_opt(first.year(), first.month() + 1, 1) };
+    next.unwrap_or(first) - Duration::days(1)
+}
+
+/// 读一份总结：本机写的为准，没有就用别的设备同步来的（手机上全靠这个）
+fn read_md(p: &PathBuf) -> Option<String> {
+    crate::data::daily_md(&p.file_name()?.to_string_lossy())
 }
 
 pub fn monday_of(date: NaiveDate) -> NaiveDate {
@@ -63,7 +82,7 @@ fn record(kind: &str, key: &str, bytes: u64, r: &Result<String, String>) {
         Err(e) => {
             log_line(&format!("{key}：{e}"));
             let fails = read_state()[kind][key]["fails"].as_i64().unwrap_or(0) + 1;
-            let empty = e.starts_with("这一天没有记录") || e.starts_with("这周还没有日总结");
+            let empty = e.starts_with("这一天没有记录") || e.starts_with("这周还没有日总结") || e.starts_with("这个月还没有日总结");
             let wait = if empty { 0 } else { (1800 * (1i64 << (fails - 1).min(4))).min(6 * 3600) };
             serde_json::json!({"error": e, "fails": fails, "retry_at": now + wait, "empty": empty, "bytes": bytes, "failed_at": now})
         }
@@ -362,7 +381,7 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
         user += &format!("\n前后几天的点评已经引过：\n- {}\n", used.join("\n- "));
     }
     let sm = beayy_summary::Summarizer::new(default_root());
-    let j = sm.ask(PROMPT, &user)?;
+    let j = sm.ask_as("daily", PROMPT, &user)?;
     let list = |k: &str| -> String {
         let v: Vec<String> = j.get(k).and_then(Value::as_array).cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| format!("- {s}"))).collect();
         if v.is_empty() { "- 没有".into() } else { v.join("\n") }
@@ -456,7 +475,7 @@ fn write_week(monday: NaiveDate) -> Result<String, String> {
         format!("==== {} 周{} ====\n{}\n\n", d.format("%Y-%m-%d"), ["日", "一", "二", "三", "四", "五", "六"][d.format("%w").to_string().parse::<usize>().unwrap_or(0)], body.trim())
     }).collect();
     let sm = beayy_summary::Summarizer::new(default_root());
-    let j = sm.ask(WEEK_PROMPT, &user)?;
+    let j = sm.ask_as("weekly", WEEK_PROMPT, &user)?;
     let list = |k: &str| -> String {
         let v: Vec<String> = j.get(k).and_then(Value::as_array).cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| format!("- {s}"))).collect();
         if v.is_empty() { "- 没有".into() } else { v.join("\n") }
@@ -484,17 +503,99 @@ fn write_week(monday: NaiveDate) -> Result<String, String> {
     Ok(md)
 }
 
+// ---------- 月总结：用那个月的周总结和每天的一句话写 ----------
+
+const MONTH_PROMPT: &str = "你是用户的日记助手。下面是用户这一个月的周总结，和每天日总结里的一句话（有的天可能没有）。
+据此写这个月的月总结，全部用中文，用第二人称「你」。line、done、pattern、drift、next 写得具体、平实，不夸、不说教；remark 换一种口吻，见下。只写材料里有的事，不编造，不写材料里没有的数字。
+只返回一个 JSON 对象，不要代码块，字段：
+  line: 这个月的一句话，40 字以内，抓住这个月最主要的事和状态
+  quote: 点评开头引的一句话，来源不限：古今中外的诗词、古文、小说、散文、戏剧、电影台词、名人语录都行，挑最贴这个月的，别总在几首名诗里打转；只引确实存在、出处确定的，外文用通行的中文译文，别和这个月周总结里已经引过的重复；不带引号，不带出处
+  source: 这句话的出处，写成「作者《作品》」「《书名·篇名》」，语录没有作品的只写人名（外国人用通行中文译名），不带括号
+  remark: 这个月的点评，100–150 字，像一位博览群书、说话风趣的老友在你月记旁写的批注：借 quote 这句话点评这个月，时间花在哪、去了哪、做成的事和偏离、前后几周的变化。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要重复 quote，不要在首尾加引号
+  done: 3–8 条字符串，这个月做成或推进了什么（写结果，不写过程；跨几周的同一件事合成一条）
+  pattern: 1–4 条字符串，时间和作息的规律：时间主要花在哪、前后几周怎么变、熬夜和手机的情况
+  drift: 0–4 条字符串，偏离：反复没守住的规矩、被不重要的事占掉的时间；没有就空数组
+  next: 1–3 条字符串，下个月最值得做的事，从这个月没做完的里挑
+";
+
+/// 这个月里的几周（周一在上个月的也算，周一在下个月的不算）
+fn mondays_of(first: NaiveDate) -> Vec<NaiveDate> {
+    let last = last_of(first);
+    let mut out = vec![];
+    let mut m = monday_of(first);
+    while m <= last {
+        out.push(m);
+        m += Duration::days(7);
+    }
+    out
+}
+
+/// 写 first 所在那个月的月总结（结果记进 state.json）；返回 Markdown
+pub fn generate_month(first: NaiveDate) -> Result<String, String> {
+    let first = first_of(first);
+    let r = write_month(first);
+    record("months", &first.format("%Y-%m").to_string(), 0, &r);
+    r
+}
+
+fn write_month(first: NaiveDate) -> Result<String, String> {
+    let last = last_of(first);
+    let lines: Vec<(NaiveDate, String)> = (0..=(last - first).num_days())
+        .map(|k| first + Duration::days(k))
+        .filter_map(|d| fs::read_to_string(path_of(d)).ok().and_then(|t| line_of(&t)).map(|l| (d, l)))
+        .collect();
+    if lines.is_empty() {
+        return Err("这个月还没有日总结".into());
+    }
+    let mut user = String::new();
+    for m in mondays_of(first) {
+        if let Ok(t) = fs::read_to_string(week_path(m)) {
+            let body: String = t.lines().filter(|l| !l.starts_with('>') && !l.starts_with("# ")).collect::<Vec<_>>().join("\n");
+            user += &format!("==== {} – {} 这一周 ====\n{}\n\n", m.format("%m-%d"), (m + Duration::days(6)).format("%m-%d"), body.trim());
+        }
+    }
+    user += "==== 每天的一句话 ====\n";
+    for (d, l) in &lines {
+        user += &format!("{} 周{}：{l}\n", d.format("%m-%d"), ["日", "一", "二", "三", "四", "五", "六"][d.format("%w").to_string().parse::<usize>().unwrap_or(0)]);
+    }
+    let sm = beayy_summary::Summarizer::new(default_root());
+    let j = sm.ask_as("monthly", MONTH_PROMPT, &user)?;
+    let list = |k: &str| -> String {
+        let v: Vec<String> = j.get(k).and_then(Value::as_array).cloned().unwrap_or_default().iter().filter_map(|x| x.as_str().map(|s| format!("- {s}"))).collect();
+        if v.is_empty() { "- 没有".into() } else { v.join("\n") }
+    };
+    let remark = remark_of(&j);
+    let mut md = format!(
+        "# {} 月总结\n\n> 由 Beayy 用这个月的 {} 份日总结生成，数据截至 {}。\n\n## 这个月的一句话\n\n{}\n\n## 做成了什么\n\n{}\n\n## 时间和作息\n\n{}\n\n## 偏离\n\n{}\n\n## 下个月\n\n{}\n",
+        first.format("%Y-%m"),
+        lines.len(),
+        Local::now().format("%m-%d %H:%M"),
+        j.get("line").and_then(Value::as_str).unwrap_or("").trim(),
+        list("done"),
+        list("pattern"),
+        list("drift"),
+        list("next")
+    );
+    if !remark.is_empty() {
+        md = md.replacen("\n## 做成了什么\n", &format!("\n## 点评\n\n{remark}\n\n## 做成了什么\n"), 1);
+    }
+    let p = month_path(first);
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    fs::write(&p, &md).map_err(|e| e.to_string())?;
+    Ok(md)
+}
+
 // ---------- 页面用的命令 ----------
 
 /// 页面上「现在生成」
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn generate_daily(date: String) -> Result<String, String> {
     let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     generate(d)
 }
 
 /// 这一天的日总结最近一次没写成：{error, at}；写成了或没试过返回 null
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn daily_status(date: String) -> Value {
     let e = &read_state()["days"][&date];
     if e["error"].is_string() && !path_of(NaiveDate::parse_from_str(&date, "%Y-%m-%d").unwrap_or_default()).exists() {
@@ -505,13 +606,13 @@ pub fn daily_status(date: String) -> Value {
 }
 
 /// 某天所在那周：{monday, sunday, summary_md, error, days: [{date, line}]}
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn get_week(date: String) -> Result<Value, String> {
     let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     let monday = monday_of(d);
     let days: Vec<Value> = (0..7).map(|k| {
         let x = monday + Duration::days(k);
-        let line = fs::read_to_string(path_of(x)).ok().and_then(|t| line_of(&t));
+        let line = read_md(&path_of(x)).and_then(|t| line_of(&t));
         serde_json::json!({"date": x.format("%Y-%m-%d").to_string(), "line": line})
     }).collect();
     let key = monday.format("%Y-%m-%d").to_string();
@@ -519,16 +620,44 @@ pub fn get_week(date: String) -> Result<Value, String> {
     Ok(serde_json::json!({
         "monday": key,
         "sunday": (monday + Duration::days(6)).format("%Y-%m-%d").to_string(),
-        "summary_md": fs::read_to_string(week_path(monday)).ok(),
+        "summary_md": read_md(&week_path(monday)),
         "error": if e["error"].is_string() { e["error"].clone() } else { Value::Null },
         "days": days,
     }))
 }
 
-#[tauri::command]
+#[cfg_attr(not(beayy_mobile), tauri::command)]
 pub async fn generate_weekly(date: String) -> Result<String, String> {
     let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
     generate_week(monday_of(d))
+}
+
+/// 某天所在那个月：{first, last, summary_md, error, weeks: [{monday, sunday, line}]}
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub fn get_month(date: String) -> Result<Value, String> {
+    let first = first_of(NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?);
+    let weeks: Vec<Value> = mondays_of(first).into_iter().map(|m| {
+        let line = read_md(&week_path(m)).and_then(|t| {
+            let mut it = t.lines().skip_while(|l| !l.starts_with("## 这周的一句话")).skip(1);
+            it.find(|l| !l.trim().is_empty()).map(|l| l.trim().to_string())
+        });
+        serde_json::json!({"monday": m.format("%Y-%m-%d").to_string(), "sunday": (m + Duration::days(6)).format("%Y-%m-%d").to_string(), "line": line})
+    }).collect();
+    let key = first.format("%Y-%m").to_string();
+    let e = &read_state()["months"][&key];
+    Ok(serde_json::json!({
+        "first": first.format("%Y-%m-%d").to_string(),
+        "last": last_of(first).format("%Y-%m-%d").to_string(),
+        "summary_md": read_md(&month_path(first)),
+        "error": if e["error"].is_string() { e["error"].clone() } else { Value::Null },
+        "weeks": weeks,
+    }))
+}
+
+#[cfg_attr(not(beayy_mobile), tauri::command)]
+pub async fn generate_monthly(date: String) -> Result<String, String> {
+    let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|e| e.to_string())?;
+    generate_month(d)
 }
 
 // ---------- 定时 ----------
@@ -574,6 +703,23 @@ fn week_due(monday: NaiveDate, st: &Value) -> bool {
     }
 }
 
+/// 过完的月要不要（重）写：那个月有日总结，月总结没写、或之后那个月的日总结、周总结又重写过
+fn month_due(first: NaiveDate, st: &Value) -> bool {
+    let e = &st["months"][first.format("%Y-%m").to_string()];
+    if e["error"].is_string() && waiting(e) {
+        return false;
+    }
+    let last = last_of(first);
+    let mut files: Vec<PathBuf> = (0..=(last - first).num_days()).map(|k| path_of(first + Duration::days(k))).collect();
+    files.extend(mondays_of(first).into_iter().map(week_path));
+    let newest = files.iter().filter_map(modified).max();
+    match (newest, modified(&month_path(first))) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(n), Some(m)) => n > m,
+    }
+}
+
 /// 命令行 --daily catch-up：一轮轮补到没有要写的（每轮都会写的说明有问题，最多 10 轮）
 pub fn catch_up_all() {
     for _ in 0..10 {
@@ -603,6 +749,15 @@ fn catch_up(today: NaiveDate) -> usize {
             let _ = generate_week(w);
             n += 1;
         }
+    }
+    if n > 0 {
+        return n; // 周总结刚重写过，月总结下一轮再看
+    }
+    // 上个月：过完以后写；月初的几天上个月最后一周的周总结还会重写，跟着重写
+    let prev = first_of(first_of(today) - Duration::days(1));
+    if month_due(prev, &st) {
+        let _ = generate_month(prev);
+        n += 1;
     }
     n
 }

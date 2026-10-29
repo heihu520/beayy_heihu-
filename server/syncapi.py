@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -32,6 +33,19 @@ BACKUP = Path(os.environ.get("BEAYY_BACKUP_DIR", "backup"))
 BACKUP_KEEP = 14  # 每天一份库的备份，留两周（数据块本身是各设备本地数据的加密副本，不另备份）
 HERE = Path(__file__).resolve().parent
 INVITE = os.environ.get("BEAYY_INVITE", "")
+# 开放注册：不要邀请码也能注册（填了 BEAYY_INVITE 也照收邀请码）。开放时靠下面三道闸护住硬盘
+OPEN_SIGNUP = os.environ.get("BEAYY_OPEN_SIGNUP", "") in ("1", "true", "yes")
+GB = 1024 ** 3
+MB = 1000 ** 2  # 和客户端显示一致，按十进制
+# 每个账号最多存多少（MB，0＝不限）；单个账号可以用 admin.py storage 另设
+USER_QUOTA = int(float(os.environ.get("BEAYY_USER_QUOTA_MB", "0")) * MB)
+# 最多开放多少个账号（0＝不限），满了停注册
+MAX_USERS = int(os.environ.get("BEAYY_MAX_USERS", "0"))
+# 硬盘剩余低于这么多（GB）就停止注册；再低到一半，连上传也停（不把同一块盘上的别的服务挤爆）
+MIN_FREE = int(float(os.environ.get("BEAYY_MIN_FREE_GB", "20")) * GB)
+# 同一个 IP 每天最多注册几个、整台服务每天最多注册几个
+SIGNUP_PER_IP = int(os.environ.get("BEAYY_SIGNUP_PER_IP", "3"))
+SIGNUP_PER_DAY = int(os.environ.get("BEAYY_SIGNUP_PER_DAY", "50"))
 
 def _ticket_secret() -> str:
     """转写、地图票据的签名密钥：没配就生成一个存在同步目录里，重启不变（签票据和验票据都在 server.py 这个进程）"""
@@ -161,6 +175,64 @@ def json_resp(obj, status: int = 200) -> JSONResponse:
     return JSONResponse(obj, status_code=status)
 
 
+def client_ip(request: Request) -> str:
+    """真实来源 IP：经 Cloudflare 隧道的看 CF-Connecting-IP，经反向代理的看 X-Forwarded-For 第一个"""
+    h = request.headers
+    ip = h.get("cf-connecting-ip") or (h.get("x-forwarded-for") or "").split(",")[0].strip()
+    return ip or (request.client.host if request.client else "")
+
+
+def disk_free() -> int:
+    return shutil.disk_usage(SYNC).free
+
+
+def quota_of(c: sqlite3.Connection, user: str) -> int:
+    """这个账号最多存多少字节（0＝不限）：admin.py 单独设过的为准，没设用 BEAYY_USER_QUOTA_MB"""
+    r = c.execute("SELECT storage FROM quotas WHERE user = ?", (user,)).fetchone()
+    return USER_QUOTA if r is None else max(0, r["storage"])
+
+
+def users_count() -> int:
+    c = db()
+    try:
+        return c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    finally:
+        c.close()
+
+
+def stored_of(c: sqlite3.Connection, user: str) -> int:
+    return c.execute("SELECT COALESCE(SUM(size), 0) FROM blobs WHERE user = ?", (user,)).fetchone()[0]
+
+
+# 注册次数：{日期: {ip: 次数}}，进程内记（重启清零，够挡住刷号）
+_SIGNUPS: dict = {}
+
+
+def signup_gate(request: Request, invited: bool) -> str | None:
+    """能不能注册：返回拦下的原因，能注册返回 None"""
+    if not (OPEN_SIGNUP or invited):
+        return "这台服务器要邀请码才能注册" if INVITE else "这台服务器没开放注册"
+    if disk_free() < MIN_FREE:
+        return "服务器存储快满了，暂停注册。可以先不登录（记录都在本机），或者自己部署服务端"
+    if MAX_USERS and users_count() >= MAX_USERS:
+        return "注册名额满了。可以先不登录（记录都在本机），或者在「设置 → 连接 → 同步方式」里选同步文件夹"
+    day = time.strftime("%Y-%m-%d")
+    for k in [k for k in _SIGNUPS if k != day]:
+        del _SIGNUPS[k]
+    m = _SIGNUPS.setdefault(day, {})
+    if sum(m.values()) >= SIGNUP_PER_DAY:
+        return "今天注册的人太多了，明天再试"
+    if m.get(client_ip(request), 0) >= SIGNUP_PER_IP:
+        return "这个网络今天注册得太多了，明天再试"
+    return None
+
+
+def count_signup(request: Request):
+    m = _SIGNUPS.setdefault(time.strftime("%Y-%m-%d"), {})
+    ip = client_ip(request)
+    m[ip] = m.get(ip, 0) + 1
+
+
 def sha256(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
@@ -194,7 +266,7 @@ def kind_of(device: str, segment: str) -> str:
     """块的种类：按块名前缀（分段名以年份开头）"""
     if device == "account":
         return "account"
-    for k in ("audio", "transcript", "places", "sum"):
+    for k in ("audio", "transcript", "places", "sum", "daily"):
         if segment.startswith(k + "."):
             return "summary" if k == "sum" else k
     return "account" if segment == "names.json" else "segment"
@@ -313,9 +385,17 @@ async def put_blob(device: str, segment: str, request: Request):
     data = await request.body()
     if len(data) > MAX_BLOB:
         return json_resp({"error": "太大了"}, 413)
+    if disk_free() < MIN_FREE // 2:
+        return json_resp({"error": "服务器存储满了，暂停上传，记录都还在本机"}, 507)
+    c = db()
+    cap = quota_of(c, who["user"])
+    if cap:
+        old = c.execute("SELECT size FROM blobs WHERE user = ? AND device = ? AND segment = ?", (who["user"], device, segment)).fetchone()
+        if stored_of(c, who["user"]) - (old["size"] if old else 0) + len(data) > cap:
+            c.close()
+            return json_resp({"error": f"这个账号的同步空间满了（{round(cap / MB):g} MB），记录都还在本机。可以换成同步文件夹或自己部署服务端"}, 507)
     write_file(blob_path(who["user"], device, segment), data)
     now = now_ms()
-    c = db()
     c.execute("INSERT INTO blobs (user, device, segment, size, updated) VALUES (?, ?, ?, ?, ?) "
               "ON CONFLICT (user, device, segment) DO UPDATE SET size = excluded.size, updated = excluded.updated",
               (who["user"], device, segment, len(data), now))
@@ -461,8 +541,13 @@ def prelogin(email: str = ""):
 @router.post("/v2/register")
 async def register(request: Request):
     b = await body_json(request)
-    if not INVITE or not same(str(b.get("invite") or ""), INVITE):
+    code = str(b.get("invite") or "").strip()
+    invited = bool(INVITE) and same(code, INVITE)
+    if code and not invited and not OPEN_SIGNUP:
         return json_resp({"error": "邀请码不对"}, 403)
+    why = signup_gate(request, invited)
+    if why:
+        return json_resp({"error": why}, 403)
     email = email_of(b.get("email"))
     if not EMAIL.match(email) or not creds_ok(b) or not HEX64.match(str(b.get("recovery") or "")):
         return json_resp({"error": "注册信息不全"}, 400)
@@ -474,9 +559,17 @@ async def register(request: Request):
         c.execute("INSERT INTO users (user, token_hash, created, email, salt, kdf, auth_hash, wrapped_key, recovery_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (user, sha256(secrets.token_hex(32)), now_ms(), email, b["salt"], json.dumps(KDF, separators=(",", ":")),
                    sha256(b["auth"]), b["wrapped_key"], sha256(b["recovery"])))
+        count_signup(request)
         return {"user": user, **new_session(c, user, b.get("name"), b.get("device"))}
     finally:
         c.close()
+
+
+@router.get("/v2/signup")
+def signup_info():
+    """注册前问一下：要不要邀请码、每个账号能存多少（注册框据此显示邀请码一栏和说明）"""
+    full = disk_free() < MIN_FREE or bool(MAX_USERS and users_count() >= MAX_USERS)
+    return {"open": OPEN_SIGNUP and not full, "invite": bool(INVITE) and not OPEN_SIGNUP, "quota": USER_QUOTA}
 
 
 @router.post("/v2/login")
@@ -648,6 +741,7 @@ def account(request: Request):
             "profile": {"name": me["display_name"], "avatar": me["avatar"], "updated": me["profile_updated"]} if me else None,
             "llm": {"plan": me["llm_plan"] or None, "quota": me["llm_quota"], "used": usage_of(c, user).get("llm", 0), "month": month()} if me else None,
             "services": services(c, user),
+            "storage": {"used": stored_of(c, user), "quota": quota_of(c, user)},
         }
     finally:
         c.close()

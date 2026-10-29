@@ -49,3 +49,7 @@ CREATE TABLE IF NOT EXISTS blobs (
 );
 CREATE INDEX IF NOT EXISTS blobs_updated ON blobs (user, updated);
 CREATE INDEX IF NOT EXISTS blobs_seg ON blobs (user, segment);   -- v6：按前缀列
+CREATE TABLE IF NOT EXISTS quotas (     -- v7：单个账号另设的同步空间上限（字节，0＝不限）；没有这一行用 BEAYY_USER_QUOTA_MB
+  user TEXT PRIMARY KEY,
+  storage INTEGER NOT NULL
+);

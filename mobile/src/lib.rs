@@ -18,6 +18,10 @@ mod sync;
 mod storage;
 #[path = "../../src-tauri/src/icons.rs"]
 mod icons;
+// 只用读的那几个（get_week、get_month）：手机不写总结，看电脑同步来的
+#[path = "../../src-tauri/src/daily.rs"]
+#[allow(dead_code)]
+mod daily;
 
 use beayy_core::{data_root, default_root, EventLog};
 use beayy_remote::Relay;
@@ -112,6 +116,10 @@ fn dispatch(cmd: &str, a: &Map<String, Value>) -> Result<Value, String> {
         "web_log" => { web_log(&arg::<String>(a, "text")?); ok(()) }
         "list_days" => ok(data::list_days()),
         "get_day" => ok(data::get_day(arg(a, "date")?)),
+        "get_range" => ok(data::get_range(arg(a, "from")?, arg(a, "to")?)?),
+        "get_week" => ok(daily::get_week(arg(a, "date")?)?),
+        "get_month" => ok(daily::get_month(arg(a, "date")?)?),
+        "llm_usage" => ok(data::llm_usage()),
         "get_rules" => ok(data::get_rules()),
         "save_rules" => ok(data::save_rules(arg(a, "rules")?)?),
         "get_settings" => ok(data::get_settings()),
@@ -144,6 +152,7 @@ fn dispatch(cmd: &str, a: &Map<String, Value>) -> Result<Value, String> {
         "sync_status" => ok(sync::sync_status()),
         "sync_now" => ok(wait(sync::sync_now())?),
         "account_signup" => ok(wait(sync::account_signup(arg(a, "invite")?, arg(a, "email")?, arg(a, "password")?))?),
+        "signup_info" => ok(wait(sync::signup_info())),
         "account_login" => ok(wait(sync::account_login(arg(a, "email")?, arg(a, "password")?))?),
         "account_claim" => ok(wait(sync::account_claim(arg(a, "email")?, arg(a, "password")?))?),
         "account_recover" => ok(wait(sync::account_recover(arg(a, "email")?, arg(a, "code")?, arg(a, "password")?))?),

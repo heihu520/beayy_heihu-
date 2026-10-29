@@ -13,7 +13,7 @@ Beayy 的同步服务和转写服务，可以在自己的电脑或服务器上�
 
 ```bash
 git clone https://github.com/hengfengliya/beayy && cd beayy/server
-cp .env.example .env        # 至少填 BEAYY_INVITE（注册邀请码）
+cp .env.example .env        # 至少填 BEAYY_INVITE（注册邀请码），或者 BEAYY_OPEN_SIGNUP=1 开放注册
 docker compose up -d                    # 只起同步
 docker compose --profile asr up -d      # 同步＋转写
 curl http://127.0.0.1:8770/v2/health    # {"ok":true}
@@ -22,7 +22,7 @@ curl http://127.0.0.1:8770/v2/health    # {"ok":true}
 然后在 Beayy（电脑）里：
 
 1. **设置 → 连接 → 同步服务器**，填这台服务的地址（要在登录前换；已登录的先在「账号」里退出）。
-2. **设置 → 账号 → 注册**，邀请码填 `.env` 里的 `BEAYY_INVITE`。其他设备用同一个邮箱和主密码登录。
+2. 先在 **设置 → 连接 → 同步方式** 里选「自建服务器」填上地址，再到 **设置 → 账号 → 注册**，邀请码填 `.env` 里的 `BEAYY_INVITE`（开放注册的不用填）。其他设备用同一个邮箱和主密码登录。
 3. 要用转写或服务器上配的模型、地图：先给账号开通（见下面「开通账号」），再在 **设置 → 连接 → 转写服务** 填同一个地址。
 
 手机（iPhone）在登录界面填同样的同步服务器地址，登录后转写、地图的配置从电脑同步过去。
@@ -70,7 +70,12 @@ docker compose --profile tunnel up -d
 
 | 变量 | 做什么 |
 |---|---|
-| `BEAYY_INVITE` | 注册邀请码。不填就谁也注册不了 |
+| `BEAYY_INVITE` | 注册邀请码。不填、也没开放注册，就谁也注册不了 |
+| `BEAYY_OPEN_SIGNUP` | `1`＝开放注册，不要邀请码。开放时建议一起设下面几项 |
+| `BEAYY_USER_QUOTA_MB` | 每个账号最多存多少 MB（默认 0＝不限）。单个账号另设：`python admin.py storage <邮箱> <MB>`（0＝不限） |
+| `BEAYY_MAX_USERS` | 最多开放多少个账号（默认 0＝不限），满了停止注册 |
+| `BEAYY_MIN_FREE_GB` | 硬盘剩余低于这么多 GB 停止注册（默认 20），低到一半连上传也停 |
+| `BEAYY_SIGNUP_PER_IP`、`BEAYY_SIGNUP_PER_DAY` | 同一 IP 每天最多注册几个（默认 3）、每天一共最多几个（默认 50） |
 | `BEAYY_TICKET_SECRET` | 转写、地图票据的签名密钥。不填自动生成，存在 `data/sync/ticket_secret` |
 | `BEAYY_LLM_GATEWAY`、`BEAYY_LLM_KEY`、`BEAYY_LLM_MODEL` | 服务器替开通的账号调模型（OpenAI 兼容接口）。不填的话客户端用自己配的模型 |
 | `BEAYY_AMAP_KEY`、`BEAYY_AMAP_JS_KEY`、`BEAYY_AMAP_JS_CODE` | 服务器替开通的账号调高德地图 |

@@ -2,6 +2,9 @@
 //!
 //! - 同步单位是一个分段文件 `devices/<设备>/segments/<分段>/events.jsonl`；本机写的 10 分钟摘要也同步，
 //!   块名 `sum.<摘要文件名>`，别的设备下载到 `devices/<设备>/summaries/<摘要文件名>`（时间线显示是哪台电脑的）。
+//! - 本机写的日、周、月总结（`<数据根>/daily/日总结_YYYYMMDD.md`、`周总结_YYYYMMDD.md`、`月总结_YYYYMM.md`）也同步，
+//!   块名 `daily.d.YYYYMMDD.md`、`daily.w.YYYYMMDD.md`、`daily.m.YYYYMM.md`（块名只能是 ASCII），
+//!   别的设备下载到 `devices/<设备>/daily/<原文件名>`（手机不写总结，全靠这个看）。
 //! - 设备改名：每台设备把自己改过的名字写在 `<数据根>/device_names.json`（{设备: {name, at}}），块名 `names.json`
 //!   同步；别的设备下载到 `devices/<设备>/device_names.json`，读取时按改名时刻取最新的。
 //! - 下载来的设备目录里放一个 `.synced` 标记：换账号、重登录清了状态以后，也不会把别人的数据当成自己的再传上去。
@@ -12,6 +15,10 @@
 //! - 账号（v2）：邮箱＋主密码。主密码用 Argon2id 派生成主钥，再用 HKDF 分出「登录校验值」（发给服务器，服务器只存它的哈希）
 //!   和「包钥」（在本机解开服务器上包好的数据密钥）。恢复码就是数据密钥本身（base32 分组），忘了主密码时用它重设。
 //!   每台设备登录拿自己的令牌。v1 的配对码账号用 claim 迁移：同一把数据密钥，已上传的数据不用重传。
+//! - 同步文件夹（不经服务器）：账号的 server 写成 `folder:<路径>`，块按同样的加密写成 `<路径>/blobs/<设备>/<块名>`，
+//!   数据密钥用主密码包一层放在 `<路径>/vault.json`。文件夹交给 iCloud 云盘、OneDrive、Dropbox、Syncthing、NAS 去同步；
+//!   每台设备只写自己的目录（单写者），没有冲突。网盘晚到的文件修改时刻可能比游标早，所以下载不靠游标，按每个文件的大小和修改时刻比。
+//!   没有服务器，就没有官方模型、转写、地图和手机直传（这些要账号登录服务器）。
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
@@ -26,6 +33,9 @@ use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 
 pub const DEFAULT_SERVER: &str = "https://sync.beayy.com";
+/// 同步文件夹模式下账号 server 的前缀
+const FOLDER: &str = "folder:";
+const NO_SERVER: &str = "用的是同步文件夹，没有服务器：官方模型、转写、地图要换成服务器同步";
 const CODE_PREFIX: &str = "beayy-sync-1:";
 const PARALLEL: usize = 8;
 /// 下载并发：每块都要过一次鉴权查库，单次慢，多开几路
@@ -64,6 +74,11 @@ impl Account {
 
     fn auth(&self) -> String {
         format!("Bearer {}:{}", self.user, self.token)
+    }
+
+    /// 同步文件夹模式：文件夹路径；服务器模式返回 None
+    pub fn folder(&self) -> Option<PathBuf> {
+        self.server.strip_prefix(FOLDER).map(PathBuf::from)
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
@@ -154,6 +169,16 @@ fn err_of(mut r: ureq::http::Response<ureq::Body>) -> String {
 
 /// 服务器上这个账号的设备：[{device, segments, bytes, updated}]
 pub fn remote_devices(a: &Account) -> Result<Vec<Value>, String> {
+    if let Some(dir) = a.folder() {
+        let mut m: BTreeMap<String, (u64, u64, i64)> = BTreeMap::new();
+        for it in folder_items(&dir, "") {
+            let e = m.entry(it["device"].as_str().unwrap_or("").to_string()).or_default();
+            e.0 += 1;
+            e.1 += it["size"].as_u64().unwrap_or(0);
+            e.2 = e.2.max(it["updated"].as_i64().unwrap_or(0));
+        }
+        return Ok(m.into_iter().map(|(d, (n, b, u))| json!({"device": d, "segments": n, "bytes": b, "updated": u})).collect());
+    }
     let r = agent().get(&format!("{}/v1/devices", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -273,6 +298,14 @@ fn new_salt() -> Result<String, String> {
     Ok(hex_encode(&salt))
 }
 
+/// 注册前问服务器：要不要邀请码、每个账号能存多少。老服务器没有这个接口，按要邀请码算
+pub fn signup_info(server: &str) -> Value {
+    match agent().get(&format!("{}/v2/signup", server.trim_end_matches('/'))).call() {
+        Ok(mut r) if r.status().is_success() => r.body_mut().read_json().unwrap_or(json!({"invite": true})),
+        _ => json!({"invite": true}),
+    }
+}
+
 /// 新账号：生成数据密钥，主密码包一层存上去；返回恢复码（只在这时给用户看一次，之后设置里也能再看）
 pub fn signup(root: &Path, server: &str, invite: &str, email: &str, password: &str, device: &str, name: &str) -> Result<String, String> {
     let server = server.trim_end_matches('/');
@@ -341,6 +374,9 @@ pub fn recover(root: &Path, server: &str, email: &str, code: &str, new_password:
 /// 改主密码（已登录）：数据密钥不变，重新包一层
 pub fn change_password(root: &Path, new_password: &str) -> Result<(), String> {
     let a = load(root).ok_or("没登录")?;
+    if let Some(dir) = a.folder() {
+        return write_vault(&dir, &a.user, &a.key, new_password);
+    }
     let salt = new_salt()?;
     let (auth, wrap) = derive(new_password, &salt)?;
     post_json(&agent(), &format!("{}/v2/password", a.server), Some(&a.auth()), &json!({"salt": salt, "auth": auth, "wrapped_key": wrap_key(&a.key, &wrap)?}))?;
@@ -350,6 +386,10 @@ pub fn change_password(root: &Path, new_password: &str) -> Result<(), String> {
 /// 账号信息：邮箱、登录着的设备
 pub fn account(root: &Path) -> Result<Value, String> {
     let a = load(root).ok_or("没登录")?;
+    if let Some(dir) = a.folder() {
+        // 文件夹没有「登录着的设备」，列写过东西的设备；没有官方服务
+        return Ok(json!({"user": a.user, "email": null, "folder": dir.display().to_string(), "sessions": [], "devices": remote_devices(&a)?, "profile": null, "services": {"plan": null, "error": NO_SERVER}}));
+    }
     let r = agent().get(&format!("{}/v2/account", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -361,6 +401,9 @@ pub fn account(root: &Path) -> Result<Value, String> {
 /// 移除一台设备的登录（id＝"self" 就是这台退出）
 pub fn remove_session(root: &Path, id: &str) -> Result<(), String> {
     let a = load(root).ok_or("没登录")?;
+    if a.folder().is_some() {
+        return if id == "self" { Ok(()) } else { Err("同步文件夹没有设备登录，要停用一台设备就在那台上退出".into()) };
+    }
     let r = agent().delete(&format!("{}/v2/sessions/{id}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -377,6 +420,9 @@ pub fn logout(root: &Path) {
 /// 存账号的显示名称和头像（data URL）；返回服务器记的更新时刻
 pub fn set_profile(root: &Path, name: &str, avatar: Option<&str>) -> Result<i64, String> {
     let a = load(root).ok_or("没登录")?;
+    if a.folder().is_some() {
+        return Ok(0); // 文件夹模式不同步头像和名称，只存在本机
+    }
     let v = post_json(&agent(), &format!("{}/v2/profile", a.server), Some(&a.auth()), &json!({"name": name, "avatar": avatar}))?;
     Ok(v["updated"].as_i64().unwrap_or(0))
 }
@@ -388,6 +434,166 @@ pub fn recovery_code(root: &Path) -> Option<String> {
 
 fn url_escape(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+// ---------- 同步文件夹 ----------
+
+fn vault_path(dir: &Path) -> PathBuf {
+    dir.join("vault.json")
+}
+
+fn folder_blob(dir: &Path, d: &str, n: &str) -> PathBuf {
+    dir.join("blobs").join(d).join(n)
+}
+
+/// 先写临时文件再改名：网盘同步时不会传半截文件
+fn write_atomic(p: &Path, data: &[u8]) -> Result<(), String> {
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    let tmp = p.with_file_name(format!(".{}.tmp", p.file_name().unwrap().to_string_lossy()));
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, p).map_err(|e| e.to_string())
+}
+
+fn mtime_ms(m: &fs::Metadata) -> i64 {
+    m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// 文件夹里的全部块：[{device, segment, size, updated}]，按 updated 升序（同服务器 /v1/list 的样子）
+fn folder_items(dir: &Path, prefix: &str) -> Vec<Value> {
+    let mut out = vec![];
+    for dev in fs::read_dir(dir.join("blobs")).into_iter().flatten().flatten() {
+        let d = dev.file_name().to_string_lossy().to_string();
+        if !safe_name(&d) {
+            continue;
+        }
+        for f in fs::read_dir(dev.path()).into_iter().flatten().flatten() {
+            let n = f.file_name().to_string_lossy().to_string();
+            if !safe_name(&n) || n.starts_with('.') || !n.starts_with(prefix) {
+                continue;
+            }
+            if let Ok(m) = f.metadata() {
+                out.push(json!({"device": d, "segment": n, "size": m.len(), "updated": mtime_ms(&m)}));
+            }
+        }
+    }
+    out.sort_by_key(|x| x["updated"].as_i64().unwrap_or(0));
+    out
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    let path = path.trim();
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default().join(rest),
+        None => PathBuf::from(path),
+    }
+}
+
+/// 这个文件夹里有没有已经开好的同步（设置里选文件夹后，账号页据此给「新建」还是「加入」）
+pub fn folder_state(path: &str) -> Value {
+    let dir = expand_home(path);
+    json!({"path": dir.display().to_string(), "exists": dir.is_dir(), "vault": vault_path(&dir).is_file()})
+}
+
+/// 第一台设备：在文件夹里新开同步。生成数据密钥，用主密码包一层写进 vault.json；返回恢复码
+pub fn folder_create(root: &Path, path: &str, password: &str) -> Result<String, String> {
+    let dir = expand_home(path);
+    if vault_path(&dir).exists() {
+        return Err("这个文件夹里已经开过同步了，用「加入」".into());
+    }
+    fs::create_dir_all(&dir).map_err(|e| format!("建不了文件夹：{e}"))?;
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key).map_err(|e| e.to_string())?;
+    let mut uid = [0u8; 12];
+    getrandom::getrandom(&mut uid).map_err(|e| e.to_string())?;
+    let user = hex_encode(&uid);
+    write_vault(&dir, &user, &key, password)?;
+    let a = Account { server: format!("{FOLDER}{}", dir.display()), user, email: None, token: String::new(), key };
+    save(root, &a)?;
+    reset_state_for(root, &a.user);
+    Ok(recovery_code_of(&key))
+}
+
+fn write_vault(dir: &Path, user: &str, key: &[u8; 32], password: &str) -> Result<(), String> {
+    let salt = new_salt()?;
+    let (_, wrap) = derive(password, &salt)?;
+    let v = json!({"v": 1, "user": user, "salt": salt, "kdf": {"alg": "argon2id", "m": 65536, "t": 3, "p": 1},
+        "wrapped_key": wrap_key(key, &wrap)?, "recovery": recovery_auth(key)});
+    write_atomic(&vault_path(dir), serde_json::to_string_pretty(&v).unwrap().as_bytes())
+}
+
+fn read_vault(dir: &Path) -> Result<Value, String> {
+    let t = fs::read_to_string(vault_path(dir)).map_err(|_| "这个文件夹里还没开同步（没有 vault.json）；网盘还没同步下来的话，等一会儿再试")?;
+    serde_json::from_str(&t).map_err(|_| "vault.json 坏了".to_string())
+}
+
+/// 别的设备：加入文件夹里已有的同步，用主密码解开数据密钥
+pub fn folder_join(root: &Path, path: &str, password: &str) -> Result<(), String> {
+    let dir = expand_home(path);
+    let v = read_vault(&dir)?;
+    let (_, wrap) = derive(password, v["salt"].as_str().unwrap_or(""))?;
+    let key = unwrap_key(v["wrapped_key"].as_str().unwrap_or(""), &wrap)?;
+    let a = Account { server: format!("{FOLDER}{}", dir.display()), user: v["user"].as_str().unwrap_or("").into(), email: None, token: String::new(), key };
+    save(root, &a)?;
+    reset_state_for(root, &a.user);
+    Ok(())
+}
+
+/// 忘了主密码：恢复码＋新主密码，重包 vault.json 并加入
+pub fn folder_recover(root: &Path, path: &str, code: &str, new_password: &str) -> Result<(), String> {
+    let dir = expand_home(path);
+    let v = read_vault(&dir)?;
+    let key = parse_recovery(code)?;
+    if v["recovery"].as_str() != Some(recovery_auth(&key).as_str()) {
+        return Err("恢复码不对".into());
+    }
+    let user = v["user"].as_str().unwrap_or("").to_string();
+    write_vault(&dir, &user, &key, new_password)?;
+    let a = Account { server: format!("{FOLDER}{}", dir.display()), user, email: None, token: String::new(), key };
+    save(root, &a)?;
+    reset_state_for(root, &a.user);
+    Ok(())
+}
+
+/// 文件夹模式的下载：别的设备写的块，大小或修改时刻跟上次下的不一样就下（不靠游标，见文件开头）
+fn folder_download(root: &Path, a: &Account, dir: &Path, local_device: &str, st: &mut State, errors: &mut Vec<String>) -> usize {
+    let mut seen: Map<String, Value> = st.raw.get("down").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut todo = vec![];
+    for it in folder_items(dir, "") {
+        let (d, n) = (it["device"].as_str().unwrap_or("").to_string(), it["segment"].as_str().unwrap_or("").to_string());
+        let mine = d == local_device || (d.starts_with("iphone-") && root.join("devices").join(&d).exists() && !is_remote(root, st, &d));
+        if mine || is_special(&d, &n) {
+            continue;
+        }
+        let sig = json!([it["size"], it["updated"]]);
+        if seen.get(&format!("{d}/{n}")) != Some(&sig) {
+            todo.push((d, n, sig));
+        }
+    }
+    set_phase("download", todo.len());
+    let mut downloaded = 0;
+    for (i, (d, n, sig)) in todo.into_iter().enumerate() {
+        let r = fs::read(folder_blob(dir, &d, &n)).map_err(|e| e.to_string()).and_then(|b| open(a, &d, &n, &b)).and_then(|plain| store(root, &d, &n, plain));
+        DONE.fetch_add(1, Ordering::Relaxed);
+        match r {
+            Ok(_) => {
+                st.remote.insert(d.clone());
+                seen.insert(format!("{d}/{n}"), sig);
+                downloaded += 1;
+            }
+            // 网盘还在传的半截文件解不开：下一轮再试
+            Err(e) => {
+                if errors.len() < 10 {
+                    errors.push(format!("下载 {d}/{n}：{e}"));
+                }
+            }
+        }
+        if i % 200 == 199 {
+            st.raw.insert("down".into(), Value::Object(seen.clone()));
+            write_state(root, st);
+        }
+    }
+    st.raw.insert("down".into(), Value::Object(seen));
+    downloaded
 }
 
 // ---------- 加密 ----------
@@ -462,7 +668,8 @@ pub fn status(root: &Path) -> Value {
     json!({
         "configured": a.is_some(),
         "email": a.as_ref().and_then(|a| a.email.clone()),
-        "server": a.as_ref().map(|a| a.server.clone()),
+        "server": a.as_ref().filter(|a| a.folder().is_none()).map(|a| a.server.clone()),
+        "folder": a.as_ref().and_then(|a| a.folder()).map(|p| p.display().to_string()),
         "user": a.as_ref().map(|a| a.user.clone()),
         "last": s.raw.get("last"),
         "last_error": s.raw.get("last_error"),
@@ -523,6 +730,25 @@ pub fn rename_device(root: &Path, id: &str, name: &str) -> Result<(), String> {
 }
 /// 摘要块名的前缀（分段名都以年份开头，不会撞）
 const SUM: &str = "sum.";
+/// 日、周、月总结块名的前缀
+const DAILY: &str = "daily.";
+const DAILY_KINDS: [(&str, &str); 3] = [("d", "日总结_"), ("w", "周总结_"), ("m", "月总结_")];
+
+/// 总结文件名 → 块名（日总结_20261028.md → daily.d.20261028.md）；不是总结返回 None
+fn daily_block(file: &str) -> Option<String> {
+    let (k, rest) = DAILY_KINDS.iter().find_map(|(k, pre)| file.strip_prefix(pre).map(|r| (*k, r)))?;
+    let date = rest.strip_suffix(".md")?;
+    (date.len() >= 6 && date.chars().all(|c| c.is_ascii_digit())).then(|| format!("{DAILY}{k}.{date}.md"))
+}
+
+/// 块名 → 总结文件名
+fn daily_file(block: &str) -> Option<String> {
+    let rest = block.strip_prefix(DAILY)?;
+    let (k, date) = rest.split_once('.')?;
+    let date = date.strip_suffix(".md")?;
+    let pre = DAILY_KINDS.iter().find(|(x, _)| *x == k)?.1;
+    (date.len() >= 6 && date.chars().all(|c| c.is_ascii_digit())).then(|| format!("{pre}{date}.md"))
+}
 
 fn is_remote(root: &Path, st: &State, d: &str) -> bool {
     st.remote.contains(d) || root.join("devices").join(d).join(SYNCED).is_file()
@@ -614,6 +840,16 @@ fn sync_round(root: &Path, local_device: &str, upload: bool) -> Option<Report> {
             todo.push((local_device.to_string(), name, f.path(), sig));
         }
     }
+    // 本机写的日、周、月总结（<数据根>/daily/），块名 daily.<d|w|m>.<日期>.md
+    for f in fs::read_dir(root.join("daily")).ok().filter(|_| upload).map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default() {
+        let Some(name) = daily_block(&f.file_name().to_string_lossy()) else { continue };
+        let Ok(meta) = f.metadata() else { continue };
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        let sig = (meta.len(), mtime);
+        if st.up.get(&format!("{local_device}/{name}")) != Some(&sig) {
+            todo.push((local_device.to_string(), name, f.path(), sig));
+        }
+    }
     // 本机的设备改名表
     if let Some(meta) = fs::metadata(root.join(NAMES_FILE)).ok().filter(|_| upload) {
         let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
@@ -641,6 +877,10 @@ fn sync_round(root: &Path, local_device: &str, upload: bool) -> Option<Report> {
                                 let r = (|| {
                                     let plain = fs::read(f).map_err(|e| e.to_string())?;
                                     let blob = seal(a, d, n, &plain)?;
+                                    if let Some(dir) = a.folder() {
+                                        write_atomic(&folder_blob(&dir, d, n), &blob)?;
+                                        return Ok(*sig);
+                                    }
                                     let resp = ag
                                         .put(&format!("{}/v1/blob/{d}/{n}", a.server))
                                         .header("Authorization", &a.auth())
@@ -681,6 +921,14 @@ fn sync_round(root: &Path, local_device: &str, upload: bool) -> Option<Report> {
 
     // 2. 下载：别的设备新传的
     let mut downloaded = 0;
+    if let Some(dir) = a.folder() {
+        if !dir.is_dir() {
+            errors.push(format!("找不到同步文件夹 {}（网盘没挂上？）", dir.display()));
+            return Some(finish(root, st, uploaded, downloaded, errors));
+        }
+        downloaded = folder_download(root, &a, &dir, local_device, &mut st, &mut errors);
+        return Some(finish(root, st, uploaded, downloaded, errors));
+    }
     loop {
         let r = match ag.get(&format!("{}/v1/list?since={}", a.server, st.since)).header("Authorization", &a.auth()).call() {
             Ok(r) if r.status().is_success() => r,
@@ -787,6 +1035,9 @@ pub fn put_named(root: &Path, device: &str, name: &str, plain: &[u8]) -> Result<
         return Err(format!("块名不合法：{device}/{name}"));
     }
     let blob = seal(&a, device, name, plain)?;
+    if let Some(dir) = a.folder() {
+        return write_atomic(&folder_blob(&dir, device, name), &blob);
+    }
     let r = agent()
         .put(&format!("{}/v1/blob/{device}/{name}", a.server))
         .header("Authorization", &a.auth())
@@ -802,6 +1053,12 @@ pub fn put_named(root: &Path, device: &str, name: &str, plain: &[u8]) -> Result<
 /// 取一块并解开；服务器上没有返回 None
 pub fn get_named(root: &Path, device: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
     let a = logged_in(root)?;
+    if let Some(dir) = a.folder() {
+        return match fs::read(folder_blob(&dir, device, name)) {
+            Ok(b) => open(&a, device, name, &b).map(Some),
+            Err(_) => Ok(None),
+        };
+    }
     let mut r = agent().get(&format!("{}/v1/blob/{device}/{name}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if r.status().as_u16() == 404 {
         return Ok(None);
@@ -815,6 +1072,10 @@ pub fn get_named(root: &Path, device: &str, name: &str) -> Result<Option<Vec<u8>
 
 pub fn delete_named(root: &Path, device: &str, name: &str) -> Result<(), String> {
     let a = logged_in(root)?;
+    if let Some(dir) = a.folder() {
+        let _ = fs::remove_file(folder_blob(&dir, device, name));
+        return Ok(());
+    }
     let r = agent().delete(&format!("{}/v1/blob/{device}/{name}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -825,6 +1086,9 @@ pub fn delete_named(root: &Path, device: &str, name: &str) -> Result<(), String>
 /// 按块名前缀列（[{device, segment, size, updated}]，按 updated 升序），since 之后的；自动翻页
 pub fn list_named(root: &Path, prefix: &str, since: i64) -> Result<Vec<Value>, String> {
     let a = logged_in(root)?;
+    if let Some(dir) = a.folder() {
+        return Ok(folder_items(&dir, prefix).into_iter().filter(|x| x["updated"].as_i64().unwrap_or(0) > since).collect());
+    }
     let ag = agent();
     let (mut out, mut since) = (vec![], since);
     loop {
@@ -846,6 +1110,24 @@ pub fn list_named(root: &Path, prefix: &str, since: i64) -> Result<Vec<Value>, S
 /// 服务器上这个账号存了什么：{items: [{device, kind, count, bytes, oldest, newest}], audio_max_days}
 pub fn usage(root: &Path) -> Result<Value, String> {
     let a = logged_in(root)?;
+    if let Some(dir) = a.folder() {
+        // 同服务器 /v1/usage：按设备和种类合计
+        let mut m: BTreeMap<(String, String), (u64, u64, i64, i64)> = BTreeMap::new();
+        for it in folder_items(&dir, "") {
+            let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
+            let kind = if d == "account" { "account" } else if n.starts_with(SUM) { "summary" } else if n.starts_with(DAILY) { "daily" } else if n == NAMES { "account" } else {
+                ["audio", "transcript", "places"].into_iter().find(|k| n.starts_with(&format!("{k}."))).unwrap_or("segment")
+            };
+            let u = it["updated"].as_i64().unwrap_or(0);
+            let e = m.entry((d.to_string(), kind.to_string())).or_insert((0, 0, i64::MAX, 0));
+            e.0 += 1;
+            e.1 += it["size"].as_u64().unwrap_or(0);
+            e.2 = e.2.min(u);
+            e.3 = e.3.max(u);
+        }
+        let items: Vec<Value> = m.into_iter().map(|((d, k), (c, b, o, n))| json!({"device": d, "kind": k, "count": c, "bytes": b, "oldest": o, "newest": n})).collect();
+        return Ok(json!({"items": items, "audio_max_days": 30, "now": chrono::Utc::now().timestamp_millis(), "folder": dir.display().to_string()}));
+    }
     let mut r = agent().get(&format!("{}/v1/usage", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -855,12 +1137,12 @@ pub fn usage(root: &Path) -> Result<Value, String> {
 
 /// 官方服务（模型、地图）用的：同步服务器地址和这台设备的认证头。没登录返回 None；令牌只在 Rust 里用，不给网页
 pub fn official_auth(root: &Path) -> Option<(String, String)> {
-    load(root).map(|a| (a.server.clone(), a.auth()))
+    load(root).filter(|a| a.folder().is_none()).map(|a| (a.server.clone(), a.auth()))
 }
 
 /// 官方模型的代理地址和认证头（同步服务 /v2/llm/chat/completions，按账号开通）。没登录返回 None；令牌只在 Rust 里用，不给网页
 pub fn official_llm(root: &Path) -> Option<(String, String)> {
-    load(root).map(|a| (format!("{}/v2/llm/chat/completions", a.server), a.auth()))
+    load(root).filter(|a| a.folder().is_none()).map(|a| (format!("{}/v2/llm/chat/completions", a.server), a.auth()))
 }
 
 /// 转写票据（1 小时有效）：(票据, 到期毫秒)
@@ -871,6 +1153,9 @@ pub fn ticket(root: &Path) -> Result<(String, i64), String> {
 /// 官方服务的票据（1 小时有效）：kind＝asr（转写）或 map（地图），同步服务按那一项的开通和额度发
 pub fn ticket_for(root: &Path, kind: &str) -> Result<(String, i64), String> {
     let a = logged_in(root)?;
+    if a.folder().is_some() {
+        return Err(NO_SERVER.into());
+    }
     let mut r = agent().get(&format!("{}/v2/ticket?for={kind}", a.server)).header("Authorization", &a.auth()).call().map_err(|e| e.to_string())?;
     if !r.status().is_success() {
         return Err(err_of(r));
@@ -896,6 +1181,12 @@ fn store(root: &Path, d: &str, n: &str, plain: Vec<u8>) -> Result<(), String> {
     let _ = fs::write(dev.join(SYNCED), "");
     if n == NAMES {
         return fs::write(dev.join(NAMES_FILE), plain).map_err(|e| e.to_string());
+    }
+    if n.starts_with(DAILY) {
+        let file = daily_file(n).ok_or_else(|| format!("总结块名不对：{n}"))?;
+        let dir = dev.join("daily");
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        return fs::write(dir.join(file), plain).map_err(|e| e.to_string());
     }
     if let Some(file) = n.strip_prefix(SUM) {
         // 同一分段重写过的摘要只留最新的（文件名前 19 位是分段开始时刻）
@@ -931,6 +1222,46 @@ fn finish(root: &Path, mut st: State, uploaded: usize, downloaded: usize, errors
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 两台设备经同一个文件夹同步：A 新开、写一段，B 用主密码加入、下载到同样的位置；主密码错了加入不了
+    #[test]
+    fn folder_roundtrip() {
+        let base = std::env::temp_dir().join(format!("beayy-folder-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (ra, rb, dir) = (base.join("a"), base.join("b"), base.join("cloud"));
+        std::env::set_var("BEAYY_DATA_ROOT", &ra); // 账号存文件，不碰钥匙串
+        let seg = ra.join("devices/mac-a/segments/2026-10-29T01-00-00Z");
+        fs::create_dir_all(&seg).unwrap();
+        fs::write(seg.join("events.jsonl"), "{\"x\":1}\n").unwrap();
+        let code = folder_create(&ra, dir.to_str().unwrap(), "password-1").unwrap();
+        assert!(folder_create(&ra, dir.to_str().unwrap(), "password-1").is_err());
+        let r = sync_once(&ra, "mac-a").unwrap();
+        assert_eq!((r.uploaded, r.errors.len()), (1, 0));
+        assert!(folder_join(&rb, dir.to_str().unwrap(), "wrong-pass").is_err());
+        folder_join(&rb, dir.to_str().unwrap(), "password-1").unwrap();
+        let r = sync_once(&rb, "mac-b").unwrap();
+        assert_eq!((r.downloaded, r.errors.len()), (1, 0));
+        assert_eq!(fs::read_to_string(rb.join("devices/mac-a/segments/2026-10-29T01-00-00Z/events.jsonl")).unwrap(), "{\"x\":1}\n");
+        // 再同步一轮：没有变的不重下
+        assert_eq!(sync_once(&rb, "mac-b").unwrap().downloaded, 0);
+        // 恢复码重设主密码后，新密码能加入
+        folder_recover(&rb, dir.to_str().unwrap(), &code, "password-2").unwrap();
+        assert!(folder_join(&ra, dir.to_str().unwrap(), "password-1").is_err());
+        folder_join(&ra, dir.to_str().unwrap(), "password-2").unwrap();
+        assert!(official_llm(&ra).is_none());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn daily_names() {
+        assert_eq!(daily_block("日总结_20261028.md").as_deref(), Some("daily.d.20261028.md"));
+        assert_eq!(daily_block("月总结_202610.md").as_deref(), Some("daily.m.202610.md"));
+        assert_eq!(daily_block("state.json"), None);
+        assert_eq!(daily_block("stats_2026-10-28.json"), None);
+        assert_eq!(daily_file("daily.w.20261026.md").as_deref(), Some("周总结_20261026.md"));
+        assert_eq!(daily_file("daily.x.2026.md"), None);
+        assert!(safe_name(&daily_block("周总结_20261026.md").unwrap()));
+    }
 
     #[test]
     fn seal_open_roundtrip() {
