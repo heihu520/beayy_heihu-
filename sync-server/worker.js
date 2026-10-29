@@ -114,7 +114,10 @@ async function route(req, env) {
     const prefix = url.searchParams.get("prefix") || "";
     const device = url.searchParams.get("device") || "";
     if ((prefix && !/^[A-Za-z0-9._-]{1,40}$/.test(prefix)) || (device && !NAME.test(device))) return json({ error: "筛选条件不合法" }, 400);
-    let sql = "SELECT device, segment, size, updated FROM blobs WHERE user = ? AND updated > ?";
+    // 索引写明：从头按前缀列（0.2.19 及以前的客户端每轮都这样）走 (user, segment)，只读这一类；增量列走 (user, updated)，只读新来的。
+    // D1 按读到的行计费，交给查询规划自己挑时两种都会挑错
+    const index = prefix && !since ? "blobs_seg" : "blobs_updated";
+    let sql = `SELECT device, segment, size, updated FROM blobs INDEXED BY ${index} WHERE user = ? AND updated > ?`;
     const args = [user, since];
     if (prefix) { sql += " AND segment >= ? AND segment < ?"; args.push(prefix, prefix + "\uffff"); }
     if (device) { sql += " AND device = ?"; args.push(device); }

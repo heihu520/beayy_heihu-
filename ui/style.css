@@ -357,6 +357,11 @@ a.mx-btn { text-decoration: none; }
 .ac-msg { margin: var(--space-3) 0 0; }
 .mx-setting > .profile { flex: 1; min-width: 0; }
 .gen-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+.week-range { font-size: 13px; color: var(--ink-2); padding: 0 var(--space-2); }
+.week-days { display: flex; flex-direction: column; }
+.week-days a { display: grid; grid-template-columns: 7.5em 1fr; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 14px; line-height: 20px; }
+.week-days a:hover { background: var(--hover); }
+.week-days .muted { color: var(--ink-3); }
 
 /* ---------- 首次启动引导：盖住侧栏，居中一栏 ---------- */
 :root.onboarding .mx-side, :root.onboarding .win-tools { display: none; }

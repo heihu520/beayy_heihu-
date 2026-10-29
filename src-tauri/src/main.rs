@@ -254,6 +254,20 @@ fn main() {
     if let Some(code) = sync::cli(&args) {
         std::process::exit(code);
     }
+    if args.get(1).map(|a| a == "--daily").unwrap_or(false) && args.get(2).map(|a| a == "catch-up").unwrap_or(false) {
+        // 调试用：跑一遍定时的补写（最近 7 天的日总结、最近两周的周总结），直到没有要写的
+        daily::catch_up_all();
+        return;
+    }
+    if args.get(1).map(|a| a == "--weekly").unwrap_or(false) {
+        // 调试用：写某天所在那周的周总结（默认上周）并打印
+        let d = args.get(2).and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or_else(|| chrono::Local::now().date_naive() - chrono::Duration::days(7));
+        match daily::generate_week(daily::monday_of(d)) {
+            Ok(md) => println!("{md}"),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
+    }
     if args.get(1).map(|a| a == "--daily").unwrap_or(false) {
         // 调试用：写某天的日总结（默认今天）并打印
         let d = args.get(2).and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).unwrap_or_else(|| chrono::Local::now().date_naive());
@@ -366,7 +380,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, phone_read_now, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, data::test_model,
+            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, daily::daily_status, daily::get_week, daily::generate_weekly, data::test_model,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,
@@ -494,12 +508,11 @@ fn main() {
                     waited += Duration::from_secs(1);
                 }
             });
-            // 后台：手表对话、iPhone 停留点每 2 分钟一轮（账号同步的新链路，加上过渡期的旧录音服务器；没登录、没设置就什么都不做）
+            // 后台：手表对话、iPhone 停留点每 2 分钟一轮（走账号同步；没登录就什么都不做）。旧录音服务器（v1）10-29 下掉，不再拉
             let st = state.clone();
             let relay_root = data_root();
             std::thread::spawn(move || {
-                let mut last_err = String::new();
-                // 走账号同步的录音和停留点（新）：自己一个写入器，和旧的拉取在同一个线程里先后跑，不会同时写同一台设备
+                // 走账号同步的录音和停留点：自己一个写入器
                 let mut cloud = Relay::default();
                 loop {
                     match beayy_remote::cloud::round(&mut cloud, &relay_root, Duration::from_secs(8 * 60)) {
@@ -510,21 +523,6 @@ fn main() {
                             *st.cloud.lock().unwrap() = n.summary();
                         }
                         Err(e) => *st.cloud.lock().unwrap() = e,
-                    }
-                    let r = st.relay.lock().unwrap().pull(&relay_root);
-                    match r {
-                        Ok(n) => {
-                            last_err.clear();
-                            if n.added > 0 {
-                                st.log.write("relay.sync", fields! {"added" => n.added, "days" => n.days}, None);
-                            }
-                        }
-                        // 同一个错误只记一次
-                        Err(e) if e != last_err => {
-                            st.log.write("relay.error", fields! {"error" => e.clone()}, None);
-                            last_err = e;
-                        }
-                        Err(_) => {}
                     }
                     std::thread::sleep(RELAY_EVERY);
                 }

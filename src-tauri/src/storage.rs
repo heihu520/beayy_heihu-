@@ -1,4 +1,4 @@
-//! 设置「数据」页：数据存在哪三个地方（本机、Cloudflare 同步服务、转写服务），各存了什么、多大、留多久。
+//! 设置「数据」页：数据存在哪三个地方（本机、同步服务、转写服务），各存了什么、多大、留多久。
 //! 方案见 报告/方案_20261021_录音与存储.md。网页开着这一页时每分钟取一次。
 
 use beayy_core::{data_root, default_root};
@@ -40,10 +40,10 @@ fn local(root: &Path) -> Value {
     })
 }
 
-/// Cloudflare 同步服务：按种类合计
+/// 同步服务（官方的在 hk2，2026-10-29 从 Cloudflare 搬过去）：按种类合计
 fn cloud(root: &Path) -> Value {
     if beayy_sync::load(root).is_none() {
-        return json!({"error": "没登录账号，没有存到 Cloudflare"});
+        return json!({"error": "没登录账号，没有存到同步服务"});
     }
     let u = match beayy_sync::usage(root) {
         Ok(u) => u,

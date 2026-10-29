@@ -56,6 +56,11 @@ async function call(cmd, args = {}) {
       return s;
     }
     case "get_day": return (await loadMock("get_day"))[args.date] || null;
+    case "daily_status": return null;
+    case "get_week": {
+      const m = addDays(args.date, -((toDate(args.date).getDay() + 6) % 7));
+      return { monday: m, sunday: addDays(m, 6), summary_md: null, error: null, days: Array.from({ length: 7 }, (_, k) => ({ date: addDays(m, k), line: null })) };
+    }
     default: return loadMock(cmd);
   }
 }
@@ -1223,7 +1228,17 @@ async function loadIcons() {
 
 const SUM = { err: null };
 
-async function renderSummary(arg) {
+/** 日／周／月 页签（月后续做；周总结电脑上写，手机上还没有） */
+const summaryTabs = (on, date) => `<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="${on === "day"}" class="${on === "day" ? "is-on" : ""}" data-tab="day">日</button>
+  <button role="tab" aria-selected="${on === "week"}" class="${on === "week" ? "is-on" : ""}" data-tab="week" ${S.status && S.status.mobile ? "disabled" : ""}>周</button>
+  <button role="tab" aria-selected="false" disabled title="后续做">月</button></div>`;
+function bindTabs(date) {
+  for (const b of document.querySelectorAll("[data-tab]")) b.onclick = () => { location.hash = b.dataset.tab === "week" ? `#/summary/week/${date}` : `#/summary/${date}`; };
+}
+
+async function renderSummary(arg, arg2) {
+  if (arg === "week") return renderWeek(arg2);
   const dates = S.days.map((x) => x.date);
   const date = dates.includes(arg) ? arg : dates[0];
   if (!date) { $app.innerHTML = header("总结") + emptyInline("还没有日数据。"); return; }
@@ -1247,6 +1262,9 @@ async function renderSummary(arg) {
   const night = Math.round((lateC + lateP + dawnP + dawnC) / 60);
   const hasNight = c.late_sec != null || (d && d.live) || ph || pp.late_sec != null;
   const sum = d && d.summary_md ? splitSummary(d.summary_md) : null;
+  // 没写成的原因（模型出错、这一天没记录）：自动重试前先让人看到
+  const failed = sum || !TAURI ? null : await call("daily_status", { date }).catch(() => null);
+  const isToday = date === localDay();
 
   const right = `<button class="mx-iconbtn" id="prev" aria-label="前一天" title="前一天" ${prev ? "" : "disabled"}>${ICON.chevL}</button>
     <button class="mx-iconbtn" id="next" aria-label="后一天" title="后一天" ${next ? "" : "disabled"}>${ICON.chevR}</button>
@@ -1262,8 +1280,8 @@ async function renderSummary(arg) {
   const after = byDate[nd];
   if (after) rows[rows.length - 1].next = { hc: hourMinutes(after.hc), hp: hourMinutes(after.hp) };
 
-  // 布局照 Claude「自定义」页：标题单独一行；下面一行左边 日／周／月 页签（周、月后续做），右边翻日期
-  const kinds = `<div class="tabs" role="tablist"><button role="tab" aria-selected="true" class="is-on">日</button><button role="tab" aria-selected="false" disabled title="后续做">周</button><button role="tab" aria-selected="false" disabled title="后续做">月</button></div>`;
+  // 布局照 Claude「自定义」页：标题单独一行；下面一行左边 日／周／月 页签（月后续做），右边翻日期
+  const kinds = summaryTabs("day", date);
   $app.innerHTML = header("总结") + `<div class="toolbar">${kinds}<div class="toolbar-right">${right}</div></div>` + `<div class="reading">
     <div class="readouts">
       ${readout("在电脑前", hh(c.active_sec ?? idx.active_sec), "h", c.first ? `${c.first}–${c.last}` : "取不到")}
@@ -1274,8 +1292,8 @@ async function renderSummary(arg) {
     ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
     <div style="margin-top:var(--space-6)">
       ${sum ? sum.parts.map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
-            : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">还没有日总结，21:30 自动生成</p>
-                <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err ? `<div class="mx-field-error">${esc(SUM.err)}</div>` : ""}</div>`)}
+            : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">${isToday ? "还没有日总结，21:30 自动生成" : failed ? "日总结没写成，稍后自动重试" : "还没有日总结，稍后自动补上"}</p>
+                <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err || (failed && failed.error) ? `<div class="mx-field-error">${esc(SUM.err || failed.error)}</div>` : ""}</div>`)}
       ${section("最近 14 天", actogram(rows, date))}
     </div></div>`;
 
@@ -1285,12 +1303,45 @@ async function renderSummary(arg) {
     try { await call("generate_daily", { date }); } catch (x) { SUM.err = String(x); }
     renderSummary(date);
   };
+  bindTabs(date);
   const go = (x) => { if (x) location.hash = `#/summary/${x}`; };
   document.getElementById("prev").onclick = () => go(prev);
   document.getElementById("next").onclick = () => go(next);
   const pick = document.getElementById("pick"), menu = document.getElementById("pick-menu");
   pick.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; pick.setAttribute("aria-expanded", String(!menu.hidden)); };
   menu.onclick = (e) => { const b = e.target.closest("button"); if (b) go(b.dataset.date); };
+}
+
+async function renderWeek(arg) {
+  markNav("summary");
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(arg || "") ? arg : (S.days[0] && S.days[0].date) || localDay();
+  const w = await call("get_week", { date });
+  const prev = addDays(w.monday, -7), next = addDays(w.monday, 7);
+  const done = w.sunday < localDay();
+  const sum = w.summary_md ? splitSummary(w.summary_md) : null;
+  const right = `<button class="mx-iconbtn" id="prev" aria-label="前一周" title="前一周">${ICON.chevL}</button>
+    <button class="mx-iconbtn" id="next" aria-label="后一周" title="后一周" ${next > localDay() ? "disabled" : ""}>${ICON.chevR}</button>
+    <span class="mono week-range">${w.monday.slice(5)} – ${w.sunday.slice(5)}</span>`;
+  const days = `<div class="week-days">${w.days.map((x) => `<a href="#/summary/${x.date}"><span class="mono">${short(x.date)}</span><span class="${x.line ? "" : "muted"}">${esc(x.line || "没有日总结")}</span></a>`).join("")}</div>`;
+  const err = SUM.err || w.error;
+  $app.innerHTML = header("总结") + `<div class="toolbar">${summaryTabs("week", date)}<div class="toolbar-right">${right}</div></div><div class="reading">
+    ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
+    <div style="margin-top:var(--space-6)">
+      ${sum ? sum.parts.map((p) => section(p.title, p.title === "这周的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
+            : section("这一周", `<div class="gen-empty"><p class="mx-empty-inline">${done ? "还没有周总结，稍后自动补上" : "这周还没过完，过完自动生成"}</p>
+                <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-weekly">现在生成</button>${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`)}
+      ${section("每天", days)}
+    </div></div>`;
+  SUM.err = null;
+  bindTabs(date);
+  const gen = document.getElementById("gen-weekly");
+  if (gen) gen.onclick = async () => {
+    gen.disabled = true; gen.textContent = "生成中…";
+    try { await call("generate_weekly", { date }); } catch (x) { SUM.err = String(x); }
+    renderWeek(date);
+  };
+  document.getElementById("prev").onclick = () => { location.hash = `#/summary/week/${prev}`; };
+  document.getElementById("next").onclick = () => { if (next <= localDay()) location.hash = `#/summary/week/${next}`; };
 }
 
 // ---------- 规矩 ----------
@@ -2225,14 +2276,14 @@ function bindPhone() {
   on("ph-up", () => act("upload_now"));
 }
 
-/** 「数据」页：本机、Cloudflare、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */
+/** 「数据」页：本机、同步服务、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */
 function storageView(d) {
   if (d.error) return section("数据", `<div class="mx-field-error">${esc(d.error)}</div>`);
   const table = (rows, cols) => `<table class="mx-table store"><thead><tr>${cols.map((c) => `<th${c[2] ? ' class="num"' : ""}>${c[0]}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td${c[2] ? ' class="num mono"' : ""}>${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   const L = d.local, C = d.cloud, T = d.transcribe;
   const local = section("本机", setRow("数据目录", `<span class="mono">${esc((L.path || "").replace(/^\/Users\/[^/]+/, "~"))}</span> · 共 ${bytesText(L.total)}`, (S.status && S.status.mobile ? "" : smallBtn("open-dir", "在访达中打开")))
     + table(L.items, [["内容", (r) => esc(r.name)], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]), { aside: "全部数据，以这里为准" });
-  const cloud = section("Cloudflare（同步）", C.error ? emptyInline(C.error)
+  const cloud = section("同步服务", C.error ? emptyInline(C.error)
     : `<p class="note" style="margin:0 0 var(--space-3)"><span class="mono">${esc(hostOf(C.server))}</span> · 共 ${bytesText(C.total)}</p>`
       + table(C.items, [["内容", (r) => esc(r.name)], ["块数", (r) => numText(r.count), 1], ["大小", (r) => bytesText(r.bytes), 1], ["留多久", (r) => esc(r.keep)]]));
   const jobs = T.jobs ? Object.entries(T.jobs).map(([k, n]) => `${{ queued: "排队", running: "在转", done: "转好待取", failed: "失败" }[k] || k} ${n}`).join("、") : "";
@@ -2439,7 +2490,7 @@ async function route() {
     if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
     if (!S.settings.onboarded && TAURI && !(S.status && S.status.mobile)) return renderOnboarding();
     if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
-    if (S.page === "summary") await renderSummary(arg);
+    if (S.page === "summary") await renderSummary(arg, arg2);
     else if (S.page === "rules") await renderRules();
     else if (S.page === "devices") { if (arg) await renderDevice(decodeURIComponent(arg), arg2); else { DEV.id = null; stopEventsTimer(); await renderDevices(); } }
     else if (S.page === "settings") await renderSettings();

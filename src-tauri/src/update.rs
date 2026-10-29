@@ -1,5 +1,5 @@
 //! 自动更新：查 sync.beayy.com/update/latest.json，有新版本就在后台下载、校验 sha256，下好后由用户点「重启更新」。
-//! 更新包放在自己的 Cloudflare 上（R2 的 update/ 下，Worker 公开只读），不放 GitHub：国内不翻墙下 GitHub 很慢。
+//! 更新包放在自己的同步服务上（hk2 的 data/sync/update/，公开只读），不放 GitHub：国内不翻墙下 GitHub 很慢。
 //!
 //! latest.json：{"version": "0.2.1", "notes": "…", "mac": {"file": "Beayy-0.2.1.dmg", "sha256": "…"}, "win": {"file": "…zip", "sha256": "…"}}
 //! - macOS：挂载 DMG，校验里面的 Beayy.app 是团队 8R7XUVNM53 的 Developer ID 签名，换掉正在用的 .app，重新打开。

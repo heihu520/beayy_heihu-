@@ -1,5 +1,6 @@
 //! 录音和停留点走账号同步（方案见 报告/方案_20261021_录音与存储.md）：手机把加密的录音（`audio.<段 id>`）、
-//! 每天的停留点（`places.<日>`）传到同步服务；电脑每 2 分钟一轮（列表接口很便宜，停留点早点到）：
+//! 每天的停留点（`places.<日>`）传到同步服务；电脑每 2 分钟一轮（停留点早点到）；
+//! 列表都是增量的（游标存 cloud/state.json 的 cursors），不每轮从头列。
 //! 1. 推 `account/config.json`（转写服务地址、高德 Key）给手机，内容变了才传；
 //! 2. 拉有更新的停留点，写成 `place.visit` 事件；
 //! 3. 别的电脑转好的 `transcript.*` 拉下来；还没转的录音按时间顺序交转写服务，结果写成 `speech.*` 事件、再传 `transcript.<段 id>`；
@@ -19,6 +20,8 @@ use std::time::{Duration, Instant};
 
 /// 转好的录音在同步服务上再留几天
 pub const AUDIO_KEEP_DAYS: i64 = 7;
+/// 没转的录音同步服务最多留几天（worker.js 的 AUDIO_MAX_DAYS）
+const AUDIO_SERVER_DAYS: i64 = 30;
 /// 一段转写最多等多久（排队＋转）
 const JOB_WAIT: Duration = Duration::from_secs(15 * 60);
 /// 同一段转失败几次就不再交（坏文件）
@@ -56,6 +59,26 @@ fn read_state(root: &Path) -> Map<String, Value> {
 fn write_state(root: &Path, st: &Map<String, Value>) {
     let _ = fs::create_dir_all(dir(root));
     let _ = fs::write(dir(root).join("state.json"), serde_json::to_vec_pretty(st).unwrap_or_default());
+}
+
+/// 列表往回让 10 分钟：服务器的 updated 是请求进来时取的，并发上传可能晚一点才落库
+const LIST_OVERLAP: i64 = 10 * 60_000;
+
+/// 按块名前缀增量列：从上次列到的最新 updated 往回让一点开始。同步服务的 D1 按读到的行计费，
+/// 从 0 列等于每 2 分钟把整个账号的块扫一遍（10-23 起每天撞免费额度，所有账号的同步、官方服务跟着停）
+fn list_since(root: &Path, st: &Map<String, Value>, prefix: &str) -> Result<Vec<Value>, String> {
+    let since = st.get("cursors").and_then(|c| c.get(prefix)).and_then(Value::as_i64).unwrap_or(0);
+    beayy_sync::list_named(root, prefix, if since > 0 { (since - LIST_OVERLAP).max(1) } else { 0 })
+}
+
+/// 记下这一轮列到哪了；有没拉成的（miss＝其中最早的 updated），游标停在它前面，下一轮再列到
+fn advance(st: &mut Map<String, Value>, prefix: &str, items: &[Value], miss: Option<i64>) {
+    let Some(top) = items.iter().filter_map(|x| x["updated"].as_i64()).max() else { return };
+    let to = miss.map(|m| m - 1).unwrap_or(top);
+    let c = st.entry("cursors").or_insert_with(|| json!({}));
+    if to > c.get(prefix).and_then(Value::as_i64).unwrap_or(0) {
+        c[prefix] = json!(to);
+    }
 }
 
 fn agent() -> ureq::Agent {
@@ -133,7 +156,9 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
     // 停留点：有更新的那几天整天拉
     let seen_places = st.get("places").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut places = seen_places.clone();
-    for it in beayy_sync::list_named(root, "places.", 0)? {
+    let mut miss = None;
+    let items = list_since(root, &st, "places.")?;
+    for it in &items {
         let (d, n, up) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""), it["updated"].as_i64().unwrap_or(0));
         let k = format!("{d}/{n}");
         if seen_places.get(&k).and_then(Value::as_i64) == Some(up) {
@@ -146,20 +171,24 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
                 places.insert(k, json!(up));
             }
             Ok(None) => {}
-            Err(e) => note.errors.push(format!("拉停留点 {n}：{e}")),
+            Err(e) => {
+                miss = Some(miss.map_or(up, |m: i64| m.min(up)));
+                note.errors.push(format!("拉停留点 {n}：{e}"));
+            }
         }
     }
     st.insert("places".into(), Value::Object(places));
+    advance(&mut st, "places.", &items, miss);
     write_state(root, &st);
 
     // 转写：已有的（别的电脑转的、或这台以前转的）拉下来
     let seen_tr = st.get("transcripts").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut trs = seen_tr.clone();
-    let mut done: HashSet<String> = HashSet::new();
-    for it in beayy_sync::list_named(root, "transcript.", 0)? {
+    let mut miss = None;
+    let items = list_since(root, &st, "transcript.")?;
+    for it in &items {
         let (d, n, up) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""), it["updated"].as_i64().unwrap_or(0));
         let k = format!("{d}/{n}");
-        done.insert(format!("{d}/{}", n.trim_start_matches("transcript.")));
         if seen_tr.get(&k).and_then(Value::as_i64).map(|x| x >= up).unwrap_or(false) {
             continue;
         }
@@ -170,23 +199,41 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
                 trs.insert(k, json!(up));
             }
             Ok(None) => {}
-            Err(e) => note.errors.push(format!("拉转写 {n}：{e}")),
+            Err(e) => {
+                miss = Some(miss.map_or(up, |m: i64| m.min(up)));
+                note.errors.push(format!("拉转写 {n}：{e}"));
+            }
         }
     }
+    // 转过的段：拉到过的转写都算（列表是增量的，只看这一轮会漏）
+    let done: HashSet<String> = trs.keys().map(|k| k.replacen("/transcript.", "/", 1)).collect();
     st.insert("transcripts".into(), Value::Object(trs));
+    advance(&mut st, "transcript.", &items, miss);
     write_state(root, &st);
 
-    // 录音：没转的按时间顺序交（段 id 里是开始时刻），转好超过 7 天的删
-    let audio = beayy_sync::list_named(root, "audio.", 0)?;
+    // 录音：本机记一份服务器上有哪些录音块（增量列来的并进去），没转的按时间顺序交（段 id 里是开始时刻），转好超过 7 天的删
+    let mut audio = st.get("audio").and_then(Value::as_object).cloned().unwrap_or_default();
+    let items = list_since(root, &st, "audio.")?;
+    for it in &items {
+        audio.insert(format!("{}/{}", it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or("")), it["updated"].clone());
+    }
+    advance(&mut st, "audio.", &items, None);
+    // 服务器 30 天兜底删了的，本机这份也不留
+    let gone = Utc::now().timestamp_millis() - (AUDIO_SERVER_DAYS + 1) * 86_400_000;
+    audio.retain(|_, up| up.as_i64().unwrap_or(0) >= gone);
     let mut todo: Vec<(String, String)> = vec![];
     let cutoff = Utc::now().timestamp_millis() - AUDIO_KEEP_DAYS * 86_400_000;
-    for it in &audio {
-        let (d, n, up) = (it["device"].as_str().unwrap_or("").to_string(), it["segment"].as_str().unwrap_or("").to_string(), it["updated"].as_i64().unwrap_or(0));
+    for (k, up) in audio.clone() {
+        let Some((d, n)) = k.split_once('/') else { continue };
+        let (d, up) = (d.to_string(), up.as_i64().unwrap_or(0));
         let seg = n.trim_start_matches("audio.").to_string();
         if done.contains(&format!("{d}/{seg}")) {
             if up < cutoff {
-                match beayy_sync::delete_named(root, &d, &n) {
-                    Ok(()) => note.deleted += 1,
+                match beayy_sync::delete_named(root, &d, n) {
+                    Ok(()) => {
+                        note.deleted += 1;
+                        audio.remove(&k);
+                    }
                     Err(e) => note.errors.push(format!("删录音 {seg}：{e}")),
                 }
             }
@@ -197,6 +244,8 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
             todo.push((d, seg));
         }
     }
+    st.insert("audio".into(), Value::Object(audio));
+    write_state(root, &st);
     todo.sort_by(|a, b| a.1.split('-').next_back().cmp(&b.1.split('-').next_back()).then(a.cmp(b)));
     note.waiting = todo.len();
     if todo.is_empty() {
@@ -221,6 +270,11 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
                 let f = st.entry("failed").or_insert_with(|| json!({}));
                 let n = f.get(format!("{d}/{seg}")).and_then(Value::as_u64).unwrap_or(0) + 1;
                 f[format!("{d}/{seg}")] = json!(n);
+                if e.contains("没有这段录音了") {
+                    if let Some(Value::Object(a)) = st.get_mut("audio") {
+                        a.remove(&format!("{d}/audio.{seg}"));
+                    }
+                }
                 note.errors.push(format!("转写 {seg}：{e}"));
                 write_state(root, &st);
                 // 连不上转写服务就别一段段试了
@@ -369,4 +423,24 @@ pub fn transcribe_usage(root: &Path) -> Result<Value, String> {
         return Err(format!("转写服务返回 {} {}", r.status().as_u16(), v["detail"].as_str().unwrap_or("")));
     }
     Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_stops_before_missed() {
+        let mut st = Map::new();
+        let items = vec![json!({"updated": 100}), json!({"updated": 300}), json!({"updated": 200})];
+        advance(&mut st, "places.", &items, None);
+        assert_eq!(st["cursors"]["places."], json!(300));
+        // 有没拉成的：停在它前面；不往回退
+        advance(&mut st, "places.", &[json!({"updated": 500})], Some(400));
+        assert_eq!(st["cursors"]["places."], json!(399));
+        advance(&mut st, "places.", &[json!({"updated": 600})], Some(50));
+        assert_eq!(st["cursors"]["places."], json!(399));
+        advance(&mut st, "audio.", &[], None);
+        assert!(st["cursors"].get("audio.").is_none());
+    }
 }

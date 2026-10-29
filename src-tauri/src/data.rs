@@ -1016,11 +1016,11 @@ fn pack_of(repo: &Option<PathBuf>, date: &str) -> Option<Value> {
 }
 
 fn summary_of(repo: &Option<PathBuf>, date: &str) -> Option<String> {
-    // 外部目录里有就用它的；没有就用 app 自己写的（Beayy/daily/）
+    // 以 app 自己写的（Beayy/daily/）为准；没有再看外部目录里的（app 以前、外部脚本写的）
     let name = format!("日总结_{}.md", date.replace('-', ""));
-    repo.as_ref()
-        .and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok())
-        .or_else(|| fs::read_to_string(default_root().join("daily").join(&name)).ok())
+    fs::read_to_string(default_root().join("daily").join(&name))
+        .ok()
+        .or_else(|| repo.as_ref().and_then(|r| fs::read_to_string(r.join("日总结").join(&name)).ok()))
 }
 
 fn computer_hours(c: &Value) -> Value {

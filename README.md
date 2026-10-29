@@ -70,7 +70,7 @@ git clone https://github.com/hengfengliya/beayy && cd beayy
 | `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载 |
 | `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日总结 |
 | `ui` | 网页界面：纯 HTML＋CSS＋JS |
-| `sync-server` | 同步服务：Cloudflare Workers＋R2＋D1，只存密文；可以自己部署（见 `sync-server/wrangler.jsonc`） |
+| `sync-server` | 同步服务的 Cloudflare 版：Workers＋R2＋D1，只存密文，可以自己部署（见 `sync-server/wrangler.jsonc`）。官方实例 2026-10 起改用自建服务端（SQLite＋本地文件，接口相同），Docker 版整理好后放进来 |
 
 ## 许可
 

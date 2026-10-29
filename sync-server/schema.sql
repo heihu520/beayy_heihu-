@@ -48,3 +48,4 @@ CREATE TABLE IF NOT EXISTS blobs (
   PRIMARY KEY (user, device, segment)
 );
 CREATE INDEX IF NOT EXISTS blobs_updated ON blobs (user, updated);
+CREATE INDEX IF NOT EXISTS blobs_seg ON blobs (user, segment);   -- v6：按前缀列

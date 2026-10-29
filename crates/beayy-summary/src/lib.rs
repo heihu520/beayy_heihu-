@@ -225,6 +225,25 @@ impl Summarizer {
         self.root.join("summaries")
     }
 
+    fn backoff_path(&self) -> PathBuf {
+        self.root.join("summary_backoff.json")
+    }
+
+    /// 模型连着失败时还要等多久（秒），不用等返回 None
+    fn backoff_wait(&self) -> Option<i64> {
+        let v: Value = fs::read_to_string(self.backoff_path()).ok().and_then(|t| serde_json::from_str(&t).ok())?;
+        let left = v["until"].as_i64()? - Utc::now().timestamp();
+        (left > 0).then_some(left)
+    }
+
+    /// 记一次失败：下一次隔 10、20、40……分钟再试，最多 2 小时（10-28 同步服务出错时，一段一天重试了 98 次）
+    fn backoff_fail(&self) {
+        let v: Value = fs::read_to_string(self.backoff_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+        let fails = v["fails"].as_i64().unwrap_or(0) + 1;
+        let wait = (600 * (1i64 << (fails - 1).min(4))).min(7200);
+        let _ = fs::write(self.backoff_path(), json!({"fails": fails, "until": Utc::now().timestamp() + wait}).to_string());
+    }
+
     /// 各台电脑（Mac、Windows）的分段目录名（已排序、去重）
     pub fn segment_names(&self) -> Vec<String> {
         let mut out = BTreeSet::new();
@@ -921,6 +940,12 @@ impl Summarizer {
     /// 写摘要。`pick` 为空＝本机记过、已结束、还没写过的分段（同步来的别的电脑的分段由那台自己写，免得重复调模型）；
     /// 指定分段名时已写过的也重写。每段一行日志交给 `log`。
     pub fn run(&self, pick: &[String], mut log: impl FnMut(String)) -> usize {
+        if pick.is_empty() {
+            if let Some(left) = self.backoff_wait() {
+                log(format!("模型前几次都失败了，{} 分钟后再试", (left + 59) / 60));
+                return 0;
+            }
+        }
         let names = self.segment_names();
         let now = Utc::now();
         let mine = self.devices().join(beayy_core::local_device()).join("segments");
@@ -953,6 +978,7 @@ impl Summarizer {
             }
             match self.call_model(&pack, &self.prior_summary(&name, &names), &known) {
                 Ok((j, usage)) => {
+                    let _ = fs::remove_file(self.backoff_path());
                     for p in self.existing(&name) {
                         let _ = fs::remove_file(p); // 指定重写时换掉旧的
                     }
@@ -973,8 +999,9 @@ impl Summarizer {
                     }
                 }
                 Err(e) => {
-                    // 和 Python 版一样：模型失败就停，下一轮再补
+                    // 和 Python 版一样：模型失败就停，等一会儿再补
                     log(format!("{name}：{e}"));
+                    self.backoff_fail();
                     break;
                 }
             }
