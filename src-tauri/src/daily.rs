@@ -192,10 +192,13 @@ const PROMPT: &str = "你是用户的日记助手。下面是用户今天的记�
 去了哪、对话也算今天做的事：见了谁、谈了什么、在外面待了多久，有内容就写进去；转写有错字，意思不明的不硬猜、不逐字引用。
 只返回一个 JSON 对象，不要代码块，字段：
   line: 今天的一句话，30 字以内，抓住今天最主要的事和状态
-  remark: 点评，60–100 字，像一位饱读诗书、说话风趣的老友在你日记旁写的批注。先引一句贴切的诗词、古文或名言（只引确实存在、出处确定的，句后括号写出处，如「（《论语》）」），再借这句话点评今天：时间花在哪、去了哪些地方、做成了什么、哪里偏离了。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要在首尾加引号
+  quote: 点评开头引的一句话，来源不限：古今中外的诗词、古文、小说、散文、戏剧、电影台词、名人语录都行，挑最贴今天的，别总在几首名诗里打转；只引确实存在、出处确定的，外文用通行的中文译文；不带引号，不带出处
+  source: 这句话的出处，写成「作者《作品》」「《书名·篇名》」，语录没有作品的只写人名（外国人用通行中文译名），不带括号
+  remark: 点评，60–100 字，像一位博览群书、说话风趣的老友在你日记旁写的批注：借 quote 这句话点评今天，时间花在哪、去了哪些地方、做成了什么、哪里偏离了。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要重复 quote，不要在首尾加引号
   done: 2–5 条字符串，今天做成或推进了什么（写结果，不写过程）
   drift: 0–3 条字符串，偏离：没守住的规矩、熬夜、时间明显被不重要的事占掉；没有就空数组
   tomorrow: 1–3 条字符串，明天最值得做的事，从今天没做完的里挑
+材料最后如果列了「前后几天的点评已经引过」，quote 换一句：别出自同一篇、同一个人，意思也别相近；那几句如果多是中国古诗文，这次换个门类（现当代文学、外国文学、电影、名人语录等）。
 ";
 
 fn dur(sec: f64) -> String {
@@ -351,6 +354,13 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
     if let Some((_, rows)) = &speech {
         user += &format!("\n对话（录音转写，挑说得多的几个小时，每小时截前面一部分；说话人分不准，标【你】的是你说的）：\n{}\n", rows.join("\n"));
     }
+    // 前后 7 天的点评引过的句子：别天天引同一句
+    let used: Vec<String> = (-7..=7i64).filter(|k| *k != 0)
+        .filter_map(|k| fs::read_to_string(path_of(date + Duration::days(k))).ok().and_then(|t| quote_of(&t)))
+        .collect();
+    if !used.is_empty() {
+        user += &format!("\n前后几天的点评已经引过：\n- {}\n", used.join("\n- "));
+    }
     let sm = beayy_summary::Summarizer::new(default_root());
     let j = sm.ask(PROMPT, &user)?;
     let list = |k: &str| -> String {
@@ -366,7 +376,7 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
         stats.join("\n- ")
     );
     // 点评放在一句话后面（总结页排在一句话下面，用引号包住）
-    let remark = j.get("remark").and_then(Value::as_str).unwrap_or("").trim().trim_matches(|c| c == '“' || c == '”' || c == '"').to_string();
+    let remark = remark_of(&j);
     if !remark.is_empty() {
         md = md.replacen("\n## 时间都去哪了\n", &format!("\n## 点评\n\n{remark}\n\n## 时间都去哪了\n"), 1);
     }
@@ -390,12 +400,35 @@ const WEEK_PROMPT: &str = "你是用户的日记助手。下面是用户这一�
 据此写这一周的周总结，全部用中文，用第二人称「你」。line、done、pattern、drift、next 写得具体、平实，不夸、不说教；remark 换一种口吻，见下。只写材料里有的事，不编造，不写材料里没有的数字。
 只返回一个 JSON 对象，不要代码块，字段：
   line: 这一周的一句话，40 字以内，抓住这周最主要的事和状态
-  remark: 这一周的点评，80–120 字，像一位饱读诗书、说话风趣的老友在你周记旁写的批注。先引一句贴切的诗词、古文或名言（只引确实存在、出处确定的，句后括号写出处），再借这句话点评这一周：时间、去处、做成的事和偏离。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要在首尾加引号
+  quote: 点评开头引的一句话，来源不限：古今中外的诗词、古文、小说、散文、戏剧、电影台词、名人语录都行，挑最贴今天的，别总在几首名诗里打转；只引确实存在、出处确定的，外文用通行的中文译文，别和这周日总结里已经引过的重复；不带引号，不带出处
+  source: 这句话的出处，写成「作者《作品》」「《书名·篇名》」，语录没有作品的只写人名（外国人用通行中文译名），不带括号
+  remark: 这一周的点评，80–120 字，像一位博览群书、说话风趣的老友在你周记旁写的批注：借 quote 这句话点评这一周，时间、去处、做成的事和偏离。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要重复 quote，不要在首尾加引号
   done: 3–6 条字符串，这周做成或推进了什么（写结果，不写过程；同一件事跨几天的合成一条）
   pattern: 1–3 条字符串，时间和作息的规律：时间主要花在哪、哪几天偏多偏少、熬夜和手机的情况
   drift: 0–3 条字符串，偏离：反复没守住的规矩、被不重要的事占掉的时间；没有就空数组
   next: 1–3 条字符串，下周最值得做的事，从这周没做完的里挑
 ";
+
+/// 点评：模型分开给原句、出处、正文，这里拼成「原句」（出处）正文，总结页按这个格式把引文单独排一行
+fn remark_of(j: &serde_json::Map<String, Value>) -> String {
+    let get = |k: &str| j.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let quote = get("quote").trim_matches(|c: char| "「」“”\"'『』".contains(c)).trim().to_string();
+    let source = get("source").trim_matches(|c: char| "（）()".contains(c)).trim().to_string();
+    let body = get("remark").trim_matches(|c: char| "“”\"".contains(c)).trim().to_string();
+    match (quote.is_empty(), source.is_empty()) {
+        (false, false) => format!("「{quote}」（{source}）{body}"),
+        (false, true) => format!("「{quote}」{body}"),
+        _ => body,
+    }
+}
+
+/// 日总结里点评引的那句话（「」里的部分）；没有就 None
+fn quote_of(md: &str) -> Option<String> {
+    let mut it = md.lines().skip_while(|l| !l.starts_with("## 点评")).skip(1);
+    let l = it.find(|l| !l.trim().is_empty())?.trim();
+    let rest = l.strip_prefix('「')?;
+    rest.split('」').next().map(|q| q.to_string())
+}
 
 /// 一句话：日总结里「今天的一句话」下面那行
 fn line_of(md: &str) -> Option<String> {
@@ -429,7 +462,7 @@ fn write_week(monday: NaiveDate) -> Result<String, String> {
         if v.is_empty() { "- 没有".into() } else { v.join("\n") }
     };
     let sunday = monday + Duration::days(6);
-    let remark = j.get("remark").and_then(Value::as_str).unwrap_or("").trim().trim_matches(|c| c == '“' || c == '”' || c == '"').to_string();
+    let remark = remark_of(&j);
     let mut md = format!(
         "# {} – {} 周总结\n\n> 由 Beayy 用这一周的 {} 份日总结生成，数据截至 {}。\n\n## 这周的一句话\n\n{}\n\n## 做成了什么\n\n{}\n\n## 时间和作息\n\n{}\n\n## 偏离\n\n{}\n\n## 下周\n\n{}\n",
         monday.format("%m-%d"),
@@ -591,4 +624,18 @@ pub fn start(paused: std::sync::Arc<std::sync::atomic::AtomicBool>) {
             let _ = catch_up(today);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remark_parts() {
+        let j = serde_json::json!({"quote": "“行到水穷处，坐看云起时”", "source": "（王维《终南别业》）", "remark": "你今天……"});
+        let r = remark_of(j.as_object().unwrap());
+        assert_eq!(r, "「行到水穷处，坐看云起时」（王维《终南别业》）你今天……");
+        assert_eq!(quote_of(&format!("## 今天的一句话\n\n一句\n\n## 点评\n\n{r}\n")).as_deref(), Some("行到水穷处，坐看云起时"));
+        assert_eq!(remark_of(serde_json::json!({"remark": "只有正文"}).as_object().unwrap()), "只有正文");
+    }
 }

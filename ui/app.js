@@ -143,7 +143,10 @@ function story(parts) {
 
 /** 点评：开头引的那句（「……」（出处））单独一行、出处小字跟在后面，下面是点评正文（引号留给上面的一句话） */
 function remarkHtml(text) {
-  const m = String(text || "").trim().match(/^[「“"]([^」”"]+)[」”"]\s*[（(]([^）)]+)[）)][，,。\s]*(.*)$/s);
+  // 「原句」（出处）正文，出处可以只是人名；早先写的有的用 “”、少了前引号或没引号，那种出处要带《》才认，免得把普通括号当出处
+  const t = String(text || "").trim();
+  const m = t.match(/^「([^」]{2,80})」\s*[（(]([^）)]{1,30})[）)][，,。\s]*(.*)$/s)
+    || t.match(/^[“"]?([^「」“”"（(]{2,40}?)[」”"]?\s*[（(]([^）)《]{0,12}《[^）)]{1,30})[）)][，,。\s]*(.*)$/s);
   if (!m) return `<blockquote class="remark"><p>${esc(text)}</p></blockquote>`;
   return `<blockquote class="remark"><p class="rm-quote">「${esc(m[1])}」<span class="rm-src">${esc(m[2])}</span></p>${m[3] ? `<p>${esc(m[3])}</p>` : ""}</blockquote>`;
 }
