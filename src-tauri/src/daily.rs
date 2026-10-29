@@ -188,10 +188,11 @@ fn check(rule: &str, date: NaiveDate, day: &Value) -> (String, Option<bool>) {
 }
 
 const PROMPT: &str = "你是用户的日记助手。下面是用户今天的记录：电脑和手机的时长、时间花在哪些领域和项目、每小时在做什么、自己定的规矩今天的对照结果，有的话还有去了哪（手机停留点）和对话（录音转写）。
-据此写今天的日总结，全部用中文，用第二人称「你」，写得具体、平实，不夸、不说教。只写材料里有的事，不编造，不写材料里没有的数字。
+据此写今天的日总结，全部用中文，用第二人称「你」。line、done、drift、tomorrow 写得具体、平实，不夸、不说教；remark 换一种口吻，见下。只写材料里有的事，不编造，不写材料里没有的数字。
 去了哪、对话也算今天做的事：见了谁、谈了什么、在外面待了多久，有内容就写进去；转写有错字，意思不明的不硬猜、不逐字引用。
 只返回一个 JSON 对象，不要代码块，字段：
   line: 今天的一句话，30 字以内，抓住今天最主要的事和状态
+  remark: 点评，60–100 字，像一位饱读诗书、说话风趣的老友在你日记旁写的批注。先引一句贴切的诗词、古文或名言（只引确实存在、出处确定的，句后括号写出处，如「（《论语》）」），再借这句话点评今天：时间花在哪、去了哪些地方、做成了什么、哪里偏离了。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要在首尾加引号
   done: 2–5 条字符串，今天做成或推进了什么（写结果，不写过程）
   drift: 0–3 条字符串，偏离：没守住的规矩、熬夜、时间明显被不重要的事占掉；没有就空数组
   tomorrow: 1–3 条字符串，明天最值得做的事，从今天没做完的里挑
@@ -364,6 +365,11 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
         j.get("line").and_then(Value::as_str).unwrap_or("").trim(),
         stats.join("\n- ")
     );
+    // 点评放在一句话后面（总结页排在一句话下面，用引号包住）
+    let remark = j.get("remark").and_then(Value::as_str).unwrap_or("").trim().trim_matches(|c| c == '“' || c == '”' || c == '"').to_string();
+    if !remark.is_empty() {
+        md = md.replacen("\n## 时间都去哪了\n", &format!("\n## 点评\n\n{remark}\n\n## 时间都去哪了\n"), 1);
+    }
     if !domains.is_empty() {
         md += &format!("\n为了什么：\n\n- {}\n\n在做什么：\n\n- {}\n", domains.join("\n- "), acts.join("\n- "));
     }
@@ -381,9 +387,10 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
 // ---------- 周总结：用那一周的日总结写 ----------
 
 const WEEK_PROMPT: &str = "你是用户的日记助手。下面是用户这一周每天的日总结（有的天可能没有）。
-据此写这一周的周总结，全部用中文，用第二人称「你」，写得具体、平实，不夸、不说教。只写材料里有的事，不编造，不写材料里没有的数字。
+据此写这一周的周总结，全部用中文，用第二人称「你」。line、done、pattern、drift、next 写得具体、平实，不夸、不说教；remark 换一种口吻，见下。只写材料里有的事，不编造，不写材料里没有的数字。
 只返回一个 JSON 对象，不要代码块，字段：
   line: 这一周的一句话，40 字以内，抓住这周最主要的事和状态
+  remark: 这一周的点评，80–120 字，像一位饱读诗书、说话风趣的老友在你周记旁写的批注。先引一句贴切的诗词、古文或名言（只引确实存在、出处确定的，句后括号写出处），再借这句话点评这一周：时间、去处、做成的事和偏离。用比喻、对仗、反差制造趣味，要有文学色彩，不要写成流水账；只写材料里有的事，不编造、不说教、不刻薄、不吹捧；不要在首尾加引号
   done: 3–6 条字符串，这周做成或推进了什么（写结果，不写过程；同一件事跨几天的合成一条）
   pattern: 1–3 条字符串，时间和作息的规律：时间主要花在哪、哪几天偏多偏少、熬夜和手机的情况
   drift: 0–3 条字符串，偏离：反复没守住的规矩、被不重要的事占掉的时间；没有就空数组
@@ -422,7 +429,8 @@ fn write_week(monday: NaiveDate) -> Result<String, String> {
         if v.is_empty() { "- 没有".into() } else { v.join("\n") }
     };
     let sunday = monday + Duration::days(6);
-    let md = format!(
+    let remark = j.get("remark").and_then(Value::as_str).unwrap_or("").trim().trim_matches(|c| c == '“' || c == '”' || c == '"').to_string();
+    let mut md = format!(
         "# {} – {} 周总结\n\n> 由 Beayy 用这一周的 {} 份日总结生成，数据截至 {}。\n\n## 这周的一句话\n\n{}\n\n## 做成了什么\n\n{}\n\n## 时间和作息\n\n{}\n\n## 偏离\n\n{}\n\n## 下周\n\n{}\n",
         monday.format("%m-%d"),
         sunday.format("%m-%d"),
@@ -434,6 +442,9 @@ fn write_week(monday: NaiveDate) -> Result<String, String> {
         list("drift"),
         list("next")
     );
+    if !remark.is_empty() {
+        md = md.replacen("\n## 做成了什么\n", &format!("\n## 点评\n\n{remark}\n\n## 做成了什么\n"), 1);
+    }
     let p = week_path(monday);
     fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
     fs::write(&p, &md).map_err(|e| e.to_string())?;

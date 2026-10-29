@@ -10,14 +10,17 @@
   --rec-watch: #26a269; --rec-place: #dededb; --rec-place-alt: #cbcac6;
   --rec-go: #cbcac6;
   --pl-1: #dcd5f6; --pl-2: #f4d5de; --pl-3: #cfe8ea; --pl-4: #f3d9cc; --pl-5: #e7ddd2; --pl-6: #e2e8c8;
+  --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23f2c744' fill-opacity='0.7' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E");
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
-    --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c; }
+    --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c;
+    --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23a8842a' fill-opacity='0.55' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E"); }
 }
 :root[data-theme="dark"] { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
-  --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c; }
+  --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c;
+  --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23a8842a' fill-opacity='0.55' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E"); }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
 html, body { height: 100%; }
@@ -85,20 +88,11 @@ body { padding: 0; overflow: hidden; }
 .rd-d { font-size: 11px; line-height: 16px; color: var(--ink-4); text-align: center; font-variant-numeric: tabular-nums; }
 .rd-col.is-cur .rd-d { color: var(--ink); font-weight: 600; }
 .rd-col.none .rd-d { opacity: 0.5; }
-.strip-axis, .acto-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
+.strip-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
 /* 一天的形状的钟点：每 3 小时一个，写成 03:00，左对齐那个小时格的左边（不画刻度线） */
 .strip-axis { margin-top: var(--space-1); font-size: 12px; color: var(--ink-3); }
 .strip-axis span.t { white-space: nowrap; }
 .strip-axis span.t small { font-size: inherit; }
-.acto { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; row-gap: 6px; align-items: center; }
-.acto-axis { display: grid; grid-template-columns: 76px repeat(24, minmax(0, 1fr)) 48px; column-gap: 2px; }
-.acto .d { font: 12px/16px var(--font-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; text-decoration: none; white-space: nowrap; }
-.acto a.d:hover { color: var(--accent-ink); }
-.acto .d.cur { color: var(--ink); font-weight: 600; }
-.acto .late { font: 12px/16px var(--font-mono); color: var(--rec-night); text-align: right; font-variant-numeric: tabular-nums; }
-.cell { display: flex; flex-direction: column; gap: 2px; border-bottom: 2px solid transparent; padding-bottom: 1px; }
-.cell span { display: block; height: 9px; border-radius: 2px; background: var(--rec-track); }
-.cell.n { border-bottom-color: var(--rec-night); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); font-size: 13px; line-height: 20px; color: var(--ink-3); }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: var(--space-1); vertical-align: -1px; }
 
@@ -215,14 +209,38 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 @media (prefers-reduced-motion: reduce) { .tl-row .chev { transition: none; } .tl-row.flash { animation: none; } }
 
 /* ---------- Markdown（日总结、经过） ---------- */
-.md { font-size: 14px; line-height: 22px; max-width: 72em; }
+.md { font-size: 14px; line-height: 24px; max-width: 42em; }
 .md p { margin: 0 0 var(--space-2); }
 .md h5 { margin: var(--space-3) 0 var(--space-1); font-size: 13px; line-height: 17px; font-weight: 600; color: var(--ink-3); }
 .md h5:first-child { margin-top: 0; }
 .md ol, .md ul { margin: 0 0 var(--space-2); padding-left: 1.4em; }
-.md li { margin: 2px 0; }
+.md li { margin: 0 0 var(--space-1); }
 .md code { font: 13px var(--font-mono); background: var(--hover); padding: 1px 4px; border-radius: 4px; }
 .quote { margin: 0; font-size: 18px; line-height: 30px; max-width: 36em; }
+/* 总结页的导语（一句话）：“” 包住，大字加粗、不配图标；生成时间等说明在悬停里 */
+.lead { margin: var(--space-6) 0 0; max-width: 42em; font-size: 17px; line-height: 26px; font-weight: 600; }
+/* 一句话下半截压一道蜡笔横线：颗粒、毛边，字照样看得清；折行时每行各画一道 */
+.lead .crayon { padding: 0 0.2em; margin: 0 -0.2em; background: var(--crayon) no-repeat 0 0 / 100% 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* 点评：一句话（引号包住）下面，宋体，读起来像一段批注：引用一行、出处小字，下面正文 */
+.remark { margin: var(--space-4) 0 0; max-width: 42em; font: 15px/28px var(--font-serif); color: var(--ink-2); }
+.remark p { margin: 0; }
+.remark .rm-quote { color: var(--ink); font-size: 16px; }
+.remark .rm-src { margin-left: var(--space-2); font: 12px/20px var(--font-sans); color: var(--ink-4); }
+.remark .rm-quote + p { margin-top: var(--space-1); }
+/* 总结的叙述段：段名在上、条目在下，段与段之间只靠留白；段名宋体（字距略开）、几项灰色小字跟在后面，
+   条目正文略浅、行距宽，每条前挂一道细短横 */
+.story { margin-top: var(--space-6); }
+.story > .lg-row + .lg-row { margin-top: var(--space-6); }
+.secs-plain > .story + .mx-sec { margin-top: var(--space-7); }
+.lg-k { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-2); }
+.lg-k h3 { margin: 0; font: 400 17px/26px var(--font-serif); letter-spacing: 0.04em; color: var(--ink); }
+.lg-k span { font-size: 12px; line-height: 18px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
+.lg-list { list-style: none; margin: 0; padding: 0; max-width: 42em; font-size: 14px; line-height: 26px; color: var(--ink-2); }
+.lg-list li { position: relative; padding-left: 18px; }
+.lg-list li::before { content: ""; position: absolute; left: 0; top: 13px; width: 8px; height: 1px; background: var(--ink-4); }
+.lg-list li + li { margin-top: var(--space-1); }
+.lg-row > .md { max-width: 42em; color: var(--ink-2); }
+.daynav > span.dn-date { display: inline-flex; align-items: center; }
 
 /* ---------- 下拉：看哪一份 ---------- */
 .pick { position: relative; }
@@ -374,7 +392,6 @@ a.mx-btn { text-decoration: none; }
 .ac-msg { margin: var(--space-3) 0 0; }
 .mx-setting > .profile { flex: 1; min-width: 0; }
 .gen-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
-.week-range { font-size: 13px; color: var(--ink-2); padding: 0 var(--space-2); }
 .week-days { display: flex; flex-direction: column; }
 .week-days a { display: grid; grid-template-columns: 7.5em 1fr; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 14px; line-height: 20px; }
 .week-days a:hover { background: var(--hover); }

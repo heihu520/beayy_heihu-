@@ -111,8 +111,9 @@ const ICON = {
 };
 
 // 极简 Markdown：小标题、列表、段落，行内粗体和代码。先转义再加标记。
+const mdInline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
 function md(text) {
-  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const inline = mdInline;
   const out = []; let list = null;
   const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
   for (const raw of String(text || "").split("\n")) {
@@ -127,6 +128,24 @@ function md(text) {
   }
   close();
   return `<div class="md">${out.join("")}</div>`;
+}
+
+/** 总结的叙述段（日总结、周总结共用）：账本式排版，和上面的一句话、点评同一个路子——
+ *  左边一窄列写段名（宋体）和几项（灰色小字），右边是条目，段与段之间一条细线；不用底色、图标。窄屏段名在上 */
+function story(parts) {
+  const row = (p) => {
+    const items = p.body.split("\n").map((l) => l.trim().match(/^[-*]\s+(.*)/)).filter(Boolean).map((m) => m[1]);
+    const body = items.length ? `<ul class="lg-list">${items.map((t) => `<li>${mdInline(t)}</li>`).join("")}</ul>` : md(p.body);
+    return `<section class="lg-row"><div class="lg-k"><h3>${esc(p.title)}</h3>${items.length ? `<span>${items.length} 项</span>` : ""}</div>${body}</section>`;
+  };
+  return `<div class="story">${parts.map(row).join("")}</div>`;
+}
+
+/** 点评：开头引的那句（「……」（出处））单独一行、出处小字跟在后面，下面是点评正文（引号留给上面的一句话） */
+function remarkHtml(text) {
+  const m = String(text || "").trim().match(/^[「“"]([^」”"]+)[」”"]\s*[（(]([^）)]+)[）)][，,。\s]*(.*)$/s);
+  if (!m) return `<blockquote class="remark"><p>${esc(text)}</p></blockquote>`;
+  return `<blockquote class="remark"><p class="rm-quote">「${esc(m[1])}」<span class="rm-src">${esc(m[2])}</span></p>${m[3] ? `<p>${esc(m[3])}</p>` : ""}</blockquote>`;
 }
 
 /** 按 ## 切日总结：开头的引用块是口径说明 */
@@ -252,10 +271,9 @@ const dlgField = (id, label, { type = "text", ph = "", value = "", mono = false,
   `<div class="mx-field"><label for="${id}">${label}</label><input class="mx-input${mono ? " mono" : ""}" id="${id}" type="${type}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(value)}">${help ? `<p class="note">${help}</p>` : ""}</div>`;
 const dlgVal = (el, id) => { const x = el.querySelector("#" + id); return x ? x.value.trim() : ""; };
 
-// ---------- 人生记录：读数、一天的形状、作息图 ----------
+// ---------- 人生记录：读数、一天的形状 ----------
 
 const shade = (min, v) => (min ? `background:color-mix(in srgb, var(${v}) ${Math.round(30 + (Math.min(min, 60) / 60) * 70)}%, var(--rec-track))` : "");
-const isNight = (h) => h >= 21 || h < 5;
 
 /** 读数：两行，标签和数值（单位跟在后面）。caption（时段、同步时刻这类补充）和 tip 都放悬停里，不占第三行
  *  （三行太累赘；墨线：读数不配解释文字，要解释放悬停） */
@@ -619,25 +637,6 @@ function placeDialog(v) {
     },
     submit: async (el) => { await call("set_place_label", { lat: v.lat, lon: v.lon, label: dlgVal(el, "pl-name"), kind }); renderToday(); },
   });
-}
-
-function actogram(rows, cur) {
-  let html = "";
-  for (const [k, x] of rows.entries()) {
-    // 行末：这一晚的分钟数＝当天 21 点以后＋次日 0–5 点（次日没有数据就只算当天）
-    const nx = rows[k + 1] || x.next;
-    let late = nx ? [0, 1, 2, 3, 4].reduce((a, h) => a + Math.max(nx.hc[h], nx.hp[h]), 0) : 0;
-    html += x.has ? `<a class="d${x.date === cur ? " cur" : ""}" href="#/summary/${x.date}">${short(x.date)}</a>` : `<span class="d">${short(x.date)}</span>`;
-    for (let h = 0; h < 24; h++) {
-      const c = x.hc[h], p = x.hp[h];
-      if (h >= 21) late += Math.max(c, p);
-      html += `<div class="cell${isNight(h) && (c || p) ? " n" : ""}" title="${short(x.date)} ${h}:00 电脑 ${c} 分钟 · 手机 ${p} 分钟"><span style="${shade(c, "--rec-computer")}"></span><span style="${shade(p, "--rec-phone")}"></span></div>`;
-    }
-    html += `<span class="late">${late > 10 ? late + "m" : ""}</span>`;
-  }
-  const axis = Array.from({ length: 8 }, (_, i) => `<span style="grid-column:${2 + i * 3}">${i * 3}</span>`).join("");
-  return `<div role="img" aria-label="最近 ${rows.length} 天作息图"><div class="acto">${html}</div><div class="acto-axis" aria-hidden="true">${axis}</div></div>
-    <div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span><span><i style="background:var(--rec-night)"></i>熬夜分钟（21:00–5:00）</span></div>`;
 }
 
 // ---------- 状态 ----------
@@ -1281,7 +1280,6 @@ async function renderSummary(arg, arg2) {
   if (!date) { $app.innerHTML = header("总结") + emptyInline("还没有日数据。"); return; }
   markNav("summary");
   const i = dates.indexOf(date);
-  const prev = dates[i + 1], next = dates[i - 1];
   const d = await call("get_day", { date });
   const idx = S.days[i];
   const pack = (d && d.pack) || {}, ph = (d && d.phone) || null;
@@ -1303,19 +1301,15 @@ async function renderSummary(arg, arg2) {
   const failed = sum || !TAURI ? null : await call("daily_status", { date }).catch(() => null);
   const isToday = date === localDay();
 
-  const right = `<button class="mx-iconbtn" id="prev" aria-label="前一天" title="前一天" ${prev ? "" : "disabled"}>${ICON.chevL}</button>
-    <button class="mx-iconbtn" id="next" aria-label="后一天" title="后一天" ${next ? "" : "disabled"}>${ICON.chevR}</button>
-    <div class="pick"><button class="mx-btn mx-btn--secondary mx-num" id="pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
-      <div class="mx-menu" role="menu" id="pick-menu" hidden>${dates.map((x) => `<button role="menuitemradio" aria-checked="${x === date}" data-date="${x}">${short(x)}${x === date ? `<span class="mx-check">${ICON.check}</span>` : ""}</button>`).join("")}</div></div>`;
-
-  // 最近 14 天：截至这一天
-  const byDate = Object.fromEntries(S.days.map((x) => [x.date, x]));
-  const rows = Array.from({ length: 14 }, (_, k) => {
-    const ymd = addDays(date, k - 13), x = byDate[ymd];
-    return { date: ymd, has: !!x, hc: hourMinutes(x && x.hc), hp: hourMinutes(x && x.hp) };
-  });
-  const after = byDate[nd];
-  if (after) rows[rows.length - 1].next = { hc: hourMinutes(after.hc), hp: hourMinutes(after.hp) };
+  // 翻日期和今天页同一个组件（‹ 日期 ▾ ›，以前的日子左边多一个「今天」）
+  const right = dayPicker(date, !isToday);
+  // 正文：模型写的一句话作导语，下面是 做成了什么、偏离、明天；日总结里写死的「时间都去哪了」不显示，
+  // 换成和今天页一样的「地点」「时间」（实时算，类型名跟着现在的分类）
+  const visits = (d && d.places && d.places.visits) || [];
+  const parts = sum ? sum.parts.filter((p) => p.title !== "时间都去哪了") : [];
+  const one = parts.find((p) => p.title === "今天的一句话");
+  const remark = parts.find((p) => p.title === "点评");
+  const storyParts = parts.filter((p) => p !== one && p !== remark && p.body);
 
   // 布局照 Claude「自定义」页：标题单独一行；下面一行左边 日／周／月 页签（月后续做），右边翻日期
   const kinds = summaryTabs("day", date);
@@ -1326,12 +1320,14 @@ async function renderSummary(arg, arg2) {
       ${readout("拿起", ph ? ph.pickups : pp.pickups ?? "—", "次", "", false, "按前台空档推算")}
       ${readout("熬夜", hasNight ? night : "—", "分钟", "21:00–5:00", night > 10)}
     </div>
-    ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
-    <div style="margin-top:var(--space-6)">
-      ${sum ? sum.parts.map((p) => section(p.title, p.title === "今天的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
+    ${one ? `<p class="lead"${sum.note ? ` title="${esc(sum.note)}"` : ""}><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : ""}
+    ${remark && remark.body ? remarkHtml(remark.body) : ""}
+    <div class="secs-plain" style="margin-top:var(--space-6)">
+      ${sum ? story(storyParts)
             : section("这一天", `<div class="gen-empty"><p class="mx-empty-inline">${isToday ? "还没有日总结，21:30 自动生成" : failed ? "日总结没写成，稍后自动重试" : "还没有日总结，稍后自动补上"}</p>
                 <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-daily">现在生成</button>${SUM.err || (failed && failed.error) ? `<div class="mx-field-error">${esc(SUM.err || failed.error)}</div>` : ""}</div>`)}
-      ${section("最近 14 天", actogram(rows, date))}
+      ${placeTotals(visits, date)}
+      ${workSection(d && d.work)}
     </div></div>`;
 
   const gen = document.getElementById("gen-daily");
@@ -1341,12 +1337,8 @@ async function renderSummary(arg, arg2) {
     renderSummary(date);
   };
   bindTabs(date);
-  const go = (x) => { if (x) location.hash = `#/summary/${x}`; };
-  document.getElementById("prev").onclick = () => go(prev);
-  document.getElementById("next").onclick = () => go(next);
-  const pick = document.getElementById("pick"), menu = document.getElementById("pick-menu");
-  pick.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; pick.setAttribute("aria-expanded", String(!menu.hidden)); };
-  menu.onclick = (e) => { const b = e.target.closest("button"); if (b) go(b.dataset.date); };
+  bindPick(document.getElementById("day-pick"));
+  $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => { location.hash = `#/summary/${b.dataset.day}`; }));
 }
 
 async function renderWeek(arg) {
@@ -1356,15 +1348,19 @@ async function renderWeek(arg) {
   const prev = addDays(w.monday, -7), next = addDays(w.monday, 7);
   const done = w.sunday < localDay();
   const sum = w.summary_md ? splitSummary(w.summary_md) : null;
-  const right = `<button class="mx-iconbtn" id="prev" aria-label="前一周" title="前一周">${ICON.chevL}</button>
-    <button class="mx-iconbtn" id="next" aria-label="后一周" title="后一周" ${next > localDay() ? "disabled" : ""}>${ICON.chevR}</button>
-    <span class="mono week-range">${w.monday.slice(5)} – ${w.sunday.slice(5)}</span>`;
+  // 翻周和今天页的翻日期同一个样子：‹ 起止 ›，不是这一周时左边多一个「本周」
+  const thisWeek = w.monday <= localDay() && localDay() <= w.sunday;
+  const right = `${thisWeek ? "" : `<button class="mx-btn mx-btn--secondary dn-today" data-week="${localDay()}">本周</button>`}
+    <div class="daynav"><button class="dn-step" aria-label="前一周" title="前一周" data-week="${prev}">${ICON.chevL}</button>
+      <span class="dn-date mono">${w.monday.slice(5)}–${w.sunday.slice(5)}</span>
+      <button class="dn-step" aria-label="后一周" title="后一周" ${next > localDay() ? "disabled" : `data-week="${next}"`}>${ICON.chevR}</button></div>`;
   const days = `<div class="week-days">${w.days.map((x) => `<a href="#/summary/${x.date}"><span class="mono">${short(x.date)}</span><span class="${x.line ? "" : "muted"}">${esc(x.line || "没有日总结")}</span></a>`).join("")}</div>`;
   const err = SUM.err || w.error;
   $app.innerHTML = header("总结") + `<div class="toolbar">${summaryTabs("week", date)}<div class="toolbar-right">${right}</div></div><div class="reading">
-    ${sum && sum.note ? `<p class="note" style="margin:var(--space-3) 0 0">${esc(sum.note)}</p>` : ""}
-    <div style="margin-top:var(--space-6)">
-      ${sum ? sum.parts.map((p) => section(p.title, p.title === "这周的一句话" ? `<p class="quote">${esc(p.body)}</p>` : md(p.body))).join("")
+    ${sum ? (() => { const one = sum.parts.find((p) => p.title === "这周的一句话"), rm = sum.parts.find((p) => p.title === "点评");
+      return (one ? `<p class="lead"${sum.note ? ` title="${esc(sum.note)}"` : ""}><span class="crayon">“${esc(one.body.replace(/^[“"]|[”"]$/g, ""))}”</span></p>` : "") + (rm && rm.body ? remarkHtml(rm.body) : ""); })() : ""}
+    <div class="secs-plain" style="margin-top:var(--space-6)">
+      ${sum ? story(sum.parts.filter((p) => p.title !== "这周的一句话" && p.title !== "点评" && p.body))
             : section("这一周", `<div class="gen-empty"><p class="mx-empty-inline">${done ? "还没有周总结，稍后自动补上" : "这周还没过完，过完自动生成"}</p>
                 <button class="mx-btn mx-btn--primary mx-btn--sm" id="gen-weekly">现在生成</button>${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`)}
       ${section("每天", days)}
@@ -1377,8 +1373,7 @@ async function renderWeek(arg) {
     try { await call("generate_weekly", { date }); } catch (x) { SUM.err = String(x); }
     renderWeek(date);
   };
-  document.getElementById("prev").onclick = () => { location.hash = `#/summary/week/${prev}`; };
-  document.getElementById("next").onclick = () => { if (next <= localDay()) location.hash = `#/summary/week/${next}`; };
+  $app.querySelectorAll("[data-week]").forEach((b) => (b.onclick = () => { location.hash = `#/summary/week/${b.dataset.week}`; }));
 }
 
 // ---------- 规矩 ----------
