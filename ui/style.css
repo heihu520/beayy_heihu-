@@ -3,16 +3,21 @@
 
 /* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜）。
    2026-10-29 起照 Claude 设置页的配色——电脑用 Claude 的蓝（墨线 focus）、手机用 Claude 的琥珀（墨线 warn）、
-   说话用同样轻重的绿、熬夜用墨线 risk；轨道和地点是不带色偏的中性灰 */
+   说话用同样轻重的绿、熬夜用墨线 risk；轨道是不带色偏的中性灰，路上（--rec-go）深一档的灰。
+   地点 6 种淡色（--pl-1…6：薰衣草、玫瑰、青、珊瑚、暖石、橄榄），色相避开电脑蓝、手机琥珀、说话绿，按地名固定分配（app.js placeTones） */
 :root {
   --rec-computer: #2a78d6; --rec-phone: #fab219; --rec-night: #d03b3b; --rec-track: #efefed;
   --rec-watch: #26a269; --rec-place: #dededb; --rec-place-alt: #cbcac6;
+  --rec-go: #cbcac6;
+  --pl-1: #dcd5f6; --pl-2: #f4d5de; --pl-3: #cfe8ea; --pl-4: #f3d9cc; --pl-5: #e7ddd2; --pl-6: #e2e8c8;
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49; }
+  :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
+    --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c; }
 }
-:root[data-theme="dark"] { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49; }
+:root[data-theme="dark"] { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
+  --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c; }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
 html, body { height: 100%; }
@@ -62,17 +67,11 @@ body { padding: 0; overflow: hidden; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
 /* 今天还没到的小时格只留空框 */
 .strip span.fut { background: transparent; box-shadow: inset 0 0 0 1px var(--rec-track); }
-/* 地点这一排：每小时一格填待得最久的地方，相邻两段交替深浅；地名写在段首，压在格子上、不挡悬停 */
-.strip span.pl { background: var(--rec-place); }
-.strip span.pl.alt { background: var(--rec-place-alt); }
-.strip-track { position: relative; }
-.strip-names { position: absolute; inset: 0; pointer-events: none; }
-.strip-names em { position: absolute; top: 0; bottom: 0; box-sizing: border-box; padding: 0 4px; font: 11px/22px var(--font-sans); font-style: normal; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 「现在」：一条竖线贯穿各排，时刻写在轴上 */
-.strip-rows { position: relative; }
-.now-line, .now-tag { position: absolute; left: calc(30px + var(--space-2) + (100% - 30px - var(--space-2)) * var(--f)); }
-.now-line { top: 0; bottom: 20px; width: 1px; background: var(--ink); pointer-events: none; }
-.now-tag { bottom: 0; transform: translateX(-50%); padding: 0 var(--space-1); font-size: 12px; line-height: 16px; color: var(--ink); background: var(--page); }
+/* 地点：一整条，底色是轨道，每段停留按起止画在上面，颜色跟着地方走；两段之间的路上是灰色块 */
+.place-bar { position: relative; height: 22px; border-radius: 2px; background: var(--rec-track); }
+.place-bar i { position: absolute; top: 0; bottom: 0; box-sizing: border-box; padding: 0 6px; border-radius: 2px; font: 11px/22px var(--font-sans); font-style: normal; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.place-bar i:hover { outline: 1px solid var(--ink-4); outline-offset: -1px; }
+.place-bar i.go { background: var(--rec-go); color: var(--ink-3); }
 /* 最近 14 天（照 Wise 支出洞察）：每天两根柱子，看的这一天实色、其他天淡 */
 .rd { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); column-gap: var(--space-1); }
 .rd-col { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); padding: var(--space-1) 0 0; border: 0; border-radius: var(--radius-sm); background: none; font: inherit; color: inherit; cursor: pointer; }
@@ -127,7 +126,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 /* 去了哪：上面按地点合计的条，下面一个停留一行（点了起名） */
 .pl-bars { margin-bottom: var(--space-4); }
 .bar i.pl { background: var(--rec-place-alt); }
-.bar i.go { background: var(--ink-4); }
+.bar i.go { background: var(--rec-go); }
 .bar i.none { background: var(--line); }
 .bar-name.dim { color: var(--ink-4); }
 .visits { display: flex; flex-direction: column; }
