@@ -1,0 +1,4 @@
+# VPS 上自动 HTTPS：域名解析到这台机器、开放 80 和 443，.env 写 BEAYY_DOMAIN=sync.example.com
+{$BEAYY_DOMAIN} {
+	reverse_proxy beayy-server:8770
+}

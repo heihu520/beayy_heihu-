@@ -2384,7 +2384,7 @@ function amapDialog() {
   });
 }
 
-/** 同步服务器：默认官方的，自己部署了同步服务（app/sync-server）可以换。只能在登录前换 */
+/** 同步服务器：默认官方的，自己部署了服务端（app/server）可以换。只能在登录前换 */
 function syncServerDialog() {
   const cf = S.settings;
   openDialog({

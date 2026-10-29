@@ -46,6 +46,10 @@ claude mcp add beayy -- ~/Applications/Beayy.app/Contents/MacOS/beayy --mcp
 
 工具：`list_days`（最近每天概况）、`get_day`（某天的时长、每小时在做什么、时间花在哪、日总结）、`search`（在 10 分钟摘要里搜关键词）、`get_rules_and_projects`。
 
+## 自己部署服务端
+
+同步和录音转写默认用官方服务器，也可以换成自己的：`server/` 用 Docker 在自己的电脑或 VPS 上跑（`docker compose up -d`，转写加 `--profile asr`），然后在「设置 → 连接」里把同步服务器、转写服务换成自己的地址。步骤见 [server/README.md](server/README.md)。
+
 ## 从源码编译
 
 ```bash
@@ -70,7 +74,8 @@ git clone https://github.com/hengfengliya/beayy && cd beayy
 | `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载 |
 | `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日总结 |
 | `ui` | 网页界面：纯 HTML＋CSS＋JS |
-| `sync-server` | 同步服务的 Cloudflare 版：Workers＋R2＋D1，只存密文，可以自己部署（见 `sync-server/wrangler.jsonc`）。官方实例 2026-10 起改用自建服务端（SQLite＋本地文件，接口相同），Docker 版整理好后放进来 |
+| `server` | 服务端：同步（只存密文）＋录音转写＋可选的模型、地图代理，Python（FastAPI＋SQLite＋本地文件）。用 Docker 在自己的电脑或服务器上跑，见 [`server/README.md`](server/README.md)；官方实例跑的也是它 |
+| `sync-server` | 同步服务的旧 Cloudflare 版（Workers＋R2＋D1），接口和 `server` 相同，不再维护 |
 
 ## 许可
 
