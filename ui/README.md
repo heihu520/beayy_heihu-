@@ -8,7 +8,7 @@ Tauri 2 外壳加载的网页：今天、日总结、规矩、设置四页。纯
 |---|---|
 | `index.html` | 壳：侧栏（品牌、四个入口、最近 12 天、记录状态）＋正文 |
 | `app.js` | 取数、路由（`#/today`、`#/summary/YYYY-MM-DD`、`#/rules`、`#/settings`）、四页 |
-| `style.css` | 壳的布局、作息图／一天的形状／读数（设计系统「人生记录」，取自 `网站/static/`，变量加 `rec-` 前缀）、页面专用的几样 |
+| `style.css` | 壳的布局、作息图／一天的形状／读数（设计系统「人生记录」；读数数字 10-29 起用苹方加等宽数字，不用等宽字体，取自 `网站/static/`，变量加 `rec-` 前缀）、页面专用的几样 |
 | `vendor/moxian/` | 墨线的 `tokens.css`（由 tokens.json 生成）和 `bundle.css`（原样拷贝），不要手改 |
 | `tools/同步墨线.py` | 墨线改了就跑一次：`python3 app/ui/tools/同步墨线.py` |
 | `mock/` | 样例数据（全是虚构的）：`<命令名>.json` 和合成的 `mock.js`，由 `mock/make_mock.py` 生成 |

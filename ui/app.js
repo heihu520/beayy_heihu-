@@ -781,7 +781,7 @@ function dayPicker(date, past) {
   return `${past ? `<button class="mx-btn mx-btn--secondary dn-today" data-day="${now}">今天</button>` : ""}
     <div class="daynav pick">
       <button class="dn-step" aria-label="前一天" title="前一天" ${prev ? `data-day="${prev}"` : "disabled"}>${ICON.chevL}</button>
-      <button class="dn-date mono" id="day-pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
+      <button class="dn-date" id="day-pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
       <button class="dn-step" aria-label="后一天" title="后一天" ${next ? `data-day="${next}"` : "disabled"}>${ICON.chevR}</button>
       <div class="mx-menu" role="menu" hidden>${dates.map((x) => `<button role="menuitemradio" aria-checked="${x === date}" data-day="${x}">${x === now ? "今天" : short(x)}${x === date ? `<span class="mx-check">${ICON.check}</span>` : ""}</button>`).join("")}</div></div>`;
 }
@@ -797,7 +797,11 @@ async function renderToday() {
   const d = (await call("get_day", { date: today })) || { date: today };
   const pack = d.pack || {}, c = d.live || pack.computer || {}, ph = d.phone;
   const fda = ((S.status || {}).permissions || {}).full_disk_access;
-  const phoneCap = ph ? (past ? (ph.pickups != null ? `拿起 ${ph.pickups} 次` : "") : `同步至 ${ymdhm(ph.synced_until)}`) : fda === false ? "未授权完全磁盘访问" : "取不到";
+  // iPhone 的数据是苹果经 iCloud 传到这台 Mac 的，常晚几个小时；落后 3 小时以上就写明在等苹果，免得以为 Beayy 坏了
+  const phoneLag = "iPhone 的屏幕使用时间由苹果经 iCloud 传到这台 Mac，常晚几个小时，到了 Beayy 才读得到；这段时间没用手机也会停在这里。\niPhone 的「设置 → 屏幕使用时间 → 在设备间共享」要开着";
+  const phoneStale = ph && !past && Date.now() - Date.parse(ph.synced_until) > 3 * 3600e3;
+  const phoneCap = ph ? (past ? (ph.pickups != null ? `拿起 ${ph.pickups} 次` : "") : `同步至 ${ymdhm(ph.synced_until)}${phoneStale ? `\n${phoneLag}` : ""}`)
+    : fda === false ? "未授权完全磁盘访问" : past ? "取不到" : `今天还没有手机数据\n${phoneLag}`;
   const hc = hourMinutes(c.active_hours || {});
   const hp = hourMinutes(ph ? ph.hours : (pack.phone || {}).hours);
   const sp = d.speech, visits = (d.places && d.places.visits) || [];
@@ -819,7 +823,7 @@ async function renderToday() {
   const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", "全面"], ["timeline", "时间线"], ["places", "地点"]].map(([k, v]) =>
       `<button role="tab" aria-selected="${k === view}" class="${k === view ? "is-on" : ""}" data-view="${k}">${v}</button>`).join("")}</div>
       ${view === "timeline" ? `<span class="tb-sep"></span>${seg}` : ""}${view === "places" ? `<span class="tb-sep"></span>${pseg}` : ""}</div>
-    <div class="toolbar-right">${ph && !past ? `<span class="note tb-note">同步至 ${ymdhm(ph.synced_until)}</span>` : ""}${view === "places" && pview === "often" ? "" : dayPicker(today, past)}</div></div>`;
+    <div class="toolbar-right">${ph && !past ? (phoneStale ? `<span class="note tb-note" title="${esc(phoneLag)}">手机停在 ${hm(ph.synced_until)}，在等苹果传来</span>` : `<span class="note tb-note">同步至 ${ymdhm(ph.synced_until)}</span>`) : ""}${view === "places" && pview === "often" ? "" : dayPicker(today, past)}</div></div>`;
   const overview = `<div class="readouts">
         ${readout("在电脑前", hh(c.active_sec), "h", c.first ? `${c.first}–${c.last}` : "还没有记录")}
         ${readout("手机", ph || fda !== false ? hh(ph ? ph.total_sec : (pack.phone || {}).total_sec) : "—", "h", phoneCap)}
@@ -1301,7 +1305,7 @@ async function renderSummary(arg, arg2) {
 
   const right = `<button class="mx-iconbtn" id="prev" aria-label="前一天" title="前一天" ${prev ? "" : "disabled"}>${ICON.chevL}</button>
     <button class="mx-iconbtn" id="next" aria-label="后一天" title="后一天" ${next ? "" : "disabled"}>${ICON.chevR}</button>
-    <div class="pick"><button class="mx-btn mx-btn--secondary mono" id="pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
+    <div class="pick"><button class="mx-btn mx-btn--secondary mx-num" id="pick" aria-haspopup="menu" aria-expanded="false">${short(date)}${ICON.chevD}</button>
       <div class="mx-menu" role="menu" id="pick-menu" hidden>${dates.map((x) => `<button role="menuitemradio" aria-checked="${x === date}" data-date="${x}">${short(x)}${x === date ? `<span class="mx-check">${ICON.check}</span>` : ""}</button>`).join("")}</div></div>`;
 
   // 最近 14 天：截至这一天
