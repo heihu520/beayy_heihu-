@@ -97,6 +97,14 @@ final class NativeUI: ObservableObject {
             if let d = u.lastUpload { s["last_upload"] = d.iso8601UTC }
             if let e = u.lastError { s["last_error"] = e }
             if let d = r.since { s["phone_since"] = d.iso8601UTC }
+            let h = Health.shared
+            var hs: [String: Any] = ["available": h.available, "asked": h.asked, "running": h.running, "pending_days": h.pendingDays]
+            if let d = h.lastRun { hs["last_run"] = d.iso8601UTC }
+            if let e = h.lastError { hs["error"] = e }
+            #if targetEnvironment(simulator)
+            hs["simulator"] = true
+            #endif
+            s["health"] = hs
             return ["ok": s]
         case "native_action":
             switch args["name"] as? String ?? "" {
@@ -106,6 +114,11 @@ final class NativeUI: ObservableObject {
             case "open_settings":
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             case "upload_now": Uploader.shared.uploadPending()
+            case "health_connect": Task { await Health.shared.connect() }
+            case "health_read": Health.shared.kick(nil)
+            #if targetEnvironment(simulator)
+            case "health_demo": Task { await Health.shared.seedDemo() }
+            #endif
             default: return ["err": "手机没有这个操作"]
             }
             return ["ok": NSNull()]

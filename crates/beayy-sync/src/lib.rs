@@ -1019,9 +1019,9 @@ fn sync_round(root: &Path, local_device: &str, upload: bool) -> Option<Report> {
 
 // ---------- 录音、转写、停留点、配置这些块（方案见 报告/方案_20261021_录音与存储.md）：普通同步跳过，由 beayy-remote 单独处理 ----------
 
-/// 不是分段、摘要、改名表的块：录音 audio.、转写 transcript.、停留点 places.，以及 account 设备下的配置和声纹
+/// 不是分段、摘要、改名表的块：录音 audio.、转写 transcript.、停留点 places.、苹果健康 health.，以及 account 设备下的配置和声纹
 pub fn is_special(device: &str, name: &str) -> bool {
-    device == "account" || ["audio.", "transcript.", "places."].iter().any(|p| name.starts_with(p))
+    device == "account" || ["audio.", "transcript.", "places.", "health."].iter().any(|p| name.starts_with(p))
 }
 
 fn logged_in(root: &Path) -> Result<Account, String> {
@@ -1116,7 +1116,7 @@ pub fn usage(root: &Path) -> Result<Value, String> {
         for it in folder_items(&dir, "") {
             let (d, n) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""));
             let kind = if d == "account" { "account" } else if n.starts_with(SUM) { "summary" } else if n.starts_with(DAILY) { "daily" } else if n == NAMES { "account" } else {
-                ["audio", "transcript", "places"].into_iter().find(|k| n.starts_with(&format!("{k}."))).unwrap_or("segment")
+                ["audio", "transcript", "places", "health"].into_iter().find(|k| n.starts_with(&format!("{k}."))).unwrap_or("segment")
             };
             let u = it["updated"].as_i64().unwrap_or(0);
             let e = m.entry((d.to_string(), kind.to_string())).or_insert((0, 0, i64::MAX, 0));

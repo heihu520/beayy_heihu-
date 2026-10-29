@@ -2,7 +2,7 @@
 //! 每天的停留点（`places.<日>`）传到同步服务；电脑每 2 分钟一轮（停留点早点到）；
 //! 列表都是增量的（游标存 cloud/state.json 的 cursors），不每轮从头列。
 //! 1. 推 `account/config.json`（转写服务地址、高德 Key）给手机，内容变了才传；
-//! 2. 拉有更新的停留点，写成 `place.visit` 事件；
+//! 2. 拉有更新的停留点，写成 `place.visit` 事件；有更新的苹果健康（`health.<日>`，一天一块整天替换）存成 `devices/<设备>/health/<日>.jsonl`；
 //! 3. 别的电脑转好的 `transcript.*` 拉下来；还没转的录音按时间顺序交转写服务，结果写成 `speech.*` 事件、再传 `transcript.<段 id>`；
 //! 4. 转好超过 7 天的录音块删掉（没转的服务器 30 天兜底删）。
 //! 转写服务用同步服务发的票据认账号（拿不到同步令牌）；本人声纹在 `account/voiceprint.json`，当天他人的质心存本机
@@ -94,6 +94,8 @@ fn agent() -> ureq::Agent {
 #[derive(Default, Debug)]
 pub struct CloudNote {
     pub places: usize,
+    /// 拉了几天的苹果健康
+    pub health: usize,
     pub transcribed: usize,
     pub fetched: usize,
     pub deleted: usize,
@@ -179,6 +181,40 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
     }
     st.insert("places".into(), Value::Object(places));
     advance(&mut st, "places.", &items, miss);
+    write_state(root, &st);
+
+    // 苹果健康：有更新的那几天整天拉，原样存成文件（不写事件：一天几千行，进分段会跟着电脑记录再同步一遍）
+    let seen_health = st.get("health").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut health = seen_health.clone();
+    let mut miss = None;
+    let items = list_since(root, &st, "health.")?;
+    for it in &items {
+        let (d, n, up) = (it["device"].as_str().unwrap_or(""), it["segment"].as_str().unwrap_or(""), it["updated"].as_i64().unwrap_or(0));
+        let k = format!("{d}/{n}");
+        let day = n.trim_start_matches("health.");
+        if seen_health.get(&k).and_then(Value::as_i64) == Some(up) || chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_err() {
+            continue;
+        }
+        match beayy_sync::get_named(root, d, n) {
+            Ok(Some(b)) => {
+                let dir = root.join("devices").join(d).join("health");
+                match fs::create_dir_all(&dir).and_then(|_| fs::write(dir.join(format!("{day}.jsonl")), &b)) {
+                    Ok(()) => {
+                        note.health += 1;
+                        health.insert(k, json!(up));
+                    }
+                    Err(e) => note.errors.push(format!("存健康 {day}：{e}")),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                miss = Some(miss.map_or(up, |m: i64| m.min(up)));
+                note.errors.push(format!("拉健康 {n}：{e}"));
+            }
+        }
+    }
+    st.insert("health".into(), Value::Object(health));
+    advance(&mut st, "health.", &items, miss);
     write_state(root, &st);
 
     // 转写：已有的（别的电脑转的、或这台以前转的）拉下来
@@ -442,5 +478,27 @@ mod tests {
         assert_eq!(st["cursors"]["places."], json!(399));
         advance(&mut st, "audio.", &[], None);
         assert!(st["cursors"].get("audio.").is_none());
+    }
+
+    /// 手机传的 health.<日> 经同步（这里用同步文件夹）到电脑：整天存成 devices/<设备>/health/<日>.jsonl；没变的下一轮不重拉，变了整天替换
+    #[test]
+    fn health_pull() {
+        let base = std::env::temp_dir().join(format!("beayy-health-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (phone, mac, dir) = (base.join("phone"), base.join("mac"), base.join("cloud"));
+        std::env::set_var("BEAYY_DATA_ROOT", &phone); // 账号存文件，不碰钥匙串
+        beayy_sync::folder_create(&phone, dir.to_str().unwrap(), "password-1").unwrap();
+        beayy_sync::put_named(&phone, "iphone-test", "health.2026-10-29", b"{\"id\":\"a\"}\n").unwrap();
+        beayy_sync::folder_join(&mac, dir.to_str().unwrap(), "password-1").unwrap();
+        let mut relay = Relay::default();
+        let n = round(&mut relay, &mac, Duration::from_secs(5)).unwrap();
+        let f = mac.join("devices/iphone-test/health/2026-10-29.jsonl");
+        assert_eq!((n.health, fs::read_to_string(&f).unwrap()), (1, "{\"id\":\"a\"}\n".to_string()));
+        assert_eq!(round(&mut relay, &mac, Duration::from_secs(5)).unwrap().health, 0);
+        std::thread::sleep(Duration::from_millis(20));
+        beayy_sync::put_named(&phone, "iphone-test", "health.2026-10-29", b"{\"id\":\"a\"}\n{\"id\":\"b\"}\n").unwrap();
+        assert_eq!(round(&mut relay, &mac, Duration::from_secs(5)).unwrap().health, 1);
+        assert_eq!(fs::read_to_string(&f).unwrap().lines().count(), 2);
+        let _ = fs::remove_dir_all(&base);
     }
 }

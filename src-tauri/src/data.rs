@@ -1088,6 +1088,7 @@ pub fn get_range(from: String, to: String) -> Result<Value, String> {
         let late_p = ph.as_ref().map(|p| p["late_sec"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
         let dawn_p = nph.as_ref().map(|p| p["night_sec"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
         let visits = places_day_opt(d, false).map(|p| p["visits"].clone()).unwrap_or(json!([]));
+        let health = crate::health::health_day(d);
         // 时间花在哪：同 get_day，自采摘要为准，数据包里同一段的不重复算
         let own = mine.remove(&ds).unwrap_or_default();
         let taken: HashSet<String> = own.iter().filter_map(|s| s["start"].as_str().map(String::from)).collect();
@@ -1102,6 +1103,8 @@ pub fn get_range(from: String, to: String) -> Result<Value, String> {
             "pickups": ph.as_ref().and_then(|p| p["pickups"].as_i64()),
             "night_sec": if c.is_some() || ph.is_some() { json!((late_c + dawn_c + late_p + dawn_p).round() as i64) } else { Value::Null },
             "visits": visits,
+            "sleep_sec": health.as_ref().and_then(|h| h["sleep"]["asleep_sec"].as_i64()),
+            "steps": health.as_ref().and_then(|h| h["activity"]["steps"].as_i64()),
         }));
         d += Duration::days(1);
     }
@@ -1204,6 +1207,7 @@ pub fn get_day(date: String) -> Value {
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
         "speech": speech_day(nd),
         "places": places_day(nd),
+        "health": crate::health::health_day(nd),
     })
 }
 

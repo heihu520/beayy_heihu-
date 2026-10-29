@@ -114,7 +114,7 @@ final class WatchState: ObservableObject {
     }
 }
 
-/// iPhone → 同步服务：录音一段一块（audio.<段 id>），停留点一天一块（places.<日>），都封好再用后台 URLSession 传，
+/// iPhone → 同步服务：录音一段一块（audio.<段 id>），停留点、苹果健康一天一块（places.<日>、health.<日>），都封好再用后台 URLSession 传，
 /// app 被挂起也会传完；收到 200 才删本地文件（停留点是标记这一版已传），失败的下次再传。没登录不传，留在本地排队
 final class Uploader: NSObject, ObservableObject, URLSessionTaskDelegate {
     static let shared = Uploader()
@@ -145,10 +145,11 @@ final class Uploader: NSObject, ObservableObject, URLSessionTaskDelegate {
         guard let acct = Account.shared.credentials else { return }
         session.getAllTasks { tasks in
             // 旧版（传 hk2 录音服务器）留在后台会话里的任务不要了
-            for t in tasks where !(t.taskDescription.map { $0.hasPrefix("audio:") || $0.hasPrefix("places:") } ?? false) { t.cancel() }
+            for t in tasks where !(t.taskDescription.map { $0.hasPrefix("audio:") || $0.hasPrefix("places:") || $0.hasPrefix("health:") } ?? false) { t.cancel() }
             let inflight = Set(tasks.compactMap(\.taskDescription))
             self.queueAudio(acct, skip: inflight)
             self.queuePlaces(acct, skip: inflight)
+            self.queueHealth(acct, skip: inflight)
             self.refresh()
         }
         #endif
@@ -219,6 +220,25 @@ final class Uploader: NSObject, ObservableObject, URLSessionTaskDelegate {
         }
     }
 
+    /// 苹果健康：有改动的那几天，各传一整天（补历史时一次排 30 天，传完一天接着排）
+    private func queueHealth(_ acct: Credentials, skip: Set<String>) {
+        for (day, seq) in Health.shared.pendingUploads(30) {
+            let desc = "health:\(day)"
+            guard !skip.contains(desc), claim(desc) else { continue }
+            let name = "health.\(day)"
+            let out = Config.outboxDir.appendingPathComponent("\(name).blob")
+            do {
+                try String(seq).write(to: Config.outboxDir.appendingPathComponent("\(name).seq"), atomically: true, encoding: .utf8)
+                try SyncCrypto.seal(key: acct.key, device: Config.device, name: name, plain: Health.shared.dayRows(day)).write(to: out, options: .atomic)
+            } catch {
+                release(desc)
+                DispatchQueue.main.async { self.lastError = "健康：\(day) 封装没成功（\(error.localizedDescription)），先留在手机上，告诉凤梨" }
+                continue
+            }
+            start(acct, device: Config.device, name: name, file: out, desc: desc)
+        }
+    }
+
     func refresh() {
         let n = ((try? FileManager.default.contentsOfDirectory(at: Config.pendingDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }.count
@@ -267,6 +287,20 @@ final class Uploader: NSObject, ObservableObject, URLSessionTaskDelegate {
             } else if !cancelled {
                 let msg = uploadErrorText(error, status: status)
                 DispatchQueue.main.async { self.lastError = "位置：\(msg)" }
+            }
+        } else if desc.hasPrefix("health:") {
+            let day = String(desc.dropFirst("health:".count))
+            let seqURL = Config.outboxDir.appendingPathComponent("health.\(day).seq")
+            let seq = (try? String(contentsOf: seqURL, encoding: .utf8)).flatMap { Int($0) }
+            try? fm.removeItem(at: Config.outboxDir.appendingPathComponent("health.\(day).blob"))
+            try? fm.removeItem(at: seqURL)
+            if ok {
+                if let seq { Health.shared.uploaded(day, seq: seq) }
+                succeeded()
+                if !Health.shared.pendingUploads(1).isEmpty { uploadPending() }
+            } else if !cancelled {
+                let msg = uploadErrorText(error, status: status)
+                DispatchQueue.main.async { self.lastError = "健康：\(msg)" }
             }
         }
         refresh()

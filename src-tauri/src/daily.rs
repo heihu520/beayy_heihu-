@@ -206,7 +206,7 @@ fn check(rule: &str, date: NaiveDate, day: &Value) -> (String, Option<bool>) {
     }
 }
 
-const PROMPT: &str = "你是用户的日记助手。下面是用户今天的记录：电脑和手机的时长、时间花在哪些领域和项目、每小时在做什么、自己定的规矩今天的对照结果，有的话还有去了哪（手机停留点）和对话（录音转写）。
+const PROMPT: &str = "你是用户的日记助手。下面是用户今天的记录：电脑和手机的时长、时间花在哪些领域和项目、每小时在做什么、自己定的规矩今天的对照结果，有的话还有去了哪（手机停留点）、对话（录音转写）和苹果健康（睡眠、步数、锻炼、心情）。
 据此写今天的日总结，全部用中文，用第二人称「你」。line、done、drift、tomorrow 写得具体、平实，不夸、不说教；remark 换一种口吻，见下。只写材料里有的事，不编造，不写材料里没有的数字。
 去了哪、对话也算今天做的事：见了谁、谈了什么、在外面待了多久，有内容就写进去；转写有错字，意思不明的不硬猜、不逐字引用。
 只返回一个 JSON 对象，不要代码块，字段：
@@ -219,6 +219,45 @@ const PROMPT: &str = "你是用户的日记助手。下面是用户今天的记�
   tomorrow: 1–3 条字符串，明天最值得做的事，从今天没做完的里挑
 材料最后如果列了「前后几天的点评已经引过」，quote 换一句：别出自同一篇、同一个人，意思也别相近；那几句如果多是中国古诗文，这次换个门类（现当代文学、外国文学、电影、名人语录等）。
 ";
+
+/// 苹果健康：昨晚睡眠一行、活动和锻炼一行、心情一行（有才写）
+fn health_lines(h: &Value) -> Vec<String> {
+    let mut out = vec![];
+    let hm = |v: &Value| v.as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|t| t.with_timezone(&Local).format("%H:%M").to_string()).unwrap_or_default();
+    let s = &h["sleep"];
+    if let Some(sec) = s["asleep_sec"].as_f64() {
+        let stages = if s["staged"] == true {
+            format!("，深睡 {}、快速眼动 {}、醒着 {}", dur(s["deep_sec"].as_f64().unwrap_or(0.0)), dur(s["rem_sec"].as_f64().unwrap_or(0.0)), dur(s["awake_sec"].as_f64().unwrap_or(0.0)))
+        } else {
+            String::new()
+        };
+        out.push(format!("昨晚睡了 {}（{}–{}{stages}）", dur(sec), hm(&s["start"]), hm(&s["end"])));
+    }
+    let a = &h["activity"];
+    let mut act = vec![];
+    if let Some(n) = a["steps"].as_i64() {
+        act.push(format!("走了 {n} 步"));
+    }
+    if let Some(n) = a["active_kcal"].as_i64() {
+        act.push(format!("活动 {n} 千卡"));
+    }
+    if let Some(n) = a["exercise_min"].as_i64() {
+        act.push(format!("锻炼 {n} 分钟"));
+    }
+    for w in h["workouts"].as_array().cloned().unwrap_or_default() {
+        act.push(format!("{} {} {}", hm(&w["start"]), w["name"].as_str().unwrap_or(""), dur(w["sec"].as_f64().unwrap_or(0.0))));
+    }
+    if !act.is_empty() {
+        out.push(act.join("，"));
+    }
+    let moods: Vec<String> = h["moods"].as_array().cloned().unwrap_or_default().iter()
+        .filter_map(|m| m["valence"].as_f64().map(|v| format!("{} 心情 {v:.1}（-1 很差到 1 很好）", hm(&m["at"]))))
+        .collect();
+    if !moods.is_empty() {
+        out.push(moods.join("，"));
+    }
+    out
+}
 
 fn dur(sec: f64) -> String {
     if sec < 3600.0 {
@@ -326,6 +365,7 @@ fn write_day(date: NaiveDate) -> Result<String, String> {
     if let Some((line, _)) = &speech {
         stats.push(line.clone());
     }
+    stats.extend(health_lines(&day["health"]));
     let tree = |k: &str| -> Vec<String> {
         work[k].as_array().cloned().unwrap_or_default().iter().map(|g| {
             let kids: Vec<String> = g["children"].as_array().cloned().unwrap_or_default().iter().take(4).map(|c| format!("{} {}", c["name"].as_str().unwrap_or(""), dur(c["sec"].as_f64().unwrap_or(0.0)))).collect();

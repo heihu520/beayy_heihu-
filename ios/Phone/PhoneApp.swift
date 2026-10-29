@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         r.device = Config.device
         r.deliver = deliverOwnSegment
         Places.shared.start()        // 也可能是为了送到访／位置变化拉起的，manager 要在这里就建好
+        Health.shared.start()        // 也可能是苹果送新的健康数据拉起的，观察者要在这里就挂上
         Uploader.shared.uploadPending()
         Account.shared.startConfigTimer()  // 高德 Key、转写服务地址：启动时取一次，之后每小时
         beayy_start()                      // Rust 核心：账号同步（只下载）、录音和停留点，和电脑同一份代码
@@ -39,6 +40,7 @@ struct BeayyPhoneApp: App {
                 Uploader.shared.uploadPending()
                 Task { await Account.shared.refreshConfig() }
                 Places.shared.retryNames()  // 当时没网、高德出错没取到名的再取一次
+                if Health.shared.asked { Health.shared.kick(nil) }  // 锁屏时没读成的接着读
                 Recorder.shared.resumeIfWanted()
                 WatchState.shared.load()
             }

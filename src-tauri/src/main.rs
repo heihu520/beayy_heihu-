@@ -8,6 +8,7 @@ mod amap;
 mod storage;
 mod daily;
 mod data;
+mod health;
 mod icons;
 mod mcp;
 mod summarizer;
@@ -381,7 +382,7 @@ fn main() {
             Some("get_month") => daily::get_month(args.get(3).cloned().unwrap_or_default()).unwrap_or_else(|e| json!({ "error": e })),
             Some("llm_usage") => data::llm_usage(),
             Some("cloud_round") => match beayy_remote::cloud::round(&mut Relay::default(), &data_root(), Duration::from_secs(600)) {
-                Ok(n) => json!({"added": n.added, "places": n.places, "transcribed": n.transcribed, "fetched": n.fetched, "deleted": n.deleted, "waiting": n.waiting, "errors": n.errors}),
+                Ok(n) => json!({"added": n.added, "places": n.places, "health": n.health, "transcribed": n.transcribed, "fetched": n.fetched, "deleted": n.deleted, "waiting": n.waiting, "errors": n.errors}),
                 Err(e) => json!({"error": e}),
             },
             Some("storage_stats") => tauri::async_runtime::block_on(storage::storage_stats()),

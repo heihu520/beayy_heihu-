@@ -16,6 +16,8 @@ mod amap;
 mod sync;
 #[path = "../../src-tauri/src/storage.rs"]
 mod storage;
+#[path = "../../src-tauri/src/health.rs"]
+mod health;
 #[path = "../../src-tauri/src/icons.rs"]
 mod icons;
 // 只用读的那几个（get_week、get_month）：手机不写总结，看电脑同步来的

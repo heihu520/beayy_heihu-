@@ -32,7 +32,7 @@ fn local(root: &Path) -> Value {
         "items": [
             row("computer", "电脑记录", *cats.get("computer").unwrap_or(&0), "长期"),
             row("summaries", "10 分钟摘要", summaries, "长期"),
-            row("phone", "手机使用和停留点", *cats.get("phone").unwrap_or(&0), "长期"),
+            row("phone", "手机使用、停留点和健康", *cats.get("phone").unwrap_or(&0), "长期"),
             row("watch", "对话转写", *cats.get("watch").unwrap_or(&0), "长期"),
             row("places", "地点缓存", places, "长期"),
             row("other", "其他", total.saturating_sub(known), "长期"),
@@ -65,6 +65,7 @@ fn cloud(root: &Path) -> Value {
         ("audio", "录音", keep_audio.as_str()),
         ("transcript", "对话转写", "长期"),
         ("places", "停留点", "长期"),
+        ("health", "苹果健康", "长期"),
         ("account", "账号设置和声纹", "长期"),
     ];
     let items: Vec<Value> = names

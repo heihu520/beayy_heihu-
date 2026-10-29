@@ -11,7 +11,7 @@ fn tools() -> Value {
     json!([
         {"name": "list_days", "description": "最近每天的概况：日期、在电脑前秒数、手机秒数、日总结里的一句话。新的在前。",
          "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "最多几天，默认 14"}}}},
-        {"name": "get_day", "description": "某一天的详情：电脑和手机时长、按小时在做什么（小时摘要）、时间花在哪（领域·项目、类型两级）、手机用得最多的 app、日总结全文。",
+        {"name": "get_day", "description": "某一天的详情：电脑和手机时长、按小时在做什么（小时摘要）、时间花在哪（领域·项目、类型两级）、手机用得最多的 app、苹果健康（睡眠、步数、锻炼、心率、心情）、日总结全文。",
          "inputSchema": {"type": "object", "properties": {"date": {"type": "string", "description": "YYYY-MM-DD，本地日期；不填是今天"}}}},
         {"name": "search", "description": "在 10 分钟摘要里搜关键词（标题、描述、经过、涉及的线索），返回命中的时段和内容。适合回答「上周什么时候做过 X」「X 推进到哪了」。",
          "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "days": {"type": "integer", "description": "往前搜几天，默认 30"}, "limit": {"type": "integer", "description": "最多返回几条，默认 20"}}, "required": ["query"]}},
@@ -49,6 +49,7 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 "phone": {"total_sec": d["phone"]["total_sec"], "pickups": d["phone"]["pickups"], "top_apps": d["phone"]["apps"]},
                 "work": d["work"],
                 "hours": hours,
+                "health": if d["health"].is_null() { Value::Null } else { let mut h = d["health"].clone(); h.as_object_mut().map(|o| o.remove("sleep_blocks")); h },
                 "daily_summary": d["summary_md"],
             });
             Ok(text(serde_json::to_string_pretty(&out).unwrap()))

@@ -266,7 +266,7 @@ def kind_of(device: str, segment: str) -> str:
     """块的种类：按块名前缀（分段名以年份开头）"""
     if device == "account":
         return "account"
-    for k in ("audio", "transcript", "places", "sum", "daily"):
+    for k in ("audio", "transcript", "places", "health", "sum", "daily"):
         if segment.startswith(k + "."):
             return "summary" if k == "sum" else k
     return "account" if segment == "names.json" else "segment"

@@ -341,13 +341,52 @@ function dayStrip(hc, hp, clickable = false, opt = null) {
     }).join("");
     return `<div class="place-bar">${bars}</div>`;
   };
+  // 睡眠：苹果健康（多是手表记的，颜色跟手表），深睡最深、核心次之、快速眼动浅，醒着留空
+  const sleepRow = () => `<div class="place-bar sleep-bar">${opt.sleep.map((b) => {
+    const a = Date.parse(b.start), z = Date.parse(b.end), k = SLEEP_STAGE[b.stage] || SLEEP_STAGE.asleep;
+    return `<i style="left:${(frac(a) * 100).toFixed(3)}%;width:${(Math.max(frac(z) - frac(a), 0.002) * 100).toFixed(3)}%;${k[1] ? `background:color-mix(in srgb, var(--rec-watch) ${k[1]}%, var(--rec-track))` : "background:transparent"}" title="${k[0]} ${hm(b.start)}–${hm(b.end)}"${clickable ? ` data-h="${new Date(Math.max(a, day0)).getHours()}"` : ""}></i>`;
+  }).join("")}</div>`;
   const rows = [];
   if (opt.visits && opt.visits.length) rows.push(["地点", placeRow()]);
+  if (opt.sleep && opt.sleep.length) rows.push(["睡眠", sleepRow()]);
   rows.push(["电脑", `<div class="strip">${cells(hc, "--rec-computer", "电脑")}</div>`]);
   rows.push(["手机", `<div class="strip">${cells(hp, "--rec-phone", "手机")}</div>`]);
   // 说话：手表录的，和没戴手表时 iPhone 自己录的，合在一排
   if (opt.hw) rows.push(["说话", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
   return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
+}
+
+// ---------- 苹果健康（iPhone 传来，电脑汇总：health.rs） ----------
+
+/** 睡眠分期：名字、在一天的形状里的深浅（手表色的百分比，0＝留空） */
+const SLEEP_STAGE = { deep: ["深睡", 100], core: ["核心睡眠", 70], asleep: ["睡着", 70], rem: ["快速眼动", 45], awake: ["醒着", 0] };
+const HEALTH_UNIT = { "count": "", "count/min": "次/分", "kcal": "千卡", "m": "米", "min": "分钟", "s": "秒", "ms": "毫秒", "kg": "公斤", "g": "克", "mg": "毫克",
+  "degC": "°C", "dBASPL": "分贝", "dBHL": "分贝", "mmHg": "毫米汞柱", "L": "升", "mL": "毫升", "%": "%" };
+const healthDur = (sec) => (sec == null ? "" : sec < 3600 ? `${Math.round(sec / 60)} 分钟` : `${hh(sec)} 小时`);
+const healthNum = (v, unit) => { if (v == null) return "—"; const x = unit === "%" ? v * 100 : v; return Math.abs(x) >= 100 ? numText(Math.round(x)) : String(Math.round(x * 10) / 10); };
+/** 心情的愉快程度（-1 到 1），按苹果的七档 */
+const valenceText = (v) => ["非常不愉快", "不愉快", "有点不愉快", "中性", "有点愉快", "愉快", "非常愉快"][Math.min(6, Math.max(0, Math.floor(((v || 0) + 1) / (2 / 7))))];
+
+/** 「健康」：昨晚睡眠、活动、心率、锻炼、心情；其他类型收在「其他 N 项」里 */
+function healthSection(h) {
+  if (!h) return "";
+  const s = h.sleep, a = h.activity || {}, hr = h.heart || {}, rows = [];
+  if (s) rows.push(["睡眠", `${hm(s.start)}–${hm(s.end)}，睡着 ${healthDur(s.asleep_sec)}`
+    + (s.staged ? `（深睡 ${healthDur(s.deep_sec)}、核心 ${healthDur(s.core_sec)}、快速眼动 ${healthDur(s.rem_sec)}${s.awake_sec ? `，醒着 ${healthDur(s.awake_sec)}` : ""}）` : "")
+    + (s.inbed_sec > s.asleep_sec + 600 ? ` · 在床上 ${healthDur(s.inbed_sec)}` : "")]);
+  const act = [a.steps != null && `${numText(a.steps)} 步`, a.distance_m && `${(a.distance_m / 1000).toFixed(1)} 公里`, a.active_kcal != null && `活动 ${numText(a.active_kcal)} 千卡`,
+    a.exercise_min != null && `锻炼 ${a.exercise_min} 分钟`, a.stand_hours != null && `站立 ${a.stand_hours} 小时`, a.flights && `爬了 ${a.flights} 层`].filter(Boolean);
+  if (act.length) rows.push(["活动", act.join(" · ")]);
+  const heart = [hr.n && `平均 ${hr.avg}，${hr.min}–${hr.max}`, hr.resting != null && `静息 ${hr.resting}`, hr.hrv_ms != null && `心率变异性 ${hr.hrv_ms} 毫秒`].filter(Boolean);
+  if (heart.length) rows.push(["心率", heart.join(" · ")]);
+  for (const w of h.workouts || []) rows.push(["锻炼", `${hm(w.start)}–${hm(w.end)} ${esc(w.name)} ${healthDur(w.sec)}`
+    + [w.distance_m && ` · ${(w.distance_m / 1000).toFixed(1)} 公里`, w.kcal && ` · ${w.kcal} 千卡`, w.avg_hr && ` · 平均心率 ${w.avg_hr}`].filter(Boolean).join("")]);
+  for (const m of h.moods || []) rows.push(["心情", `${hm(m.at)} ${valenceText(m.valence)}`]);
+  if (h.mindful_sec) rows.push(["正念", healthDur(h.mindful_sec)]);
+  const kv = (rs, cls = "kv") => `<dl class="${cls}">${rs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const other = (h.others || []).map((o) => [esc(o.name), o.agg === "count" ? `${o.n} 次`
+    : `${o.agg === "sum" ? "共 " : o.n > 1 ? "平均 " : ""}${healthNum(o.value, o.unit)}${o.min != null ? `（${healthNum(o.min, o.unit)}–${healthNum(o.max, o.unit)}）` : ""}${o.unit === "%" ? "%" : " " + esc(HEALTH_UNIT[o.unit] ?? o.unit ?? "")}`]);
+  return section("健康", (rows.length ? kv(rows) : "") + (other.length ? `<details class="adv"><summary>其他 ${other.length} 项</summary>${kv(other, "kv kv-wide")}</details>` : ""));
 }
 
 /** 「最近」：最近 14 天（照 Wise 支出洞察），每天一组两根柱子（电脑、手机），看的这一天实色、其他天淡；点哪天去哪天；
@@ -853,7 +892,7 @@ async function renderToday() {
     : fda === false ? "未授权完全磁盘访问" : past ? "取不到" : `今天还没有手机数据\n${phoneLag}`;
   const hc = hourMinutes(c.active_hours || {});
   const hp = hourMinutes(ph ? ph.hours : (pack.phone || {}).hours);
-  const sp = d.speech, visits = (d.places && d.places.visits) || [];
+  const sp = d.speech, visits = (d.places && d.places.visits) || [], hl = d.health;
   // 说话按分钟画，不满 1 分钟的也算 1 分钟，免得零碎的几句看不见
   const hw = sp ? Array.from({ length: 24 }, (_, i) => Math.min(60, Math.ceil(((sp.hours || {})[pad2(i)] || 0) / 60))) : null;
   const items = timelineItems(d);
@@ -879,11 +918,14 @@ async function renderToday() {
         ${sp ? readout("说话", sp.talk_sec < 3600 ? mins(sp.talk_sec) : hh(sp.talk_sec), sp.talk_sec < 3600 ? "分钟" : "h", sp.first ? `录音 ${hm(sp.first)}–${hm(sp.last)}` : past ? "这一天没有录音" : "今天还没有录音") : ""}
         ${readout("切换", c.switches ?? "—", "次", "应用之间切换")}
         ${visits.length ? readout("去了", new Set(visits.map((v) => v.label || placeName(v).split(" · ")[0])).size, "处", `${visits.length} 段停留`) : ""}
+        ${hl && hl.sleep ? readout("睡眠", hh(hl.sleep.asleep_sec), "h", `昨晚 ${hm(hl.sleep.start)}–${hm(hl.sleep.end)}`) : ""}
+        ${hl && hl.activity && hl.activity.steps != null ? readout("步数", numText(hl.activity.steps), "步", "苹果健康") : ""}
       </div>
       <div class="secs-plain" style="margin-top:var(--space-6)">`
     + recentDays(today, { c: c.active_sec, p: ph ? ph.total_sec : (pack.phone || {}).total_sec })
-    + section("一天", dayStrip(hc, hp, true, { hw, visits, date: today }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-go)"></i>路上</span>` : ""}</div>`)
+    + section("一天", dayStrip(hc, hp, true, { hw, visits, date: today, sleep: hl && hl.sleep_blocks }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-go)"></i>路上</span>` : ""}</div>`)
     + placeTotals(visits, today)
+    + healthSection(hl)
     + workSection(d.work) + `</div>`;
   if (view === "places" && (pview === "often" || !PL.stats || Date.now() - (PL.at || 0) > 600e3)) {
     [PL.stats, PL.labels] = await Promise.all([call("place_stats", { days: 30 }).catch(() => null), call("list_place_labels").catch(() => [])]);
@@ -1345,12 +1387,14 @@ function bindGen(id, cmd, date, redraw) {
 /** 周、月总结的读数：每天平均（有记录的日子才算进分母），悬停写合计 */
 function rangeReadouts(days) {
   const avg = (k) => { const xs = days.map((d) => d[k]).filter((v) => v != null); return xs.length ? [xs.reduce((a, b) => a + b, 0) / xs.length, xs.reduce((a, b) => a + b, 0), xs.length] : null; };
-  const c = avg("active_sec"), p = avg("phone_sec"), k = avg("pickups"), n = avg("night_sec");
+  const c = avg("active_sec"), p = avg("phone_sec"), k = avg("pickups"), n = avg("night_sec"), sl = avg("sleep_sec"), st = avg("steps");
   return `<div class="readouts">
     ${readout("日均电脑", c ? hh(c[0]) : "—", "h", c ? `共 ${hh(c[1])} 小时 · ${c[2]} 天有记录` : "取不到")}
     ${readout("日均手机", p ? hh(p[0]) : "—", "h", p ? `共 ${hh(p[1])} 小时 · ${p[2]} 天有记录` : "取不到")}
     ${readout("日均拿起", k ? Math.round(k[0]) : "—", "次", k ? `共 ${numText(k[1])} 次` : "", false, "按前台空档推算")}
     ${readout("日均熬夜", n ? Math.round(n[0] / 60) : "—", "分钟", n ? `每晚 21:00–5:00 · 共 ${numText(Math.round(n[1] / 60))} 分钟` : "21:00–5:00", n && n[0] / 60 > 10)}
+    ${sl ? readout("日均睡眠", hh(sl[0]), "h", `${sl[2]} 晚有记录`) : ""}
+    ${st ? readout("日均步数", numText(Math.round(st[0])), "步", `共 ${numText(st[1])} 步`) : ""}
   </div>`;
 }
 
@@ -2455,10 +2499,17 @@ function phoneSection() {
   if (n.error) return section("这台手机", `<div class="mx-field-error">${esc(n.error)}</div>`);
   const loc = { always: [true, "始终允许"], when_in_use: [false, "只在使用时"], denied: [false, "没允许"], not_determined: [false, "还没问过"] }[n.location] || [false, n.location];
   const ago = (iso) => (iso ? mdhm(iso) : "还没有");
+  // 苹果健康：只读；苹果不告诉 app 给了哪些类型，改授权要去系统设置
+  const h = n.health || {};
+  const health = h.available === false ? "" : setRow("苹果健康",
+    !h.asked ? "睡眠、步数、锻炼、心率、心情等全部类型，只读，传到你的电脑"
+      : `${h.running ? "在读" : `最近读 ${ago(h.last_run)}`}${h.pending_days ? ` · 还有 ${h.pending_days} 天没传` : ""}${h.error ? `<br>${esc(h.error)}` : ""}<br>要改读哪些：系统设置 → 健康 → 数据访问与设备 → Beayy`,
+    (h.asked ? smallBtn("ph-health-read", "现在读", h.running ? "disabled" : "") : smallBtn("ph-health", "连接")) + (h.simulator ? smallBtn("ph-health-demo", "造演示数据") : ""));
   return section("这台手机",
     setRow("位置", loc[0] ? (n.precise ? "记停留点用" : "「精确位置」关着，停留点会不准") : "改成「始终」才能记停留点", `${pill(loc[0] && n.precise, loc[1])}${loc[0] && n.precise ? "" : smallBtn("ph-settings", "去设置")}`)
     + setRow("手表", n.watch_recording ? `在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}` : `没在录${n.watch_updated ? ` · ${ago(n.watch_updated)} 收到状态` : ""}`, pill(!!n.watch_recording, n.watch_recording ? "在录" : "没在录"))
     + setRow("用这台 iPhone 录", n.phone_recording ? `在录，${ago(n.phone_since)} 开始` : "没戴手表时用", `<button class="mx-switch" role="switch" id="ph-rec" aria-checked="${!!n.phone_recording}" aria-label="用这台 iPhone 录"></button>`)
+    + health
     + setRow("本人声纹", "用来认出哪些话是你说的", smallBtn("ph-voice", "录一段", n.logged_in ? "" : "disabled"))
     + setRow("上传", `${n.pending ? `还有 ${n.pending} 段录音` : "录音都传完了"}${n.pending_place_days ? `、${n.pending_place_days} 天停留点` : ""}没传 · 最近 ${ago(n.last_upload)}${n.last_error ? `<br>${esc(n.last_error)}` : ""}${n.logged_in ? "" : "<br>登录账号后开始上传。"}`, smallBtn("ph-up", "现在传")));
 }
@@ -2475,6 +2526,9 @@ function bindPhone() {
   on("ph-rec", () => act(SS.native && SS.native.phone_recording ? "record_stop" : "record_start"));
   on("ph-voice", () => act("voiceprint"));
   on("ph-up", () => act("upload_now"));
+  on("ph-health", () => act("health_connect"));
+  on("ph-health-read", () => act("health_read"));
+  on("ph-health-demo", () => act("health_demo"));
 }
 
 /** 「数据」页：本机、同步服务、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */

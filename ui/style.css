@@ -309,6 +309,10 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .dev-body { padding: 0 12px var(--space-5) calc(32px + 24px); }
 .kv { display: grid; grid-template-columns: 80px 1fr; gap: 6px var(--space-3); margin: 0 0 var(--space-3); font-size: 13px; line-height: 18px; }
 .kv dt { color: var(--ink-4); } .kv dd { margin: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.kv-wide { grid-template-columns: 140px 1fr; }
+.kv-wide dt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sleep-bar { height: 14px; }
+.sleep-bar i { padding: 0; }
 .dev-sub { font-size: 13px; line-height: 20px; color: var(--ink-3); margin-bottom: var(--space-3); }
 .dev-h { margin: var(--space-4) 0 0; font-size: 12px; font-weight: 400; color: var(--ink-4); }
 .add-dev { display: flex; flex-direction: column; gap: var(--space-4); }
