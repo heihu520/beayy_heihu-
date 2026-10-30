@@ -30,7 +30,9 @@
 
 ## 一天的形状
 
-在电脑前多久、手机多久、切了多少次 app、去了几个地方。「一天」按小时排开地点、电脑、手机和说话，时间按项目和类型归好类。
+在电脑前多久、手机多久、切了多少次 app、去了几个地方。「一天」按小时排开地点、睡眠、电脑、手机和说话，时间按项目和类型归好类。
+
+装了 iPhone app 还能接苹果健康：昨晚几点睡、几点醒、睡了多久，当天走了多少步、锻炼了多久。
 
 <p align="center"><img src="docs/images/today.png" alt="今天页" width="860"></p>
 
@@ -70,7 +72,7 @@ Claude 桌面版、Cursor 的配置在「设置 → 连接 → 接到 AI 里」�
 
 记录全部存在本机。多台设备之间要同步，有三种方式：
 
-- **官方服务器**：开放注册，不要邀请码，每个账号 100MB 同步空间，先开 50 个名额
+- **官方服务器**：开放注册，不要邀请码，每个账号 100MB 同步空间，送官方模型每月 5 万 token，先开 50 个名额
 - **自己部署**：服务端代码在 [`server/`](server/README.md)，`docker compose up -d` 就能起
 - **同步文件夹**：选一个 iCloud 云盘、OneDrive、坚果云、Syncthing 这类会同步的文件夹，不经过任何服务器
 
@@ -85,14 +87,17 @@ Claude 桌面版、Cursor 的配置在「设置 → 连接 → 接到 AI 里」�
 | 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（macOS 辅助功能、Windows UI Automation 读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
 | 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久，看不到 app 里的内容 |
 | 位置（可选） | iPhone app 记下的停留点（几点到、几点走、地名），加密后经同步传到电脑；路上的轨迹不记 |
+| 健康（可选） | iPhone app 只读苹果健康（睡眠、步数、活动、锻炼、心率、心情等），加密后经同步传到电脑，今天页汇成昨晚睡眠和当天活动；日总结不写心率、心情这类细项 |
 | 手表（可选） | Apple Watch 全天录音，传到转写服务（官方的或你自己部署的）转写、分说话人；电脑上只有文字（谁在几点说了什么） |
 | 存储 | 全部在本机 `~/Library/Application Support/Beayy/`，按设备、每 10 分钟一个文件，只追加 |
-| 摘要 | 把那 10 分钟的记录发给**你自己配置**的模型（任何 OpenAI 兼容接口），写回本机。「设置 → 连接 → 模型 → 用量」看每天花了多少 token |
+| 摘要 | 把那 10 分钟的记录发给**你配置**的模型（任何 OpenAI 兼容接口，或官方服务），写回本机。「设置 → 连接 → 模型 → 用量」看每天花了多少 token |
 | 同步（可选） | 本机压缩、XChaCha20-Poly1305 加密后上传；主密码只在设备上用（Argon2id 派生），服务器只存密文和登录校验值的哈希 |
 
 ## 安装
 
-到 [Releases](https://github.com/hengfengliya/beayy/releases/latest) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。装好以后会自动检查更新，有新版本时左下角菜单里出现「重启更新」。
+到 [Releases](https://github.com/hengfengliya/beayy/releases/latest) 下载 `Beayy-<版本>.dmg`（Windows 是 `Beayy-<版本>-windows-x64.zip`），拖进「应用程序」打开。第一次打开会带你走一遍：授权（辅助功能、输入监控、可选的完全磁盘访问）、填模型、要不要同步。装好以后会自动检查更新，新版本下好后弹窗提示，点「重启更新」几秒就换好。
+
+界面有简体中文和英文：设置 → 通用 → 语言，默认跟随系统。
 
 iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.apple.com/join/Ptzqu4q8 （源码在 [`ios/`](ios/)）。
 
@@ -103,7 +108,8 @@ iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.appl
 - 安卓手机、Linux 电脑
 - iPhone 的屏幕使用时间只能在 Mac 上读；只有 Windows 电脑的话，看不到手机用了哪些 app（位置不受影响）
 - Windows 版还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）
-- 开放注册只送同步空间，不送模型；模型自己配
+- 官方送的模型额度每月 5 万 token，只够试用（一段 10 分钟摘要约 6 千 token），天天用要自己配模型；转写、地图不送
+- 摘要和日、周、月总结暂时只用中文写；英文界面里，这部分和服务端发来的提示也还是中文
 
 ## 从源码编译
 
@@ -136,7 +142,7 @@ open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Ru
 | `crates/beayy-summary` | 10 分钟摘要、小时摘要、两级分类（类型、领域 · 项目）、项目名合并 |
 | `crates/beayy-sync` | 多设备同步客户端：账号、加密、上传下载、同步文件夹 |
 | `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日周月总结、MCP 服务 |
-| `ui` | 网页界面：纯 HTML＋CSS＋JS，电脑和 iPhone 共用 |
+| `ui` | 网页界面：纯 HTML＋CSS＋JS，电脑和 iPhone 共用；简体中文和英文（`i18n.js`、`locales/`） |
 | `mobile` | iPhone 版的 Rust 核心（静态库），直接编 `src-tauri` 的数据代码，和电脑同一份 |
 | `ios` | iPhone 和 Apple Watch app 的 Swift 外壳（XcodeGen）：定位记停留点、手表录音、登录账号加密上传；界面是网页视图加载 `ui/` |
 | `server` | 服务端：同步（只存密文）＋录音转写＋可选的模型、地图代理，Python（FastAPI＋SQLite＋本地文件）。用 Docker 在自己的电脑或服务器上跑，见 [`server/README.md`](server/README.md)；官方实例跑的也是它 |

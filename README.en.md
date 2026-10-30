@@ -25,11 +25,13 @@ A summary every 10 minutes, a journal every evening, rolled up into weekly and m
 
 At the end of a busy day it's hard to remember what you actually did. Screen Time tells you that you spent three hours in Chrome, not what you were doing in it. Beayy runs in the background on your computer, phone and watch, and has a language model write the log for you. You just read it.
 
-The interface is in Chinese for now. The screenshots below use made-up sample data.
+The interface comes in English and Simplified Chinese (Settings → General → Language; it follows your system by default). Summaries and journals are still written in Chinese for now. The screenshots below use made-up sample data.
 
 ## The shape of your day
 
-How long you were at the computer, how long on your phone, how many times you switched apps, how many places you went. The day strip lays out places, computer, phone and conversations hour by hour, and your time is sorted by project and by type of work.
+How long you were at the computer, how long on your phone, how many times you switched apps, how many places you went. The day strip lays out places, sleep, computer, phone and conversations hour by hour, and your time is sorted by project and by type of work.
+
+With the iPhone app you can also bring in Apple Health: when you fell asleep and woke up, how long you slept, how many steps you took and how long you worked out.
 
 <p align="center"><img src="docs/images/today.png" alt="Today view" width="860"></p>
 
@@ -69,7 +71,7 @@ The config snippet for Claude Desktop and Cursor is under Settings → Connectio
 
 Everything is stored on your computer. To sync between devices, pick one of three options:
 
-- **Official server**: open sign-up, no invite code, 100 MB of sync space per account, 50 accounts for now
+- **Official server**: open sign-up, no invite code, 100 MB of sync space and 50,000 tokens of the official model per month per account, 50 accounts for now
 - **Self-hosted**: the server lives in [`server/`](server/README.md); `docker compose up -d` gets it running
 - **Sync folder**: pick a folder that iCloud Drive, OneDrive, Dropbox, Syncthing or a NAS already syncs; no server involved
 
@@ -84,14 +86,15 @@ Either way, records are compressed and encrypted on your device before they leav
 | Computer | Which app and window is in front, what you type and send, clicks, scrolling, on-screen text (via macOS Accessibility or Windows UI Automation), whether you're at the computer, sleep and lock. Password fields are never recorded. You can exclude apps entirely, pause at any time, and delete the last 15 minutes, hour or day |
 | Phone | iPhone Screen Time as synced to your Mac through iCloud: when each app was in the foreground and for how long. App contents are not visible |
 | Location (optional) | Stops recorded by the iPhone app (arrival, departure, place name), encrypted and synced to your computer. Routes are not recorded |
+| Health (optional) | The iPhone app reads Apple Health (sleep, steps, activity, workouts, heart rate, mood and more) read-only, and syncs it to your computer encrypted. The Today view shows last night's sleep and the day's activity; the journal leaves out details like heart rate and mood |
 | Watch (optional) | All-day Apple Watch audio, sent to a transcription service (the official one or your own) that transcribes it and separates speakers. Your computer only gets the text: who said what, and when |
 | Storage | All local, in `~/Library/Application Support/Beayy/`, one append-only file per device per 10 minutes |
-| Summaries | Each 10-minute record goes to **the model you configure** (any OpenAI-compatible API) and the result is written back locally. Settings → Connections → Model → Usage shows the tokens spent per day |
+| Summaries | Each 10-minute record goes to **the model you configure** (any OpenAI-compatible API, or the official server) and the result is written back locally. Settings → Connections → Model → Usage shows the tokens spent per day |
 | Sync (optional) | Compressed and encrypted with XChaCha20-Poly1305 on your device. Your master password never leaves the device (key derived with Argon2id); the server stores only ciphertext and a hash of the login verifier |
 
 ## Install
 
-Download `Beayy-<version>.dmg` from [Releases](https://github.com/hengfengliya/beayy/releases/latest) (`Beayy-<version>-windows-x64.zip` on Windows) and drag it into Applications. The first launch walks you through permissions (Accessibility, Input Monitoring, optionally Full Disk Access), the model, and whether to sync. Beayy checks for updates on its own; when one is ready, "Restart to update" appears in the menu at the bottom left.
+Download `Beayy-<version>.dmg` from [Releases](https://github.com/hengfengliya/beayy/releases/latest) (`Beayy-<version>-windows-x64.zip` on Windows) and drag it into Applications. The first launch walks you through permissions (Accessibility, Input Monitoring, optionally Full Disk Access), the model, and whether to sync. Beayy checks for updates on its own; once a new version is downloaded it asks you, and "Restart to update" takes a few seconds.
 
 The iPhone and Apple Watch apps are in public TestFlight: https://testflight.apple.com/join/Ptzqu4q8 (source in [`ios/`](ios/)).
 
@@ -102,7 +105,9 @@ Requires macOS 14 or later, or Windows 10/11 (64-bit).
 - Android phones and Linux computers
 - iPhone Screen Time can only be read on a Mac. With only a Windows computer you won't see which phone apps you used (location still works)
 - The Windows build is still a preview. It isn't code-signed, so SmartScreen blocks the first run; choose "More info → Run anyway". Antivirus software may flag the keyboard hook as a keylogger; allow it. Apps running as administrator can't be read (Beayy doesn't elevate)
-- Open sign-up includes sync space, not a model. Bring your own model
+- The official model allowance is 50,000 tokens a month, enough to try Beayy out (a 10-minute summary takes about 6,000 tokens). For daily use, bring your own model. Transcription and maps aren't included
+- Summaries and journals are written in Chinese for now. In the English interface, those and the messages that come from the server are still in Chinese
+- The iPhone app's interface is still in Chinese
 
 ## Build from source
 
@@ -135,7 +140,7 @@ UI only: open `ui/index.html` in a browser. It reads the made-up sample data in 
 | `crates/beayy-summary` | 10-minute and hourly summaries, two-level classification (type; area · project), project name merging |
 | `crates/beayy-sync` | Multi-device sync client: account, encryption, upload and download, sync folder |
 | `src-tauri` | Tauri 2 shell: menu bar, main window, commands for the web UI (`src-tauri/COMMANDS.md`), scheduled jobs, daily/weekly/monthly reviews, MCP server |
-| `ui` | Web UI in plain HTML, CSS and JS, shared by the computer and the iPhone |
+| `ui` | Web UI in plain HTML, CSS and JS, shared by the computer and the iPhone; English and Simplified Chinese (`i18n.js`, `locales/`) |
 | `mobile` | Rust core for iPhone (static library), built from the same data code as `src-tauri` |
 | `ios` | Swift shells for the iPhone and Apple Watch apps (XcodeGen): location stops, watch recording, encrypted upload; the UI is a web view loading `ui/` |
 | `server` | Server: sync (ciphertext only) + transcription + optional model and map proxies, in Python (FastAPI + SQLite + local files). Run it with Docker on your own computer or server, see [`server/README.md`](server/README.md); the official instance runs the same code |
