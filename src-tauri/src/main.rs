@@ -313,15 +313,6 @@ fn main() {
         println!("换掉 {n} 段");
         return;
     }
-    if args.get(1).map(|a| a == "--summary-try").unwrap_or(false) {
-        // 调试用：用现在的提示词给分段问一次模型，打印结果和用量，不写文件
-        let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
-        for name in &args[2..] {
-            let out = sm.try_segment(name).map(|(j, u)| json!({"summary": j, "usage": u})).unwrap_or_else(|e| json!({"error": e}));
-            println!("===== {name} =====\n{}\n", serde_json::to_string_pretty(&out).unwrap());
-        }
-        return;
-    }
     if args.get(1).map(|a| a == "--summary-pack").unwrap_or(false) {
         // 调试用：打印某分段拼好的摘要包（不调模型）
         let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
