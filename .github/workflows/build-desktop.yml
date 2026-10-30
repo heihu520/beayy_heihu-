@@ -1,0 +1,190 @@
+# 桌面构建：未签名 macOS / Windows x64 产物。
+# 触发：手动、push main、tag v*。打 tag 时创建 GitHub Release 并挂上产物。
+#
+# 说明：上游 tauri.conf.json 里 bundle.active=false，正式打包走 cargo build -p beayy
+# + 自组 .app / zip（见根目录 build.sh 与旧 windows.yml），故此处不用 tauri-action。
+# 若之后打开 bundle，可再换成 tauri-apps/tauri-action@v1。
+#
+# 可选签名 Secrets（均存在时才尝试签名，缺省保持未签名）：
+#   macOS: APPLE_CERTIFICATE (p12 base64), APPLE_CERTIFICATE_PASSWORD,
+#          APPLE_SIGNING_IDENTITY, APPLE_TEAM_ID
+#   Windows: 暂未接 EV/Authenticode；需要时再补
+name: build-desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+concurrency:
+  group: build-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      is_tag: ${{ steps.ver.outputs.is_tag }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: Beayy-macos-x64
+          - os: windows-latest
+            artifact: Beayy-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.os }}
+
+      - name: Build release binary
+        run: cargo build --release -p beayy
+
+      - name: Package macOS (unsigned .app zip)
+        if: runner.os == 'macOS'
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          BIN=target/release/beayy
+          test -x "$BIN"
+          STAGE=dist/Beayy.app
+          rm -rf dist
+          mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+          cp "$BIN" "$STAGE/Contents/MacOS/beayy"
+          if [ -f Resources/AppIcon.icns ]; then
+            cp Resources/AppIcon.icns "$STAGE/Contents/Resources/"
+          fi
+          BUILD_NUMBER=$(date +%Y%m%d%H%M%S)
+          cat > "$STAGE/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>com.fengli.beayy</string>
+            <key>CFBundleName</key><string>Be Authentic. Your Yesterdays.</string>
+            <key>CFBundleDisplayName</key><string>Be Authentic. Your Yesterdays.</string>
+            <key>CFBundleExecutable</key><string>beayy</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+            <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>LSUIElement</key><true/>
+          </dict></plist>
+          PLIST
+
+          SIGN_ID="-"
+          if [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            echo "检测到 Apple 证书 Secrets，尝试签名…"
+            CERT_PATH="$RUNNER_TEMP/certificate.p12"
+            echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+            KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+            KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            security import "$CERT_PATH" -P "${APPLE_CERTIFICATE_PASSWORD:-}" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            security list-keychain -d user -s "$KEYCHAIN"
+            security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            SIGN_ID="$APPLE_SIGNING_IDENTITY"
+            codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$STAGE"
+            codesign --verify --strict "$STAGE"
+          else
+            echo "未配置签名 Secrets，使用 ad-hoc 签名（仅本机调试友好）"
+            codesign --force --sign - "$STAGE" || true
+          fi
+
+          OUT="Beayy-macos-x64-${APP_VERSION}.zip"
+          ditto -c -k --keepParent "$STAGE" "$OUT"
+          echo "artifact_file=$OUT" >> "$GITHUB_ENV"
+          ls -lh "$OUT"
+
+      - name: Package Windows (zip)
+        if: runner.os == 'Windows'
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/beayy.exe dist/
+          if (Test-Path README.md) { Copy-Item README.md dist/ }
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist/ }
+          $out = "Beayy-windows-x64-$env:APP_VERSION.zip"
+          Compress-Archive -Path dist/* -DestinationPath $out -Force
+          Add-Content -Path $env:GITHUB_ENV -Value "artifact_file=$out"
+          Get-Item $out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ needs.version.outputs.version }}
+          path: ${{ env.artifact_file }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: github-release
+    needs: [version, build]
+    if: needs.version.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Create or update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Beayy ${{ needs.version.outputs.tag }}
+          body: |
+            桌面构建产物（默认**未签名**）。
+
+            - macOS：`.app` 的 zip（Gatekeeper 可能拦截，需右键打开或自签）
+            - Windows：`beayy.exe` zip（SmartScreen 可能提示「仍要运行」）
+
+            版本来自 `Cargo.toml` workspace：`${{ needs.version.outputs.version }}`
+          files: release-assets/**/*
+          draft: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
