@@ -2,3 +2,4 @@ target/
 .DS_Store
 Resources/AppIcon.iconset/
 .wrangler/
+__pycache__/
