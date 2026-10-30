@@ -11,13 +11,30 @@ import sys
 
 import syncapi
 
-COLS = ("SELECT u.email, u.llm_plan AS plan, u.llm_quota, u.asr_quota / 60 AS asr_quota_min, u.map_quota, "
+COLS = ("SELECT u.email, u.llm_plan AS plan, u.llm_quota, CASE WHEN u.asr_quota < 0 THEN -1 ELSE u.asr_quota / 60 END AS asr_quota_min, u.map_quota, "
         "(SELECT COALESCE(SUM(used), 0) FROM usage g WHERE g.user = u.user AND g.month = ? AND g.service = 'llm') AS llm_used, "
         "(SELECT COALESCE(SUM(used), 0) FROM usage g WHERE g.user = u.user AND g.month = ? AND g.service = 'asr') / 60 AS asr_used_min, "
         "(SELECT COALESCE(SUM(used), 0) FROM usage g WHERE g.user = u.user AND g.month = ? AND g.service = 'map') AS map_used, "
         "(SELECT ROUND(COALESCE(SUM(size), 0) / 1000000.0, 1) FROM blobs b WHERE b.user = u.user) AS stored_mb, "
         "(SELECT ROUND(storage / 1000000.0, 1) FROM quotas q WHERE q.user = u.user) AS storage_mb "
         "FROM users u WHERE u.email IS NOT NULL")
+
+
+def set_open(c, user: str, llm: int, asr_min: int, mp: int) -> int:
+    return c.execute("UPDATE users SET llm_plan = 'official', llm_quota = ?, asr_quota = ?, map_quota = ? WHERE user = ?",
+                     (llm, asr_min * 60, mp, user)).rowcount
+
+
+def set_stop(c, user: str) -> int:
+    return c.execute("UPDATE users SET llm_plan = 'stopped' WHERE user = ?", (user,)).rowcount
+
+
+def set_storage(c, user: str, mb: float | None):
+    """mb：上限 MB（0＝不限）；None＝删掉单独设的，跟 BEAYY_USER_QUOTA_MB"""
+    if mb is None:
+        c.execute("DELETE FROM quotas WHERE user = ?", (user,))
+    else:
+        c.execute("INSERT INTO quotas (user, storage) VALUES (?, ?) ON CONFLICT (user) DO UPDATE SET storage = excluded.storage", (user, int(mb * syncapi.MB)))
 
 
 def main(a: list[str]) -> int:
@@ -35,35 +52,32 @@ def main(a: list[str]) -> int:
         print(__doc__)
         return 2
     email = syncapi.email_of(a[1])
+    row = c.execute("SELECT user FROM users WHERE email = ?", (email,)).fetchone()
+    if not row:
+        print(f"没有 {email} 这个账号")
+        return 1
     if a[0] == "storage":
-        row = c.execute("SELECT user FROM users WHERE email = ?", (email,)).fetchone()
-        if not row or len(a) < 3:
-            print(f"没有 {email} 这个账号" if not row else __doc__)
-            return 1 if not row else 2
-        if a[2] == "default":
-            c.execute("DELETE FROM quotas WHERE user = ?", (row["user"],))
-        else:
-            try:
-                mb = float(a[2])
-            except ValueError:
-                print("上限写 MB 数（0＝不限）或 default")
-                return 2
-            c.execute("INSERT INTO quotas (user, storage) VALUES (?, ?) ON CONFLICT (user) DO UPDATE SET storage = excluded.storage",
-                      (row["user"], int(mb * syncapi.MB)))
+        if len(a) < 3:
+            print(__doc__)
+            return 2
+        try:
+            set_storage(c, row["user"], None if a[2] == "default" else float(a[2]))
+        except ValueError:
+            print("上限写 MB 数（0＝不限）或 default")
+            return 2
         print("改好了")
         return 0
     if a[0] == "stop":
-        n = c.execute("UPDATE users SET llm_plan = 'stopped' WHERE email = ?", (email,)).rowcount
+        n = set_stop(c, row["user"])
     else:
         try:
             llm, asr, mp = (int(x) for x in (a[2:] + ["0", "0", "0"])[:3])
         except ValueError:
             print("上限要是整数")
             return 2
-        n = c.execute("UPDATE users SET llm_plan = 'official', llm_quota = ?, asr_quota = ?, map_quota = ? WHERE email = ?",
-                      (llm, asr * 60, mp, email)).rowcount
-    print(f"改了 {n} 个账号" if n else f"没有 {email} 这个账号")
-    return 0 if n else 1
+        n = set_open(c, row["user"], llm, asr, mp)
+    print(f"改了 {n} 个账号")
+    return 0
 
 
 if __name__ == "__main__":

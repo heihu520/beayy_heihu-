@@ -293,6 +293,13 @@ def auth(request: Request) -> dict | None:
         c.close()
 
 
+def log_upload(c: sqlite3.Connection, user: str, device: str, size: int, ok: bool):
+    """上传记一笔（按小时合计），看每台设备什么时候在传、有没有被拒"""
+    c.execute("INSERT INTO uploads (user, device, hour, n, bytes, rejected) VALUES (?, ?, ?, ?, ?, ?) "
+              "ON CONFLICT (user, device, hour) DO UPDATE SET n = n + excluded.n, bytes = bytes + excluded.bytes, rejected = rejected + excluded.rejected",
+              (user, device, int(time.time()) // 3600, int(ok), size if ok else 0, int(not ok)))
+
+
 def unauthorized() -> JSONResponse:
     return json_resp({"error": "没登录或令牌不对"}, 401)
 
@@ -310,6 +317,8 @@ def add_usage(user: str, service: str, n: float):
     c = db()
     c.execute("INSERT INTO usage (user, month, service, used) VALUES (?, ?, ?, ?) "
               "ON CONFLICT (user, month, service) DO UPDATE SET used = used + excluded.used", (user, month(), service, round(n)))
+    c.execute("INSERT INTO usage_daily (user, day, service, used) VALUES (?, ?, ?, ?) "
+              "ON CONFLICT (user, day, service) DO UPDATE SET used = used + excluded.used", (user, time.strftime("%Y-%m-%d", time.gmtime()), service, round(n)))
     c.close()
 
 
@@ -389,13 +398,16 @@ async def put_blob(device: str, segment: str, request: Request):
     data = await request.body()
     if len(data) > MAX_BLOB:
         return json_resp({"error": "太大了"}, 413)
-    if disk_free() < MIN_FREE // 2:
-        return json_resp({"error": "服务器存储满了，暂停上传，记录都还在本机"}, 507)
     c = db()
+    if disk_free() < MIN_FREE // 2:
+        log_upload(c, who["user"], device, len(data), False)
+        c.close()
+        return json_resp({"error": "服务器存储满了，暂停上传，记录都还在本机"}, 507)
     cap = quota_of(c, who["user"])
     if cap:
         old = c.execute("SELECT size FROM blobs WHERE user = ? AND device = ? AND segment = ?", (who["user"], device, segment)).fetchone()
         if stored_of(c, who["user"]) - (old["size"] if old else 0) + len(data) > cap:
+            log_upload(c, who["user"], device, len(data), False)
             c.close()
             return json_resp({"error": f"这个账号的同步空间满了（{round(cap / MB):g} MB），记录都还在本机。可以换成同步文件夹或自己部署服务端"}, 507)
     write_file(blob_path(who["user"], device, segment), data)
@@ -403,6 +415,7 @@ async def put_blob(device: str, segment: str, request: Request):
     c.execute("INSERT INTO blobs (user, device, segment, size, updated) VALUES (?, ?, ?, ?, ?) "
               "ON CONFLICT (user, device, segment) DO UPDATE SET size = excluded.size, updated = excluded.updated",
               (who["user"], device, segment, len(data), now))
+    log_upload(c, who["user"], device, len(data), True)
     c.close()
     return {"updated": now}
 
@@ -505,7 +518,7 @@ def delete_account(request: Request):
             p.unlink() if p.is_file() else p.rmdir()
         d.rmdir()
     c = db()
-    for t in ("blobs", "sessions", "users"):
+    for t in ("blobs", "uploads", "sessions", "users"):
         c.execute(f"DELETE FROM {t} WHERE user = ?", (user,))
     c.close()
     return {"ok": True}

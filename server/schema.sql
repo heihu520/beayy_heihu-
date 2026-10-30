@@ -53,3 +53,20 @@ CREATE TABLE IF NOT EXISTS quotas (     -- v7：单个账号另设的同步空�
   user TEXT PRIMARY KEY,
   storage INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_daily (  -- v8：用量按天（UTC 日），看走势用；额度仍按 usage 的月合计
+  user TEXT NOT NULL,
+  day TEXT NOT NULL,             -- YYYY-MM-DD
+  service TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user, day, service)
+);
+CREATE TABLE IF NOT EXISTS uploads (      -- v8：每台设备每小时传了几块、多少字节、被拒几次（空间满、硬盘满），看哪台设备哪天断了
+  user TEXT NOT NULL,
+  device TEXT NOT NULL,
+  hour INTEGER NOT NULL,         -- Unix 秒 / 3600
+  n INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  rejected INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user, device, hour)
+);
+CREATE INDEX IF NOT EXISTS uploads_hour ON uploads (hour);
