@@ -1,13 +1,14 @@
 [package]
 name = "beayy-mobile"
-description = "Beayy 手机版的 Rust 核心（iOS 静态库）：和电脑同一套数据代码（直接引用 src-tauri/src 的 data、amap、sync、storage、icons），经 C 接口给 iPhone app 里的网页（同一套 ui/）调用"
+description = "Beayy 手机版的 Rust 核心：和电脑同一套数据代码，经 C/JNI 接口给 iPhone／Android 里的网页（同一套 ui/）调用"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
 name = "beayy_mobile"
-crate-type = ["staticlib", "rlib"]
+# iOS 用 staticlib；Android 用 cdylib（.so）；rlib 给单元测试
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 serde.workspace = true
@@ -20,3 +21,6 @@ beayy-remote.workspace = true
 regex = "1"
 ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
 pollster = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
