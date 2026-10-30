@@ -1678,6 +1678,17 @@ fn read_devices() -> Vec<Value> {
             "events": events, "bytes": bytes,
         }));
     }
+    // iPhone、手表的编号是随机的，同类只有一台时默认名不带它
+    for kind in ["iphone", "watch"] {
+        if out.iter().filter(|d| d["kind"] == kind).count() == 1 {
+            let d = out.iter_mut().find(|d| d["kind"] == kind).unwrap();
+            let short = if kind == "iphone" { "iPhone" } else { "Apple Watch" };
+            d["default_name"] = json!(short);
+            if !d["custom"].as_bool().unwrap_or(false) {
+                d["name"] = json!(short);
+            }
+        }
+    }
     // 本机排第一
     out.sort_by_key(|d| !d["this"].as_bool().unwrap_or(false));
     out

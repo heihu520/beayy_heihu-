@@ -114,6 +114,8 @@ const hm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${pa
 const mdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${hm(iso)}`; };
 /** 带完整年月日的时刻（墨线文案：「同步至 2026-10-22 09:27」） */
 const ymdhm = (iso) => { if (!iso) return ""; const t = new Date(iso); return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${hm(iso)}`; };
+/** 列表里的时刻：今天只写时刻，今年写月日，更早带年 */
+const whenAt = (iso) => { if (!iso) return ""; const t = new Date(iso), now = new Date(); return localDay(t) === localDay(now) ? hm(iso) : t.getFullYear() === now.getFullYear() ? mdhm(iso) : ymdhm(iso); };
 const addDays = (d, n) => localDay(new Date(toDate(d).getTime() + 12 * 3600e3 + n * 864e5));
 
 /** 每小时秒数（电脑）：数据包的 active_hours {"09": 秒}，或老数据包的 hours {"09": {app: 秒}} */
@@ -806,7 +808,8 @@ function renderSide() {
   if (dot) { dot.hidden = !bad; dot.title = st.paused ? tr("已暂停") : tr("没在记录或缺权限"); }
   const pf = S.profile || { name: tr("我") };
   const av = document.getElementById("me-avatar");
-  if (av) av.innerHTML = avatarHtml(pf);
+  // 窄屏底栏「我的」用和别的页签一样的线条图标，不用头像
+  if (av) { av.classList.toggle("avatar--icon", NARROW.matches); av.innerHTML = NARROW.matches ? lu('<path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/>') : avatarHtml(pf); }
   const nm = document.getElementById("me-name");
   // 窄屏（手机）底栏这一格是「我的」页签，不写名字
   if (nm) nm.textContent = NARROW.matches ? tr("我的") : pf.name || tr("我");
@@ -1828,7 +1831,7 @@ async function renderRules() {
 
 // ---------- 设备：绑定的电脑和手机，各自的记录状态 ----------
 
-const DS = { open: null, msg: null, err: null, busy: false, account: null, removing: null };
+const DS = { open: null, msg: null, done: null, err: null, busy: false, account: null, removing: null };
 const DEV_ICON = {
   mac: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   win: '<svg class="mx-ico lu" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
@@ -1863,7 +1866,7 @@ async function renderDevices() {
       <span class="mx-row-main"><div class="mx-row-name">${esc(d.name)}${d.this ? `<span class="mx-tag">${tr("本机")}</span>` : ""}${d.synced ? `<span class="mx-tag">${tr("经同步")}</span>` : ""}</div><div class="mx-row-desc">${devStatus(d, st)}</div></span>
       <span class="mx-row-side">${ICON.chevR}</span></a>`).join("");
   $app.innerHTML = header(tr("设备"), `<button class="mx-btn mx-btn--primary" id="add-dev">${tr("添加设备")}</button>`)
-    + `<div class="reading">${notice}${section(tr("设备"), rows ? `<div class="mx-list">${rows}</div>` : emptyInline(tr("还没有设备")))}${syncSection(sy)}</div>`;
+    + `<div class="reading">${notice}<section class="mx-sec">${rows ? `<div class="mx-list">${rows}</div>` : emptyInline(tr("还没有设备"))}</section>${syncSection(sy)}</div>`;
   document.getElementById("add-dev").onclick = () => openDialog({ title: tr("添加设备"), body: adding, cancel: tr("关闭") });
   bindSync();
   if (sy.running || DS.busy) pollSync();
@@ -1878,13 +1881,14 @@ function devStatus(d, st) {
     return `<span class="dot ${cls}"></span>${tr("{text} · 今天已记 {n} 条", { text, n: numText(st.events_today) })}`;
   }
   const m = String((st && st.phone_sync) || "").match(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
+  // 超过一天没有新数据：变提醒样式
+  const old = (at) => !at || Date.now() - Date.parse(at) > 86400e3;
   if (d.kind === "iphone" && !d.synced) {
-    // 超过一天没有新数据：变提醒样式
-    const at = m ? m[0] : d.last, stale = !at || Date.now() - Date.parse(at) > 86400e3;
-    return `<span class="dot ${stale ? "warn" : "ok"}"></span>${tr("同步至 {t}", { t: ymdhm(at) || "—" })} · ${howto("screentime", tr("怎么设置"))}`;
+    const at = m ? m[0] : d.last, stale = old(at);
+    return `<span class="dot ${stale ? "warn" : "ok"}"></span>${tr("同步至 {t}", { t: whenAt(at) || "—" })}${stale ? " · " + howto("screentime", tr("怎么设置")) : ""}`;
   }
-  if (d.synced) return tr("经同步 · 最近一条 {t}", { t: ymdhm(d.last) });
-  return tr("最近一条 {t}", { t: ymdhm(d.last) });
+  const stale = old(d.last), t = whenAt(d.last) || "—";
+  return `<span class="dot ${stale ? "warn" : "ok"}"></span>${stale ? tr("停在 {t}", { t }) : tr("最近一条 {t}", { t })}`;
 }
 
 /** 每种设备记什么：一行一项 */
@@ -2129,12 +2133,12 @@ function syncSection(sy) {
   const busy = sy.running || DS.busy;
   const going = busy && pg.phase && pg.total > 0;
   const bar = going ? `<div class="sync-prog"><div class="sync-prog-text"><span>${pg.phase === "upload" ? tr("上传") : tr("下载")}</span><span class="mono">${tr("{a} / {b} 段", { a: numText(pg.done), b: numText(pg.total) })}</span></div><div class="bar"><i style="width:${Math.min(100, Math.round((pg.done / pg.total) * 100))}%"></i></div></div>` : "";
-  const state = busy ? `<span class="mx-status">${tr("同步中…")}</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">${tr("上次有错")}</span>` : `<span class="mx-status mx-status--ok">${tr("已开{last}", { last: sy.last ? tr(" · 上次 {t}", { t: ymdhm(sy.last) }) : "" })}</span>`;
+  const state = busy ? `<span class="mx-status">${tr("同步中…")}</span>` : sy.last_error ? `<span class="mx-status mx-status--warn">${tr("上次有错")}</span>` : `<span class="mx-status mx-status--ok">${tr("已开{last}", { last: sy.last ? tr(" · 上次 {t}", { t: whenAt(sy.last) }) : "" })}</span>`;
   return wrap((sy.folder ? row(tr("同步文件夹"), `<span class="mono">${esc(tildePath(sy.folder))}</span>`, state) : row(tr("账号"), esc(sy.email), state))
     + (bar ? `<div class="sync-bar-row">${bar}</div>` : "")
     + (sy.last_error ? `<div class="mx-error">${esc(sy.last_error)}</div>` : "")
     + (sessions.length ? row(tr("登录着的设备"), "", `<button class="mx-btn mx-btn--text mx-btn--sm" id="sess-open">${tr("{n} 台", { n: sessions.length })}${ICON.chevR}</button>`) : "")
-    + row(tr("立即同步"), sy.uploaded ? tr("已传 {n} 段", { n: numText(sy.uploaded) }) : "", `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>${tr("立即同步")}</button>`));
+    + row(tr("立即同步"), DS.done ? esc(DS.done) : "", `<button class="mx-btn mx-btn--secondary mx-btn--sm" id="sync-now" ${busy ? "disabled" : ""}>${tr("立即同步")}</button>`));
 }
 
 /** 登录着这个账号的设备（小弹层）：这台标出来，别的可以移除（先点「移除」，再点一次确认） */
@@ -2171,7 +2175,7 @@ function bindSync() {
   on("ac-claim", claimDialog);
   on("sess-open", sessionsDialog);
   $app.querySelectorAll("[data-set-tab]").forEach((a) => (a.onclick = () => { SS.tab = a.dataset.setTab; try { localStorage.setItem("settings-tab", SS.tab); } catch (x) {} }));
-  on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = null; renderDevices(); try { const r = await call("sync_now"); DS.msg = tr("上传 {up} 段，下载 {down} 段{err}", { up: r.uploaded, down: r.downloaded, err: r.errors.length ? tr("，有错：{e}", { e: r.errors.join(tr("；")) }) : "" }); } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
+  on("sync-now", async () => { DS.busy = true; DS.err = DS.msg = DS.done = null; renderDevices(); try { const r = await call("sync_now"); DS.done = tr("{t} 上传 {up} 段，下载 {down} 段{err}", { t: hm(new Date().toISOString()), up: r.uploaded, down: r.downloaded, err: r.errors.length ? tr("，有错：{e}", { e: r.errors.join(tr("；")) }) : "" }); } catch (x) { DS.err = String(x); } DS.busy = false; renderDevices(); });
 }
 
 // ---------- 设置 ----------
@@ -3148,10 +3152,17 @@ document.getElementById("side-toggle").onclick = () => {
 if (document.documentElement.dataset.side === "collapsed") { const b = document.getElementById("side-toggle"); b.setAttribute("aria-label", tr("展开侧栏")); b.title = tr("展开侧栏"); }
 window.addEventListener("hashchange", route);
 // 今天页每分钟自动刷新（展开着某一段、或正在看别的页时不刷）
-setInterval(async () => {
+async function refreshToday() {
   if (S.page !== "today" || isPastDay() || document.hidden || $app.querySelector("details[open]") || document.getElementById("pl-live") || EDITOR) return;
   const y = document.getElementById("main").scrollTop;
   try { [S.days, S.status] = await Promise.all([call("list_days"), call("get_status")]); renderSide(); await renderToday(); } catch (e) { return; }
   document.getElementById("main").scrollTop = y;
-}, 60000);
+}
+setInterval(refreshToday, 60000);
+// 手机回到前台马上同步一轮：后台那轮要等满 5 分钟，app 在后台时又停着。下到新的就刷新今天页
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden || !(S.status && S.status.mobile)) return;
+  const r = await call("sync_now").catch(() => null);
+  if (r && r.downloaded > 0) refreshToday();
+});
 route();

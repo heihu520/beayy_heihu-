@@ -642,8 +642,10 @@ a.mx-btn { text-decoration: none; }
   .mx-nav a .mx-ico { width: 22px; height: 22px; }
   .mx-side-foot { flex: 1; margin: 0; padding: 0; border-top: 0; }
   .me { width: 100%; height: 50px; flex-direction: column; justify-content: center; gap: 2px; padding: 0; }
+  .me { color: var(--ink-3); } .me:hover { background: none; } .me.is-on { color: var(--ink); font-weight: 600; }
   .me .avatar { width: 22px; height: 22px; font-size: 11px; }
-  .me-name { font-size: 11px; line-height: 14px; } .me-sub, .me-chev { display: none; }
+  .me .avatar--icon { background: none; color: inherit; border-radius: 0; } .avatar--icon .mx-ico { width: 22px; height: 22px; }
+  .me .me-name { flex: none; font-size: 11px; line-height: 14px; } .me-sub, .me-chev { display: none; }  /* 不 flex:1，免得在竖排里撑高、把图标顶上去 */
   .body { height: auto; overflow: visible; }
   .page { max-width: none; padding: calc(16px + env(safe-area-inset-top)) 16px calc(88px + env(safe-area-inset-bottom)); }
   .mx-title { font-size: 24px; line-height: 32px; }
