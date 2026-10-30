@@ -4,22 +4,27 @@
 /* 人生记录的数据颜色：只编码数据源（电脑、手机、手表、位置）和越界（熬夜）。
    2026-10-29 起照 Claude 设置页的配色——电脑用 Claude 的蓝（墨线 focus）、手机用 Claude 的琥珀（墨线 warn）、
    说话用同样轻重的绿、熬夜用墨线 risk；轨道是不带色偏的中性灰，路上（--rec-go）深一档的灰。
-   地点 6 种淡色（--pl-1…6：薰衣草、玫瑰、青、珊瑚、暖石、橄榄），色相避开电脑蓝、手机琥珀、说话绿，按地名固定分配（app.js placeTones） */
+   地点 6 种淡色（--pl-1…6：薰衣草、玫瑰、青、珊瑚、暖石、橄榄），色相避开电脑蓝、手机琥珀、说话绿，按地名固定分配（app.js placeTones）
+   每种淡色配一档同色相的实色（--pl-N-s，路上、其他地方是 --rec-go-s）：淡色只作带文字的底，细条和色块边用实色，
+   和轨道、页底的对比不低于 3:1（WCAG 1.4.11，2026-10-30） */
 :root {
   --rec-computer: #2a78d6; --rec-phone: #fab219; --rec-night: #d03b3b; --rec-track: #efefed;
   --rec-watch: #26a269; --rec-place: #dededb; --rec-place-alt: #cbcac6;
   --rec-go: #cbcac6;
   --pl-1: #dcd5f6; --pl-2: #f4d5de; --pl-3: #cfe8ea; --pl-4: #f3d9cc; --pl-5: #e7ddd2; --pl-6: #e2e8c8;
+  --pl-1-s: #8a7dd6; --pl-2-s: #c25e7d; --pl-3-s: #3a8c92; --pl-4-s: #c26d4a; --pl-5-s: #94806a; --pl-6-s: #7a873a; --rec-go-s: #8b8a85;
   --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23f2c744' fill-opacity='0.7' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E");
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
     --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c;
+    --pl-1-s: #8a80d0; --pl-2-s: #c9708a; --pl-3-s: #4f9ea3; --pl-4-s: #c97d5c; --pl-5-s: #9e8b76; --pl-6-s: #8f9b4e; --rec-go-s: #7a7973;
     --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23a8842a' fill-opacity='0.55' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E"); }
 }
 :root[data-theme="dark"] { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
   --rec-go: #4b4b49; --pl-1: #3f3868; --pl-2: #5c3444; --pl-3: #285152; --pl-4: #5e3e30; --pl-5: #4d4238; --pl-6: #46502c;
+    --pl-1-s: #8a80d0; --pl-2-s: #c9708a; --pl-3-s: #4f9ea3; --pl-4-s: #c97d5c; --pl-5-s: #9e8b76; --pl-6-s: #8f9b4e; --rec-go-s: #7a7973;
   --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23a8842a' fill-opacity='0.55' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E"); }
 
 /* ---------- 壳：侧栏＋正文，没有顶栏 ---------- */
@@ -49,17 +54,26 @@ body { padding: 0; overflow: hidden; }
 .form { max-width: var(--form-width); }
 .note { font-size: 13px; line-height: 17px; color: var(--ink-3); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.mx-sec-head h3 { font-size: 15px; }
+.mx-sec-head h2 { font-size: 15px; }
 .mx-empty-inline { margin: 0; }
 /* 今天页「全面」：段与段之间只靠留白，不画分割线（2026-10-29 起；墨线这里是留白加细线） */
 .secs-plain > .mx-sec + .mx-sec { margin-top: var(--space-7); padding-top: 0; border-top: 0; }
 .mx-confirm { margin-bottom: var(--space-5); }
+
+/* 键盘焦点：墨线只给自己的组件配了焦点框，这里补上页面自己的按钮、链接、可聚焦元素，不留浏览器默认的（会是系统强调色） */
+:where(button, a[href], summary, [tabindex], [role="button"]):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* 一天的形状里的格子挨得紧，焦点框画在格子上面 */
+.strip-wrap [role="button"]:focus-visible { outline-offset: 0; position: relative; z-index: 1; }
+.place-bar i[role="button"]:focus-visible { position: absolute; }
 
 /* ---------- Readout 读数（人生记录） ---------- */
 .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-5); }
 .ro .label { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--ink-3); }
 .ro .v { font: 500 30px/34px var(--font-sans); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; margin: var(--space-1) 0; }
 .ro .v small { font: 400 13px/20px var(--font-sans); color: var(--ink-3); margin-left: var(--space-1); }
+.ro.none .v { color: var(--ink-4); }
+/* 只给读屏念的字 */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .ro.over .v { color: var(--rec-night); }
 
 /* ---------- DayStrip 一天的形状、Actogram 作息图（人生记录） ---------- */
@@ -72,9 +86,10 @@ body { padding: 0; overflow: hidden; }
 .strip span.fut { background: transparent; box-shadow: inset 0 0 0 1px var(--rec-track); }
 /* 地点：一整条，底色是轨道，每段停留按起止画在上面，颜色跟着地方走；两段之间的路上是灰色块 */
 .place-bar { position: relative; height: 22px; border-radius: 2px; background: var(--rec-track); }
-.place-bar i { position: absolute; top: 0; bottom: 0; box-sizing: border-box; padding: 0 6px; border-radius: 2px; font: 11px/22px var(--font-sans); font-style: normal; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.place-bar i { position: absolute; top: 0; bottom: 0; box-sizing: border-box; padding: 0 6px; border-radius: 2px; font: 11px/22px var(--font-sans); font-style: normal; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  box-shadow: inset 0 -3px 0 var(--edge, transparent); }  /* 淡色底上压一道实色边（--edge＝那个地方的 --pl-N-s），细段也认得出颜色 */
 .place-bar i:hover { outline: 1px solid var(--ink-4); outline-offset: -1px; }
-.place-bar i.go { background: var(--rec-go); color: var(--ink-3); }
+.place-bar i.go { background: var(--rec-go); color: var(--ink-3); --edge: var(--rec-go-s); }
 /* 最近 14 天（照 Wise 支出洞察）：每天两根柱子，看的这一天实色、其他天淡 */
 .rd { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); column-gap: var(--space-1); }
 .rd-col { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); padding: var(--space-1) 0 0; border: 0; border-radius: var(--radius-sm); background: none; font: inherit; color: inherit; cursor: pointer; }
@@ -87,7 +102,7 @@ body { padding: 0; overflow: hidden; }
 .rd-col.is-cur .rd-bars i { opacity: 1; }
 .rd-d { font-size: 11px; line-height: 16px; color: var(--ink-4); text-align: center; font-variant-numeric: tabular-nums; }
 .rd-col.is-cur .rd-d { color: var(--ink); font-weight: 600; }
-.rd-col.none .rd-d { opacity: 0.5; }
+.rd-col.none:disabled .rd-d { opacity: 0.5; }  /* 只淡掉点不了的；今天还能点，字不淡 */
 .strip-axis { margin-top: var(--space-1); font: 11px/16px var(--font-mono); color: var(--ink-4); }
 /* 一天的形状的钟点：每 3 小时一个，写成 03:00，左对齐那个小时格的左边（不画刻度线） */
 .strip-axis { margin-top: var(--space-1); font-size: 12px; color: var(--ink-3); }
@@ -119,8 +134,8 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .utts .who.self { color: var(--ink); font-weight: 500; }
 /* 去了哪：上面按地点合计的条，下面一个停留一行（点了起名） */
 .pl-bars { margin-bottom: var(--space-4); }
-.bar i.pl { background: var(--rec-place-alt); }
-.bar i.go { background: var(--rec-go); }
+.bar i.pl { background: var(--rec-go-s); }
+.bar i.go { background: var(--rec-go-s); }
 .bar i.none { background: var(--line); }
 .bar-name.dim { color: var(--ink-4); }
 .visits { display: flex; flex-direction: column; }
@@ -170,13 +185,13 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .tl-place { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline; padding: var(--space-5) 12px 6px; border-bottom: 1px solid var(--line); }
 .tl-place .t, .tl-place .d { font: 12px/20px var(--font-mono); color: var(--ink-4); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tl-place .n { font-size: 15px; line-height: 20px; font-weight: 600; }
-.tl-place .n i { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-2); border-radius: 2px; background: var(--rec-place-alt); vertical-align: -1px; }
+.tl-place .n i { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-2); border-radius: 2px; background: var(--rec-go-s); vertical-align: -1px; }
 .tl-place.gap .n { font-size: 13px; font-weight: 400; color: var(--ink-4); }
 .tl > .tl-place:first-child { padding-top: var(--space-2); }
 .tl-row .chev { margin-top: 2px; color: var(--ink-4); transition: transform .15s; }
 .tl-row[open] > summary .chev { transform: rotate(90deg); }
 .tl-row .more { padding: 0 12px var(--space-4) calc(92px + 36px); display: flex; flex-direction: column; gap: var(--space-4); }
-.tl-row .more h4 { margin: 0 0 var(--space-2); font-size: 12px; line-height: 17px; font-weight: 400; color: var(--ink-4); }
+.tl-row .more .more-k { margin: 0 0 var(--space-2); font-size: 12px; line-height: 17px; font-weight: 400; color: var(--ink-4); }
 .tl-row.flash { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: var(--hover); } to { background: transparent; } }
 .apps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -233,7 +248,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .story > .lg-row + .lg-row { margin-top: var(--space-6); }
 .secs-plain > .story + .mx-sec { margin-top: var(--space-7); }
 .lg-k { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-2); }
-.lg-k h3 { margin: 0; font: 400 17px/26px var(--font-serif); letter-spacing: 0.04em; color: var(--ink); }
+.lg-k h2 { margin: 0; font: 400 17px/26px var(--font-serif); letter-spacing: 0.04em; color: var(--ink); }
 .lg-k span { font-size: 12px; line-height: 18px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
 .lg-list { list-style: none; margin: 0; padding: 0; max-width: 42em; font-size: 14px; line-height: 26px; color: var(--ink-2); }
 .lg-list li { position: relative; padding-left: 18px; }
@@ -347,7 +362,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 
 /* ---------- 时间花在哪：两列横条 ---------- */
 .work { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
-.work h4 { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 400; color: var(--ink-4); }
+.work h3 { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 400; color: var(--ink-4); }
 .bars { display: flex; flex-direction: column; gap: 6px; }
 .bar-row { display: grid; grid-template-columns: 112px 1fr 40px 32px; gap: var(--space-2); align-items: center; padding: 2px 0; font-size: 13px; line-height: 20px; }
 button.bar-row { width: 100%; margin: 0; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -395,7 +410,10 @@ a.mx-btn { text-decoration: none; }
 .pj + .mx-field-error { margin-top: var(--space-2); }
 .ac-msg { margin: var(--space-3) 0 0; }
 .mx-setting > .profile { flex: 1; min-width: 0; }
-.gen-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+/* 还没有总结：墨线的空状态底占满一行，说明在左、「现在生成」在右（说明单独缩成一块时像一条弹出的通知） */
+.gen-empty { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); padding: 12px 16px; border-radius: var(--radius-lg); background: var(--sunken); }
+.gen-empty .mx-empty-inline { padding: 0; background: none; }
+.gen-empty .mx-field-error { flex-basis: 100%; }
 /* 总结末尾：口径说明＋「重新生成」，一行小字，不抢正文 */
 .sum-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-4) 0 0; }
 .secs-plain > .sum-foot + .mx-sec { margin-top: var(--space-7); }
@@ -575,10 +593,10 @@ a.mx-btn { text-decoration: none; }
 .pm-list { max-height: calc(100vh - 230px); overflow-y: auto; }
 .pl-live { width: 100%; min-height: 420px; border-radius: var(--radius-lg); overflow: hidden; background: var(--rec-track); }
 .pl-live > .note { padding: var(--space-4); margin: 0; }
-.lm-pin { width: 26px; height: 26px; border-radius: 999px; border: 2px solid #fff; background: #E3E6E8; color: #0b0b0b; font: 600 12px/22px var(--font-mono); text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.35); box-sizing: border-box; cursor: pointer; }
-.lm-pin.often { background: #B3BAC0; }
-.lm-pin.now { background: #0b0b0b; color: #fff; }
-.lm-pin.sel { background: #6DA7EC; color: #0b0b0b; transform: scale(1.2); }
+.lm-pin { width: 26px; height: 26px; border-radius: 999px; border: 2px solid var(--surface); background: color-mix(in srgb, var(--ink) 12%, var(--surface)); color: var(--ink); font: 600 12px/22px var(--font-mono); text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.35); box-sizing: border-box; cursor: pointer; }
+.lm-pin.often { background: color-mix(in srgb, var(--ink) 30%, var(--surface)); }
+.lm-pin.now { background: var(--primary); color: var(--on-primary); }
+.lm-pin.sel { background: var(--accent-ink); color: var(--on-primary); transform: scale(1.2); }  /* 颜色都取墨线令牌，跟着深浅色走 */
 
 /* 一段停留认定了好几家：认定的候选打 ✓、实线墨色，再点取消 */
 .ptl-guess button.on { color: var(--ink); border-bottom: 1px solid var(--ink-3); }
@@ -590,8 +608,9 @@ a.mx-btn { text-decoration: none; }
 .lm-card-m { color: var(--ink-3); font: 12px/18px var(--font-mono); }
 .lm-card-s { color: var(--ink-2); font-size: 12px; }
 
-/* ---------- 手机（宽 760 以下，也就是 iPhone 版）：同一套界面，侧栏变成底部页签，正文铺满 ---------- */
-@media (max-width: 760px) {
+/* ---------- 手机（宽不到 760，也就是 iPhone 版）：同一套界面，侧栏变成底部页签，正文铺满。
+   电脑窗口最窄就是 760（main.rs min_inner_size），所以断点写 759，电脑版缩到最窄仍是侧栏布局 ---------- */
+@media (max-width: 759px) {
   html, body { background: var(--page); }
   body { overflow: auto; }
   .shell { display: block; height: auto; }

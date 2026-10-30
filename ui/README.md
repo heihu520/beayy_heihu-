@@ -1,13 +1,13 @@
 # Beayy 网页界面（app/ui）
 
-Tauri 2 外壳加载的网页：今天、日总结、规矩、设置四页。纯 HTML＋CSS＋原生 JS，不用打包工具，入口 `index.html`。
+Tauri 2 外壳加载的网页：今天、总结、规矩、设备四页，加上从左下角账号菜单进的设置。纯 HTML＋CSS＋原生 JS，不用打包工具，入口 `index.html`。iPhone 版用同一套（宽不到 760 时侧栏变底部页签）。
 
 ## 文件
 
 | 文件 | 内容 |
 |---|---|
-| `index.html` | 壳：侧栏（品牌、四个入口、最近 12 天、记录状态）＋正文 |
-| `app.js` | 取数、路由（`#/today`、`#/summary/YYYY-MM-DD`、`#/rules`、`#/settings`）、四页 |
+| `index.html` | 壳：侧栏（四个入口，左下角账号菜单：设置、暂停记录、设备与同步、打开数据目录、退出；记录状态写在名字后面）＋正文 |
+| `app.js` | 取数、路由（`#/today[/YYYY-MM-DD]`、`#/summary[/week｜month]/YYYY-MM-DD`、`#/rules`、`#/devices`、`#/settings`）、各页 |
 | `style.css` | 壳的布局、作息图／一天的形状／读数（设计系统「人生记录」；读数数字 10-29 起用苹方加等宽数字，不用等宽字体，取自 `网站/static/`，变量加 `rec-` 前缀）、页面专用的几样 |
 | `vendor/moxian/` | 墨线的 `tokens.css`（由 tokens.json 生成）和 `bundle.css`（原样拷贝），不要手改 |
 | `tools/同步墨线.py` | 墨线改了就跑一次：`python3 app/ui/tools/同步墨线.py` |
@@ -43,3 +43,20 @@ python3 -m http.server 8767 --directory "app/ui"
 ```
 
 打开 http://localhost:8767 ，或直接双击 `index.html`。
+
+## 界面检查（impeccable）
+
+用 [impeccable](https://github.com/pbakaus/impeccable) 的 `audit` 查：无障碍、性能、主题、适配、实现一致性五项各 0–4 分。2026-10-30 修完一轮后检测器 0 条（源码和渲染后 7 个页面）。
+
+```bash
+~/.claude/skills/impeccable/scripts/impeccable detect --json app/ui/index.html app/ui/app.js app/ui/style.css
+~/.claude/skills/impeccable/scripts/impeccable detect --json "http://localhost:8767/#/today"
+```
+
+守住的几条：
+
+- 文字对比度 ≥ 4.5:1：墨线 `ink-4` 浅色是 `#75746e`，别再用更浅的灰写字；弱信息靠字号区分。
+- 地点淡色（`--pl-N`）只作带文字的底，细条和色块边用同色相实色 `--pl-N-s`（≥ 3:1）。
+- 手机断点是 `max-width: 759px`（style.css 和 app.js 的 `NARROW` 两处），电脑窗口最窄 760，别让两者碰上。
+- 页面标题 `h1`，区块标题 `h2`（`section()`、总结的段名），区块里的小标题 `h3`。
+- 能点的东西用 `<button>`；一天的形状这种一排格子用 `role="toolbar"`＋方向键（`bindStripKeys`），整条只占一个 Tab。

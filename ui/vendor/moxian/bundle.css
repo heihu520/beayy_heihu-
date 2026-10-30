@@ -71,7 +71,7 @@ body { margin: 0; padding: 16px; }
 /* 一段内容 */
 .mx-sec + .mx-sec { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--line); }
 .mx-sec-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); }
-.mx-sec-head h3 { margin: 0; font: 600 15px/20px var(--font-sans); }
+.mx-sec-head :is(h2, h3) { margin: 0; font: 600 15px/20px var(--font-sans); }
 .mx-count { min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: var(--radius-pill); background: var(--selected); font: 500 11px/18px var(--font-sans); text-align: center; color: var(--ink-2); }
 .mx-sec-aside { margin-left: auto; font-size: 13px; color: var(--ink-3); }
 .mx-sec-aside a { color: var(--accent-ink); text-decoration: none; }

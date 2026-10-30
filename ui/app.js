@@ -168,7 +168,7 @@ function story(parts) {
   const row = (p) => {
     const items = p.body.split("\n").map((l) => l.trim().match(/^[-*]\s+(.*)/)).filter(Boolean).map((m) => m[1]);
     const body = items.length ? `<ul class="lg-list">${items.map((t) => `<li>${mdInline(t)}</li>`).join("")}</ul>` : md(p.body);
-    return `<section class="lg-row"><div class="lg-k"><h3>${esc(p.title)}</h3>${items.length ? `<span>${items.length} 项</span>` : ""}</div>${body}</section>`;
+    return `<section class="lg-row"><div class="lg-k"><h2>${esc(p.title)}</h2>${items.length ? `<span>${items.length} 项</span>` : ""}</div>${body}</section>`;
   };
   return `<div class="story">${parts.map(row).join("")}</div>`;
 }
@@ -200,7 +200,7 @@ function header(title, right = "") {
   return `<header class="mx-head"><div class="mx-head-row" data-tauri-drag-region><h1 class="mx-title">${esc(title)}</h1><div class="mx-head-right">${right}</div></div></header>`;
 }
 const section = (title, body, { count, aside } = {}) =>
-  `<section class="mx-sec"><div class="mx-sec-head"><h3>${esc(title)}</h3>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
+  `<section class="mx-sec"><div class="mx-sec-head"><h2>${esc(title)}</h2>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
 const emptyInline = (text) => `<p class="mx-empty-inline">${esc(text)}</p>`;
 /** 「怎么设置」链接（墨线文案：要分步骤的设置，界面一句话＋这个链接，步骤在弹层里） */
 const howto = (kind, text) => `<button type="button" class="howto" data-howto="${kind}">${esc(text)}</button>`;
@@ -314,7 +314,9 @@ const shade = (min, v) => (min ? `background:color-mix(in srgb, var(${v}) ${Math
  *  （三行太累赘；墨线：读数不配解释文字，要解释放悬停） */
 function readout(k, v, unit, caption = "", over = false, tip = "") {
   const hint = [caption, tip].filter(Boolean).join("\n");
-  return `<div class="ro${over ? " over" : ""}"${hint ? ` title="${esc(hint)}"` : ""}><div class="label">${esc(k)}</div><div class="v">${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}</div></div>`;
+  // 没有数（「—」）不跟单位：「— h」像坏了；读屏念「没有数据」
+  const none = v === "—" || v == null;
+  return `<div class="ro${over ? " over" : ""}${none ? " none" : ""}"${hint ? ` title="${esc(hint)}"` : ""}><div class="label">${esc(k)}</div><div class="v">${none ? `<span aria-hidden="true">—</span><span class="sr-only">没有数据</span>` : `${esc(v)}${unit ? `<small>${esc(unit)}</small>` : ""}`}</div></div>`;
 }
 
 /** 一天的形状。只给电脑、手机两排时照旧（上排电脑、下排手机）；给了 opt（手表说话的分钟数 hw、停留点 visits、日期 date）
@@ -324,9 +326,12 @@ function readout(k, v, unit, caption = "", over = false, tip = "") {
 function dayStrip(hc, hp, clickable = false, opt = null) {
   const day0 = opt && opt.date ? toDate(opt.date).getTime() : 0, now = Date.now(), today = opt && now >= day0 && now < day0 + 864e5;
   const futH = today ? new Date(now).getHours() : 24;
-  const cells = (arr, v, name, unit = "分钟") => arr.map((m, h) => `<span${h > futH ? ' class="fut"' : ""} style="${shade(m, v)}" title="${h}:00 ${name} ${m} ${unit}"${clickable ? ` data-h="${h}"` : ""}></span>`).join("");
+  // 能点时每格、每段都是按钮：Tab 只停在整条上一次，方向键换格，回车看那个小时的时间线（bindStripKeys）
+  const act = (tip) => (clickable ? ` role="button" tabindex="-1" aria-label="${esc(tip)}，看这个小时的时间线"` : "");
+  const cells = (arr, v, name, unit = "分钟") => arr.map((m, h) => `<span${h > futH ? ' class="fut"' : ""} style="${shade(m, v)}" title="${h}:00 ${name} ${m} ${unit}"${clickable ? ` data-h="${h}"` : ""}${act(`${h}:00 ${name} ${m} ${unit}`)}></span>`).join("");
+  const wrap = (label, body) => (clickable ? `<div class="strip-wrap" role="toolbar" aria-label="${label}。方向键换格，回车看那个小时的时间线">${body}</div>` : `<div role="img" aria-label="${label}">${body}</div>`);
   const axis = (n) => `<div class="strip-axis" aria-hidden="true">${Array.from({ length: n }, (_, h) => (h % 3 ? "<span></span>" : `<span class="t">${pad2(h)}<small>:00</small></span>`)).join("")}</div>`;
-  if (!opt) return `<div role="img" aria-label="一天的形状：上排电脑，下排手机"><div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>${axis(24)}</div>`;
+  if (!opt) return wrap("一天的形状：上排电脑，下排手机", `<div class="strip">${cells(hc, "--rec-computer", "电脑")}${cells(hp, "--rec-phone", "手机")}</div>${axis(24)}`);
   const frac = (ms) => Math.max(0, Math.min(1, (ms - day0) / 864e5));
   // 地点：一整条，每段停留按起止画，颜色跟着地方走（同 placeTones，和下面「地点」列表一个颜色）；
   // 够宽的写地名，窄的只在悬停里有；两段之间的路上是灰色块
@@ -334,17 +339,17 @@ function dayStrip(hc, hp, clickable = false, opt = null) {
     const tones = placeTones(opt.visits, opt.date);
     const pos = (a, z) => `left:${(frac(a) * 100).toFixed(3)}%;width:${(Math.max(frac(z) - frac(a), 0.002) * 100).toFixed(3)}%`;
     const bars = placeBlocks(opt.visits, opt.date).map((b) => {
-      if (b.kind === "go") return `<i class="go" style="${pos(b.a, b.z)}" title="路上 ${hmMs(b.a)}–${hmMs(b.z)} ${spanText((b.z - b.a) / 1000)}"${clickable ? ` data-h="${new Date(Math.max(b.a, day0)).getHours()}"` : ""}>${(b.z - b.a) / 3600e3 >= 1.2 ? "路上" : ""}</i>`;
+      if (b.kind === "go") return `<i class="go" style="${pos(b.a, b.z)}" title="路上 ${hmMs(b.a)}–${hmMs(b.z)} ${spanText((b.z - b.a) / 1000)}"${clickable ? ` data-h="${new Date(Math.max(b.a, day0)).getHours()}"` : ""}${act(`路上 ${hmMs(b.a)}–${hmMs(b.z)} ${spanText((b.z - b.a) / 1000)}`)}>${(b.z - b.a) / 3600e3 >= 1.2 ? "路上" : ""}</i>`;
       if (b.kind !== "stay") return "";
       const name = placeName(b.v), wide = (b.z - b.a) / 3600e3 >= 1.2;
-      return `<i style="${pos(b.a, b.z)};background:var(--pl-${tones.get(placeKey(b.v))})" title="${esc(name)} ${visitSpan(b.v)}"${clickable ? ` data-h="${new Date(Math.max(b.a, day0)).getHours()}"` : ""}>${wide ? esc(name) : ""}</i>`;
+      return `<i style="${pos(b.a, b.z)};background:var(--pl-${tones.get(placeKey(b.v))});--edge:var(--pl-${tones.get(placeKey(b.v))}-s)" title="${esc(name)} ${visitSpan(b.v)}"${clickable ? ` data-h="${new Date(Math.max(b.a, day0)).getHours()}"` : ""}${act(`${name} ${visitSpan(b.v)}`)}>${wide ? esc(name) : ""}</i>`;
     }).join("");
     return `<div class="place-bar">${bars}</div>`;
   };
   // 睡眠：苹果健康（多是手表记的，颜色跟手表），深睡最深、核心次之、快速眼动浅，醒着留空
   const sleepRow = () => `<div class="place-bar sleep-bar">${opt.sleep.map((b) => {
     const a = Date.parse(b.start), z = Date.parse(b.end), k = SLEEP_STAGE[b.stage] || SLEEP_STAGE.asleep;
-    return `<i style="left:${(frac(a) * 100).toFixed(3)}%;width:${(Math.max(frac(z) - frac(a), 0.002) * 100).toFixed(3)}%;${k[1] ? `background:color-mix(in srgb, var(--rec-watch) ${k[1]}%, var(--rec-track))` : "background:transparent"}" title="${k[0]} ${hm(b.start)}–${hm(b.end)}"${clickable ? ` data-h="${new Date(Math.max(a, day0)).getHours()}"` : ""}></i>`;
+    return `<i style="left:${(frac(a) * 100).toFixed(3)}%;width:${(Math.max(frac(z) - frac(a), 0.002) * 100).toFixed(3)}%;${k[1] ? `background:color-mix(in srgb, var(--rec-watch) ${k[1]}%, var(--rec-track))` : "background:transparent"}" title="${k[0]} ${hm(b.start)}–${hm(b.end)}"${clickable ? ` data-h="${new Date(Math.max(a, day0)).getHours()}"` : ""}${act(`${k[0]} ${hm(b.start)}–${hm(b.end)}`)}></i>`;
   }).join("")}</div>`;
   const rows = [];
   if (opt.visits && opt.visits.length) rows.push(["地点", placeRow()]);
@@ -353,7 +358,33 @@ function dayStrip(hc, hp, clickable = false, opt = null) {
   rows.push(["手机", `<div class="strip">${cells(hp, "--rec-phone", "手机")}</div>`]);
   // 说话：手表录的，和没戴手表时 iPhone 自己录的，合在一排
   if (opt.hw) rows.push(["说话", `<div class="strip">${cells(opt.hw, "--rec-watch", "说话")}</div>`]);
-  return `<div role="img" aria-label="一天的形状：${rows.map((r) => r[0]).join("、")}各一排"><div class="strip-rows">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div></div>`;
+  return wrap(`一天的形状：${rows.map((r) => r[0]).join("、")}各一排`, `<div class="strip-rows">${rows.map(([k, v, c]) => `<span class="k${c ? " " + c : ""}">${k}</span>${v}`).join("")}<span></span>${axis(24)}</div>`);
+}
+
+/** 一天的形状能点时的键盘：整条只占一个 Tab 停靠点（停在上次的格子），←→ 换格、↑↓ 跳到上下一排的同一时刻、Home/End 到头尾，回车或空格＝点 */
+function bindStripKeys(root, go) {
+  for (const box of root.querySelectorAll(".strip-wrap")) {
+    const items = [...box.querySelectorAll("[data-h][role=button]")];
+    if (!items.length) continue;
+    items[0].tabIndex = 0;
+    const rows = [...new Set(items.map((x) => x.parentElement))];
+    const move = (to) => { if (!to) return; items.forEach((x) => (x.tabIndex = -1)); to.tabIndex = 0; to.focus(); };
+    box.onkeydown = (e) => {
+      const i = items.indexOf(document.activeElement); if (i < 0) return;
+      const cur = items[i], k = e.key;
+      if (k === "Enter" || k === " ") { e.preventDefault(); go(+cur.dataset.h); return; }
+      let to = null;
+      if (k === "ArrowRight") to = items[i + 1];
+      else if (k === "ArrowLeft") to = items[i - 1];
+      else if (k === "Home") to = items[0];
+      else if (k === "End") to = items[items.length - 1];
+      else if (k === "ArrowDown" || k === "ArrowUp") {
+        const r = rows[rows.indexOf(cur.parentElement) + (k === "ArrowDown" ? 1 : -1)];
+        if (r) { const xs = items.filter((x) => x.parentElement === r); to = xs.find((x) => +x.dataset.h >= +cur.dataset.h) || xs[xs.length - 1]; }
+      } else return;
+      e.preventDefault(); move(to);
+    };
+  }
 }
 
 // ---------- 苹果健康（iPhone 传来，电脑汇总：health.rs） ----------
@@ -401,7 +432,7 @@ function recentDays(date, cur) {
   const bar = (sec, cls) => `<i class="${cls}" style="height:${sec ? Math.max(2, Math.round((sec / max) * 100)) : 0}%"></i>`;
   const cols = ds.map((x) => {
     const v = by[x], ok = has(x), tip = ok ? `${short(x)} · 电脑 ${hh(v.active_sec)}h · 手机 ${hh(v.phone_sec)}h` : `${short(x)} · 取不到`;
-    return `<button class="rd-col${x === date ? " is-cur" : ""}${ok ? "" : " none"}" ${ok || x === now ? `data-day="${x}"` : "disabled"} title="${esc(tip)}"><span class="rd-bars">${ok ? bar(v.active_sec, "c") + bar(v.phone_sec, "p") : ""}</span><span class="rd-d mono">${x === now ? "今" : +x.slice(8)}</span></button>`;
+    return `<button class="rd-col${x === date ? " is-cur" : ""}${ok ? "" : " none"}" ${ok || x === now ? `data-day="${x}"` : "disabled"} title="${esc(tip)}" aria-label="${esc(tip)}"${x === date ? ' aria-current="date"' : ""}><span class="rd-bars">${ok ? bar(v.active_sec, "c") + bar(v.phone_sec, "p") : ""}</span><span class="rd-d mono">${x === now ? "今" : +x.slice(8)}</span></button>`;
   }).join("");
   return section("最近", `<div class="rd" role="group" aria-label="最近 14 天每天在电脑前和用手机的时长">${cols}</div>`);
 }
@@ -441,7 +472,10 @@ const placeName = (v) => {
   // 和家不在一个城市：前面写城市（「上海 · 静安寺」）
   return v.city_prefix ? `${String(v.city_prefix).replace(/市$/, "")} · ${n}` : n;
 };
-const visitEnd = (v) => (v.end ? Date.parse(v.end) : Date.now());
+/** 停留按天切开（跨天来的 start 是当天 0 点），还没走的只算到现在、最多到当天结束：翻看过去的日子不会出现超过 24 小时 */
+const dayEndOf = (v) => { const d = new Date(v.start); d.setHours(24, 0, 0, 0); return d.getTime(); };
+const ongoing = (v) => !v.end && Date.now() < dayEndOf(v);
+const visitEnd = (v) => (v.end ? Date.parse(v.end) : Math.min(Date.now(), dayEndOf(v)));
 const pctText = (p) => `${Math.max(1, Math.round(p * 100))}%`;
 /** 店名去掉括号里的分店名：「星巴克(某某广场店)」→「星巴克」（同手机） */
 const shopShort = (n) => String(n || "").replace(/^(.+?)\s*[（(][^（()）]*[)）]$/, "$1").trim();
@@ -473,14 +507,14 @@ const badgeHtml = (v) => { const b = badgeOf(v); return b ? `<span class="pl-bad
 /** 地图上停留点的编号：1–9、A–Z（同高德静态地图的标注） */
 const MARKS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const hmMs = (ms) => hm(new Date(ms).toISOString());
-/** 停留的起止：从前一天待过来的写真实到达时刻（「昨天 22:10」），还没走的写「现在」 */
+/** 停留的起止：从前一天待过来的写真实到达时刻（「昨天 22:10」），还没走的写「现在」，那天已经过完的写到「24:00」 */
 function visitSpan(v) {
   let a = hm(v.start);
   if (!v.arrive_known && v.arrive) {
     const t = new Date(v.arrive), y = new Date(Date.parse(v.start) - 864e5);
     a = (localDay(t) === localDay(y) ? "昨天 " : `${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} `) + hm(v.arrive);
   }
-  return `${a}–${v.end ? hm(v.end) : "现在"}`;
+  return `${a}–${v.end ? hm(v.end) : ongoing(v) ? "现在" : "24:00"}`;
 }
 const spanText = (sec) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} 分钟` : `${hh(sec)}h`);
 
@@ -610,7 +644,7 @@ function placeTotalsDays(days) {
   if (none) rows.push({ n: "没记到", sec: none, c: "none" });
   const max = Math.max(...rows.map((r) => r.sec), 1), all = rows.reduce((a, r) => a + r.sec, 0) || 1;
   const pct = (sec) => { const p = (sec / all) * 100; return p < 1 ? "<1%" : Math.round(p) + "%"; };
-  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-name${r.c === "pl" && !r.other ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%${r.tone ? `;background:var(--pl-${r.tone})` : ""}"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
+  const bars = `<div class="bars pl-bars">${rows.map((r) => `<div class="bar-row"><span class="bar-name${r.c === "pl" && !r.other ? "" : " dim"}" title="${esc(r.n)}">${esc(r.n)}</span><span class="bar"><i class="${r.c}" style="width:${Math.max(2, Math.round((r.sec / max) * 100))}%${r.tone ? `;background:var(--pl-${r.tone}-s)` : ""}"></i></span><span class="bar-v mono">${r.sec < 3600 ? Math.round(r.sec / 60) + "m" : hh(r.sec) + "h"}</span><span class="bar-p mono">${pct(r.sec)}</span></div>`).join("")}</div>`;
   return section("地点", bars);
 }
 
@@ -635,7 +669,7 @@ function stayItem(v, i, convs) {
   const guess = !v.label && v.confirmed !== "phone" && chips.length
     ? `<div class="ptl-guess">${shops.length ? "还去了？" : "是哪家？"}${chips.map((g) => { const on = shops.includes(g.name); return `<button class="${on ? "on" : ""}" data-chip="${i}" data-shop="${esc(g.name)}" aria-pressed="${on}" title="${esc(on ? `${shopShort(g.name)}：认定过，再点取消` : g.p != null ? pct(g) : shopShort(g.name))}">${on ? ICON.check : ""}${esc(shopShort(g.name))}${g.p != null ? `<span class="p">${pctText(g.p)}</span>` : ""}</button>`; }).join("")}<button class="other" data-edit="${i}">其他…</button></div>` : "";
   const talk = convs.length ? `<details class="ptl-talk"><summary>说话 ${convs.length} 段 · ${talkText(convs.reduce((a, c) => a + (c.talk || []).reduce((x, t) => x + t.sec, 0), 0))}</summary><div class="tl">${convs.map((c) => convRow(c, "", `<span class="t">${hm(c.start)}</span>`)).join("")}</div></details>` : "";
-  return `<li class="ptl-stay${v.end ? "" : " now"}" data-sel="${i}"><span class="ptl-t mono">${v.arrive_known === false && v.arrive ? "昨天" : hm(v.start)}</span><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>
+  return `<li class="ptl-stay${ongoing(v) ? " now" : ""}" data-sel="${i}"><span class="ptl-t mono">${v.arrive_known === false && v.arrive ? "昨天" : hm(v.start)}</span><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>
     <div class="ptl-b"><div class="ptl-name"><span title="${esc(chainOf(v))}">${esc(placeName(v))}</span>${likely}${badgeHtml(v)}${ok ? `<span class="ok" title="${v.confirmed === "phone" ? "在手机上认定的" : "你认定的"}">${ICON.check}</span>` : ""}</div>
       <div class="ptl-meta">${esc(meta.join(" · "))}</div>${guess}${talk}</div>
     <div class="ptl-act"><button class="mx-iconbtn" data-edit="${i}" aria-label="改地点" title="改地点">${ICON.more}</button></div></li>`;
@@ -834,7 +868,7 @@ function toggleMe(open) {
 }
 
 /** 手机（窄屏、iPhone 版）：左下角菜单变成底部页签里的「我的」，点了直接进设置 */
-const NARROW = window.matchMedia("(max-width: 760px)");
+const NARROW = window.matchMedia("(max-width: 759px)");  // 和 style.css 的手机断点一致
 NARROW.addEventListener("change", () => { if (S.status) renderSide(); });
 document.getElementById("me").onclick = (e) => { e.stopPropagation(); if (NARROW.matches) { location.hash = "#/settings"; return; } toggleMe(); };
 document.getElementById("me-menu").onclick = async (e) => {
@@ -923,7 +957,7 @@ async function renderToday() {
       </div>
       <div class="secs-plain" style="margin-top:var(--space-6)">`
     + recentDays(today, { c: c.active_sec, p: ph ? ph.total_sec : (pack.phone || {}).total_sec })
-    + section("一天", dayStrip(hc, hp, true, { hw, visits, date: today, sleep: hl && hl.sleep_blocks }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-go)"></i>路上</span>` : ""}</div>`)
+    + section("一天", dayStrip(hc, hp, true, { hw, visits, date: today, sleep: hl && hl.sleep_blocks }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>电脑</span><span><i style="background:var(--rec-phone)"></i>手机</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>说话</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-go-s)"></i>路上</span>` : ""}</div>`)
     + placeTotals(visits, today)
     + healthSection(hl)
     + workSection(d.work) + `</div>`;
@@ -981,10 +1015,9 @@ async function renderToday() {
   }));
   if (pview === "map" && PL_SEL.date === today && PL_SEL.i != null) { const li = $app.querySelector(`[data-sel="${PL_SEL.i}"]`); if (li) li.classList.add("is-sel"); }
   // 点一天的形状里的某个小时：切到时间线，滚到那个小时
-  $app.querySelectorAll(".strip [data-h], .place-bar [data-h]").forEach((cell) => (cell.onclick = () => {
-    TL.view = "timeline"; TL.jump = +cell.dataset.h;
-    renderToday();
-  }));
+  const jumpTo = (h) => { TL.view = "timeline"; TL.jump = h; renderToday(); };
+  $app.querySelectorAll(".strip [data-h], .place-bar [data-h]").forEach((cell) => (cell.onclick = () => jumpTo(+cell.dataset.h)));
+  bindStripKeys($app, jumpTo);
   if (view === "timeline" && TL.jump != null) {
     const h = TL.jump; TL.jump = null;
     const rows = [...$app.querySelectorAll("#tl > [data-h]")];
@@ -1036,7 +1069,7 @@ function workSection(w) {
     projects.push({ name: `其他 ${more.length} 个项目`, sec: more.reduce((a, r) => a + r.sec, 0), children: more, dim: true });
   }
   if (pj.has("未归项目")) projects.push({ name: "未归项目", sec: pj.get("未归项目"), children: [], dim: true });
-  return section("时间", `<div class="work"><div><h4>项目</h4>${tree("projects", projects)}</div><div><h4>类型</h4>${tree("activities", w.activities || [])}</div></div>`);
+  return section("时间", `<div class="work"><div><h3>项目</h3>${tree("projects", projects)}</div><div><h3>类型</h3>${tree("activities", w.activities || [])}</div></div>`);
 }
 
 // 展开／收起一级：直接改这一块，不重画整页
@@ -1164,7 +1197,7 @@ function pinCard(v, i) {
   return `<div class="lm-card"><div class="lm-card-n"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span>${esc(placeName(v))}${badgeHtml(v)}</div>
     <div class="lm-card-m">${esc(visitSpan(v))} · ${esc(dur)}</div>${shop ? `<div class="lm-card-s">${esc(shop)}</div>` : ""}</div>`;
 }
-const pinHtml = (v, i, on) => `<div class="lm-pin${badgeOf(v) ? " often" : ""}${on ? " sel" : ""}${v.end ? "" : " now"}" >${MARKS[Math.min(i, MARKS.length - 1)]}</div>`;
+const pinHtml = (v, i, on) => `<div class="lm-pin${badgeOf(v) ? " often" : ""}${on ? " sel" : ""}${ongoing(v) ? " now" : ""}" >${MARKS[Math.min(i, MARKS.length - 1)]}</div>`;
 /** 地图跟窗口一样高（减去上面的标题和页签） */
 function fitLive(box) {
   const h = Math.max(420, window.innerHeight - box.getBoundingClientRect().top - 48);
@@ -1312,7 +1345,7 @@ function convRow(c, h, t) {
 }
 
 function tlRow(x) {
-  const t = `<span class="t">${hm(x.start)}–${x.end ? hm(x.end) : "现在"}</span>`;
+  const t = `<span class="t">${hm(x.start)}–${x.end ? hm(x.end) : x.visit && !ongoing(x.visit) ? "24:00" : "现在"}</span>`;
   const h = `data-h="${localHour(x.start)}"`;
   if (x.conv) return convRow(x.conv, h, t);
   if (x.visit) return `<div class="tl-row phone place" ${h}>${t}<span><span class="name">在 ${esc(x.visit.name || "没有地名的地方")}</span></span></div>`;
@@ -1328,8 +1361,8 @@ function tlRow(x) {
   if (s.kind === "idle") return `<div class="tl-row computer idle" ${h}>${t}<span>${esc(s.title)}</span></div>`;
   const ctx = (s.context || []).filter((y) => !y.includes("/Users/"));
   const more = [
-    ctx.length ? `<div><h4>涉及</h4>${md(ctx.map((y) => "- " + y).join("\n"))}</div>` : "",
-    s.recording ? `<div><h4>经过</h4>${md(s.recording)}</div>` : s.memory ? `<div><h4>经过</h4>${md(s.memory)}</div>` : "",
+    ctx.length ? `<div><p class="more-k">涉及</p>${md(ctx.map((y) => "- " + y).join("\n"))}</div>` : "",
+    s.recording ? `<div><p class="more-k">经过</p>${md(s.recording)}</div>` : s.memory ? `<div><p class="more-k">经过</p>${md(s.memory)}</div>` : "",
   ].join("");
   const tag = (s.kind === "6h" ? `<span class="mx-tag">6 小时</span>` : s.source === "codex" ? `<span class="mx-tag">Codex</span>` : "")
     + (s.device ? `<span class="mx-tag">${esc(devLabel(s.device))}</span>` : "");
@@ -1366,8 +1399,8 @@ function bindTabs(date) {
 const canWrite = () => !(S.status && S.status.mobile);
 /** 总结末尾一行：口径说明（由 Beayy 用……生成，数据截至……）＋「重新生成」 */
 const sumFoot = (note, id) => `<p class="note sum-foot">${esc(note || "")}${canWrite() ? `<button class="mx-btn mx-btn--text mx-btn--sm" id="${id}">重新生成</button>` : ""}</p>`;
-/** 还没有总结：一句说明＋「现在生成」（手机上只有说明） */
-const sumEmpty = (title, text, id, err) => section(title, `<div class="gen-empty"><p class="mx-empty-inline">${canWrite() ? text : "总结在电脑上写，写好会同步过来"}</p>
+/** 还没有总结：一句说明＋「现在生成」（手机上只有说明）。说明写清会自动写，按钮只是不想等时用，免得读成两件事 */
+const sumEmpty = (title, text, id, err) => section(title, `<div class="gen-empty"><p class="mx-empty-inline">${canWrite() ? `${text}，也可以现在生成` : "总结在电脑上写，写好会同步过来"}</p>
   ${canWrite() ? `<button class="mx-btn mx-btn--primary mx-btn--sm" id="${id}">现在生成</button>` : ""}${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`);
 /** 一句话（蜡笔横线）＋点评 */
 const sumLead = (sum, lineTitle) => {
