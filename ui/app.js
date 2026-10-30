@@ -2424,15 +2424,17 @@ async function renderSettings() {
     const official = cf.model_mode === "official", asrOfficial = cf.transcribe_server === cf.default_transcribe_server, mapOfficial = cf.map_mode === "official";
     const planPill = L.error ? pill(false, "没登录账号") : L.plan === "official" ? pill(true, "已开通") : L.plan === "stopped" ? pill(false, "已停用") : SS.llm ? pill(false, "没开通") : "";
     // 三项本月用量：用了多少 / 上限，进度条；这一项改成自己的就写「用的是自己的」
+    // 上限是负数＝这一项没开（新账号只开模型）
     const useRow = (name, u, using, fmt) => {
       const used = (u && u.used) || 0, q = (u && u.quota) || 0;
+      if (q < 0) return setRow(name, `没开通${using ? "，联系管理员或改用自己的" : " · 这一项用的是自己的"}`, "");
       const pct = q ? Math.min(100, Math.round(used / q * 100)) : 0;
       return setRow(name, `${fmt(used)} / ${q ? fmt(q) : "不限"}${using ? "" : " · 这一项用的是自己的"}<div class="usebar"><i style="width:${pct}%"${pct >= 90 ? ' class="hot"' : ""}></i></div>`, `<span class="note mono">${q ? pct + "%" : ""}</span>`);
     };
     const tokens = (n) => (n >= 1e4 ? `${numText(Math.round(n / 1e4))} 万 token` : `${numText(n)} token`);
     const minutes = (sec) => `${numText(Math.round(sec / 60))} 分钟`;
     const calls = (n) => `${numText(n)} 次`;
-    body = section("官方服务", setRow("这个账号", L.plan === "official" ? "模型、转写、地图都用官方的，不用填 Key" : L.plan === "stopped" ? "已停用，联系管理员" : L.error ? "登录后才能用" : "还没开通，联系管理员", planPill)
+    body = section("官方服务", setRow("这个账号", L.plan === "official" ? `${[["模型", L.llm], ["转写", L.asr], ["地图", L.map]].filter(([, u]) => !u || (u.quota || 0) >= 0).map(([n]) => n).join("、")}用官方的，不用填 Key` : L.plan === "stopped" ? "已停用，联系管理员" : L.error ? "登录后才能用" : "还没开通，联系管理员", planPill)
         + (L.plan === "official" ? useRow("模型", L.llm, official, tokens) + useRow("转写", L.asr, asrOfficial, minutes) + useRow("地图", L.map, mapOfficial, calls) : ""))
       + section("每一项", (official
       ? setRow("模型", "官方", `${st.mobile ? "" : smallBtn("c-usage", "用量")}${smallBtn("c-model", "设置")}`)

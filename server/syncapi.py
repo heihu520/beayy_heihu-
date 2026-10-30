@@ -41,6 +41,8 @@ MB = 1000 ** 2  # 和客户端显示一致，按十进制
 USER_QUOTA = int(float(os.environ.get("BEAYY_USER_QUOTA_MB", "0")) * MB)
 # 最多开放多少个账号（0＝不限），满了停注册
 MAX_USERS = int(os.environ.get("BEAYY_MAX_USERS", "0"))
+# 新注册的账号自动开通官方模型，每月这么多 token（0＝不自动开通，要 admin.py open）；转写、地图不跟着开
+NEW_USER_LLM = int(os.environ.get("BEAYY_NEW_USER_LLM_TOKENS", "0") or 0)
 # 硬盘剩余低于这么多（GB）就停止注册；再低到一半，连上传也停（不把同一块盘上的别的服务挤爆）
 MIN_FREE = int(float(os.environ.get("BEAYY_MIN_FREE_GB", "20")) * GB)
 # 同一个 IP 每天最多注册几个、整台服务每天最多注册几个
@@ -322,6 +324,8 @@ def quota(user: str, service: str) -> dict:
             return {"error": "这个账号的官方服务已停用", "status": 403}
         used = usage_of(c, user).get(service, 0)
         q = u[QUOTA_COL[service]] or 0
+        if q < 0:
+            return {"error": f"这个账号没开通官方{SERVICE_NAMES[service]}：联系管理员开通，或在设置里改用自己的", "status": 403}
         if q > 0 and used >= q:
             return {"error": f"本月官方{SERVICE_NAMES[service]}额度用完了，下个月 1 号恢复", "status": 429}
         return {"plan": u["llm_plan"], "used": used, "quota": q}
@@ -559,6 +563,8 @@ async def register(request: Request):
         c.execute("INSERT INTO users (user, token_hash, created, email, salt, kdf, auth_hash, wrapped_key, recovery_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (user, sha256(secrets.token_hex(32)), now_ms(), email, b["salt"], json.dumps(KDF, separators=(",", ":")),
                    sha256(b["auth"]), b["wrapped_key"], sha256(b["recovery"])))
+        if NEW_USER_LLM > 0:
+            c.execute("UPDATE users SET llm_plan = 'official', llm_quota = ?, asr_quota = -1, map_quota = -1 WHERE user = ?", (NEW_USER_LLM, user))
         count_signup(request)
         return {"user": user, **new_session(c, user, b.get("name"), b.get("device"))}
     finally:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """管理账号的官方服务（这台服务器上的模型、转写、地图）。账号要开通才拿得到转写、地图票据，才能用服务器配的模型。
   python admin.py list                                     所有账号：开通情况、上限、本月用量
-  python admin.py open <邮箱> [模型 token] [转写分钟] [地图次数]   开通，上限默认 0＝不限
+  python admin.py open <邮箱> [模型 token] [转写分钟] [地图次数]   开通，上限默认 0＝不限，-1＝这一项不开
   python admin.py stop <邮箱>                              停用
   python admin.py storage <邮箱> <MB|default>               同步空间上限：0＝不限，default＝跟 BEAYY_USER_QUOTA_MB
 Docker 里：docker compose exec -u beayy beayy-server python admin.py list
