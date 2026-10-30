@@ -14,7 +14,6 @@
   --pl-1: #dcd5f6; --pl-2: #f4d5de; --pl-3: #cfe8ea; --pl-4: #f3d9cc; --pl-5: #e7ddd2; --pl-6: #e2e8c8;
   --pl-1-s: #8a7dd6; --pl-2-s: #c25e7d; --pl-3-s: #3a8c92; --pl-4-s: #c26d4a; --pl-5-s: #94806a; --pl-6-s: #7a873a; --rec-go-s: #8b8a85;
   --crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 24' preserveAspectRatio='none'%3E%3Cfilter id='c' x='-2%25' y='-40%25' width='104%25' height='180%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9 0.3' numOctaves='2' seed='7' result='n'/%3E%3CfeDisplacementMap in='SourceGraphic' in2='n' scale='4' result='d'/%3E%3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.8 2.1' result='g'/%3E%3CfeComposite in='d' in2='g' operator='in'/%3E%3C/filter%3E%3Cpath filter='url%28%23c%29' fill='%23f2c744' fill-opacity='0.7' d='M2 9C40 7.6 90 7.2 140 7.8S210 8.4 238 7.6v14.4C200 23.2 150 22.4 100 22.8S30 23.4 2 22.2z'/%3E%3C/svg%3E");
-  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --rec-computer: #4a90e8; --rec-phone: #f5b532; --rec-night: #f06a6a; --rec-track: #262626; --rec-watch: #3ec07f; --rec-place: #3a3a39; --rec-place-alt: #4b4b49;
@@ -237,7 +236,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 /* 一句话下半截压一道蜡笔横线：颗粒、毛边，字照样看得清；折行时每行各画一道 */
 .lead .crayon { padding: 0 0.2em; margin: 0 -0.2em; background: var(--crayon) no-repeat 0 0 / 100% 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 /* 点评：一句话（引号包住）下面，宋体，读起来像一段批注：引用一行、出处小字，下面正文 */
-.remark { margin: var(--space-4) 0 0; max-width: 42em; font: 15px/28px var(--font-serif); color: var(--ink-2); }
+.remark { margin: var(--space-4) 0 0; max-width: 42em; font: 15px/26px var(--font-sans); color: var(--ink-2); }  /* 10-30 宋体改黑体：一页只有一种字 */
 .remark p { margin: 0; }
 .remark .rm-quote { color: var(--ink); font-size: 16px; }
 .remark .rm-src { margin-left: var(--space-2); font: 12px/20px var(--font-sans); color: var(--ink-4); }
@@ -248,7 +247,7 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 .story > .lg-row + .lg-row { margin-top: var(--space-6); }
 .secs-plain > .story + .mx-sec { margin-top: var(--space-7); }
 .lg-k { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-2); }
-.lg-k h2 { margin: 0; font: 400 17px/26px var(--font-serif); letter-spacing: 0.04em; color: var(--ink); }
+.lg-k h2 { margin: 0; font: 600 15px/24px var(--font-sans); color: var(--ink); }
 .lg-k span { font-size: 12px; line-height: 18px; color: var(--ink-4); font-variant-numeric: tabular-nums; }
 .lg-list { list-style: none; margin: 0; padding: 0; max-width: 42em; font-size: 14px; line-height: 26px; color: var(--ink-2); }
 .lg-list li { position: relative; padding-left: 18px; }
@@ -650,3 +649,18 @@ a.mx-btn { text-decoration: none; }
 .ub-table { margin-bottom: var(--space-3); table-layout: auto; width: 100%; }
 .ub-table td:first-child, .ub-table th:first-child { white-space: nowrap; overflow: visible; }
 .code-box code { white-space: pre-wrap; word-break: break-all; }
+
+/* 字体（设置 → 通用 → 字体）：切换两处字体、预览、搜索、列表（每个字体用它自己写名字） */
+.fp-kind { align-self: flex-start; }
+.fp-preview { padding: 12px 16px; border-radius: var(--radius-lg); background: var(--sunken); font-size: 16px; line-height: 24px; color: var(--ink); overflow-wrap: anywhere; }
+.fp-how { margin: 0; color: var(--ink-3); }
+.fp-list { display: flex; flex-direction: column; gap: 1px; height: 248px; overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.fp-item { display: flex; flex: none; align-items: center; gap: var(--space-2); width: 100%; height: var(--control-md); padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--ink); text-align: left; cursor: pointer;
+  content-visibility: auto; contain-intrinsic-size: auto 32px; }  /* 几百个字体：只画看得见的几行 */
+.fp-item:hover { background: var(--hover); }
+.fp-item[aria-checked="true"] { background: var(--selected); }
+.fp-item:focus-visible { outline-offset: -2px; }
+.fp-n { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fp-f { flex: none; max-width: 40%; font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fp-item .mx-ico { color: var(--accent-ink); }
+.fp-wait { margin: 0; padding: 8px; color: var(--ink-3); }

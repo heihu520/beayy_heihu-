@@ -19,6 +19,23 @@
   <link rel="stylesheet" href="vendor/moxian/tokens.css">
   <link rel="stylesheet" href="vendor/moxian/bundle.css">
   <link rel="stylesheet" href="style.css">
+  <script>
+    // 设置里自己选的字体（存本机 localStorage，{family, name}）：排在默认字体前面，缺的字照样退回默认（中文不会掉到宋体）。
+    // 放在样式后面：先读出令牌里的默认字体，再盖上去，免得闪一下
+    (function () {
+      const root = document.documentElement, css = getComputedStyle(root);
+      const defaults = { sans: css.getPropertyValue("--font-sans").trim(), mono: css.getPropertyValue("--font-mono").trim() };
+      const quote = (n) => '"' + String(n).replace(/["\\;{}<>]/g, "") + '"';
+      window.FONTS = {
+        defaults,
+        get(k) { try { return JSON.parse(localStorage.getItem("font-" + k)) || null; } catch (e) { return null; } },
+        set(k, f) { try { f ? localStorage.setItem("font-" + k, JSON.stringify(f)) : localStorage.removeItem("font-" + k); } catch (e) {} this.apply(); },
+        stack(k, f) { return f ? quote(f.family) + ", " + defaults[k] : defaults[k]; },
+        apply() { for (const k of ["sans", "mono"]) { const f = this.get(k); f ? root.style.setProperty("--font-" + k, this.stack(k, f)) : root.style.removeProperty("--font-" + k); } },
+      };
+      FONTS.apply();
+    })();
+  </script>
 </head>
 <body>
   <div class="shell">

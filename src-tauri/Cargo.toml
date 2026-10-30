@@ -25,3 +25,7 @@ ureq = { version = "3", default-features = false, features = ["json", "native-tl
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 设置里列系统字体（fonts.rs，GDI 枚举）；和 beayy-capture 同一版本
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }

@@ -44,6 +44,7 @@ async function call(cmd, args = {}) {
     case "set_api_key": mockState.hasKey = true; return null;
     case "set_paused": mockState.paused = args.paused; return null;
     case "open_permission": case "open_data_dir": console.info(`样例模式：${cmd}`, args); return null;
+    case "list_fonts": return [["PingFang SC", "苹方-简"], ["Songti SC", "宋体-简"], ["Kaiti SC", "楷体-简"], ["Hiragino Sans GB", "冬青黑体简体中文"], ["Helvetica Neue", "Helvetica Neue"], ["Avenir Next", "Avenir Next"], ["Georgia", "Georgia"], ["Menlo", "Menlo"], ["Courier New", "Courier New"], ["Times New Roman", "Times New Roman"]].map(([family, name]) => ({ family, name }));
     case "get_rules": return mockState.rules || loadMock("get_rules");
     case "get_settings": {
       const s = mockState.settings || await loadMock("get_settings");
@@ -251,8 +252,9 @@ function amapHowtoDialog() {
 let DLG = null;
 
 /** title、body（HTML）、ok（主按钮文字）、okClass（primary／danger）、busy（提交中的按钮文字）、cancel（false＝不要取消钮）、
- *  closable（false＝只能点主按钮关）、submit(el)：抛错就把错写在窗口里、不关，返回 false 也不关；onOpen(el, d) 绑窗口里的交互 */
-function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取消", closable = true, submit, onOpen }) {
+ *  closable（false＝只能点主按钮关）、submit(el)：抛错就把错写在窗口里、不关，返回 false 也不关；onOpen(el, d) 绑窗口里的交互；
+ *  onClose()：窗口关掉时（取消、Esc、点遮罩、换页、提交成功）调 */
+function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取消", closable = true, submit, onOpen, onClose }) {
   closeDialog();
   const root = document.createElement("div");
   root.className = "mx-scrim dlg-root";
@@ -262,7 +264,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
     <div class="mx-dialog-foot">${cancel ? `<button class="mx-btn mx-btn--secondary" data-dlg="close">${esc(cancel)}</button>` : ""}${ok ? `<button class="mx-btn mx-btn--${okClass}" data-dlg="ok">${esc(ok)}</button>` : ""}</div></div>`;
   document.body.appendChild(root);
   const el = root.querySelector(".mx-dialog"), okBtn = root.querySelector('[data-dlg="ok"]'), err = root.querySelector('[data-dlg="err"]');
-  const d = (DLG = { root, el, closable, busy: false, back: document.activeElement });
+  const d = (DLG = { root, el, closable, busy: false, back: document.activeElement, onClose });
   d.setErr = (m) => { err.hidden = !m; err.textContent = m || ""; };
   d.setOk = (text) => { if (okBtn) okBtn.textContent = text; };
   d.go = async () => {
@@ -298,6 +300,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
 function closeDialog() {
   const d = DLG; if (!d) return;
   DLG = null; d.root.remove();
+  if (d.onClose) d.onClose();
   if (d.back && d.back.isConnected && d.back.focus) d.back.focus();
 }
 
@@ -820,7 +823,25 @@ function updateItem() {
 
 async function loadUpdate() {
   if (!TAURI) return;
-  try { S.update = await call("update_status"); renderSide(); } catch (e) {}
+  try { S.update = await call("update_status"); renderSide(); updatePrompt(); } catch (e) {}
+}
+
+/** 新版本下好了：开着窗口就弹一次。「稍后」这一版 24 小时内不再弹（菜单和设置里照样能点），换了新版本照弹 */
+function updatePrompt() {
+  const u = S.update || {};
+  if (!u.newer || !u.ready || u.updatable || (S.status && S.status.mobile) || DLG || (S.settings && !S.settings.onboarded)) return;
+  let later = {};
+  try { later = JSON.parse(localStorage.getItem("update-later") || "{}"); } catch (e) {}
+  if (later.v === u.latest && Date.now() < later.until) return;
+  openDialog({
+    title: `有新版本 ${u.latest}`,
+    body: `${u.notes ? `<p style="margin:0 0 var(--space-3)">${esc(u.notes)}</p>` : ""}<p class="note" style="margin:0">已经下好了，重启就能用，几秒钟。现在是 ${esc(u.current || "")}。</p>`,
+    ok: "重启更新", busy: "正在更新…", cancel: "稍后",
+    // 装好了 app 会自己退出重开；没装成把错写在窗口里
+    submit: async () => { await call("update_apply"); return false; },
+    // 关掉（稍后、Esc、点遮罩、换页）都算稍后
+    onClose: () => { try { localStorage.setItem("update-later", JSON.stringify({ v: u.latest, until: Date.now() + 864e5 })); } catch (e) {} },
+  });
 }
 
 async function applyUpdate() {
@@ -2018,6 +2039,72 @@ function bindSync() {
 // ---------- 设置 ----------
 
 const THEMES = [["", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
+
+// ---------- 字体（设置 → 通用）：默认用系统的，也可以换成这台电脑上装的任意字体；只存本机（index.html 的 FONTS） ----------
+
+const IS_APPLE = /Mac|iPhone|iPad/.test(navigator.userAgent);
+/** 两处字体：界面（几乎所有字）、数字和钟点（等宽）。默认是什么、样例写什么 */
+const FONT_KINDS = {
+  sans: { label: "界面", def: IS_APPLE ? "苹方" : /Windows/.test(navigator.userAgent) ? "微软雅黑" : "系统字体",
+    how: IS_APPLE ? "默认中文用苹方，英文和数字用系统字体 SF Pro。" : "默认中文用微软雅黑，英文和数字用 Segoe UI。",
+    sample: "今天在电脑前 6.2 小时，切换 372 次。Be Authentic." },
+  mono: { label: "数字和钟点", def: IS_APPLE ? "SF Mono" : /Windows/.test(navigator.userAgent) ? "Consolas" : "等宽字体",
+    how: IS_APPLE ? "默认用 SF Mono，夹在里面的中文用苹方。" : "默认用 Consolas，夹在里面的中文用微软雅黑。",
+    sample: "09:04–18:00 · 4.3h · 62% · 昨天 22:10" },
+};
+const fontName = (k) => { const f = FONTS.get(k); return f ? f.name : FONT_KINDS[k].def; };
+const fontDesc = () => `界面 ${esc(fontName("sans"))} · 数字和钟点 ${esc(fontName("mono"))}`;
+/** 一个字体在 CSS 里的写法（自己的名字＋默认的退路） */
+const fontCss = (k, f) => esc(FONTS.stack(k, f));
+
+/** 换字体：上面切「界面／数字和钟点」，预览用选中的字体，下面搜、选；保存才生效 */
+function fontDialog(done) {
+  const pick = { sans: FONTS.get("sans"), mono: FONTS.get("mono") };
+  let kind = "sans", all = null, q = "";
+  const body = `<div class="mx-seg fp-kind" role="tablist">${Object.entries(FONT_KINDS).map(([k, v]) => `<button role="tab" data-k="${k}">${v.label}</button>`).join("")}</div>
+    <div class="fp-preview" id="fp-preview"></div>
+    <p class="note fp-how" id="fp-how"></p>
+    <input class="mx-input" id="fp-q" type="search" placeholder="搜索这台电脑上的字体" autocomplete="off" aria-label="搜索字体">
+    <div class="fp-list" id="fp-list" role="radiogroup" aria-label="字体"><p class="note fp-wait">在读这台电脑上的字体…</p></div>`;
+  openDialog({
+    title: "字体", body, ok: "保存",
+    submit: () => { FONTS.set("sans", pick.sans); FONTS.set("mono", pick.mono); done(); },
+    onOpen: (el) => {
+      const $ = (id) => el.querySelector("#" + id), list = $("fp-list");
+      const draw = () => {
+        el.querySelectorAll(".fp-kind button").forEach((b) => { const on = b.dataset.k === kind; b.classList.toggle("is-on", on); b.setAttribute("aria-selected", on); });
+        const k = FONT_KINDS[kind], cur = pick[kind];
+        $("fp-preview").style.fontFamily = FONTS.stack(kind, cur);
+        $("fp-preview").textContent = k.sample;
+        $("fp-how").textContent = k.how + " 换成别的字体后，缺的字照样用默认的。";
+        if (!all) return;
+        const hit = all.filter((f) => !q || (f.name + " " + f.family).toLowerCase().includes(q));
+        const rows = [{ family: "", name: `跟随系统（${k.def}）` }, ...hit];
+        list.innerHTML = rows.map((f, i) => {
+          const on = cur ? cur.family === f.family : !f.family;
+          return `<button class="fp-item" role="radio" aria-checked="${on}" tabindex="-1" data-i="${i}"><span class="fp-n" style="font-family:${fontCss(kind, f.family ? f : null)}">${esc(f.name)}</span>${f.family && f.family !== f.name ? `<span class="fp-f">${esc(f.family)}</span>` : ""}${on ? ICON.check : ""}</button>`;
+        }).join("") + (hit.length ? "" : `<p class="note fp-wait">这台电脑上没有叫「${esc(q)}」的字体</p>`);
+        const items = [...list.querySelectorAll(".fp-item")];
+        const sel = items.find((x) => x.getAttribute("aria-checked") === "true") || items[0];
+        sel.tabIndex = 0; sel.scrollIntoView({ block: "nearest" });
+        items.forEach((b) => (b.onclick = () => { const f = rows[+b.dataset.i]; pick[kind] = f.family ? f : null; draw(); list.querySelector(`[data-i="${b.dataset.i}"]`).focus(); }));
+        list.onkeydown = (e) => {
+          const i = items.indexOf(document.activeElement); if (i < 0) return;
+          const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: items.length - 1 }[e.key];
+          if (to == null || !items[to]) return;
+          e.preventDefault(); items[to].click();
+        };
+      };
+      el.querySelector(".fp-kind").onclick = (e) => { const b = e.target.closest("[data-k]"); if (b) { kind = b.dataset.k; draw(); } };
+      $("fp-q").oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+      // 搜索框里回车＝选第一个搜到的，不是保存
+      $("fp-q").onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); const b = list.querySelector('.fp-item[data-i="1"]'); if (b) b.click(); } };
+      draw();
+      call("list_fonts").then((fs) => { all = fs || []; draw(); })
+        .catch(() => { all = []; draw(); list.insertAdjacentHTML("beforeend", `<p class="note fp-wait">读不到这台电脑上的字体，只能跟随系统</p>`); });
+    },
+  });
+}
 const SETTING_KEYS = ["gateway", "model_segment", "repo_path", "blocklist", "relay_server"];
 const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.stringify(SETTING_KEYS.map((k) => b[k]));
 /** Windows 版：没有钥匙串和系统授权（密钥存数据目录，采集不用授权） */
@@ -2400,7 +2487,8 @@ async function renderSettings() {
     body = section("个人资料", profileRow())
       + (mobile ? phoneSection() : "")
       + section("通用", (mobile ? "" : setRow("开机自动启动", "登录电脑后自动开始记录。", `<button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="开机自动启动"></button>`))
-        + setRow("主题", "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`))
+        + setRow("主题", "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`)
+        + (mobile ? "" : setRow("字体", fontDesc(), smallBtn("font-edit", "更改"))))
       + (mobile ? section("关于", setRow(`版本 ${esc(st.version || "")}`, "手机版跟着 TestFlight 更新。", "")) : aboutSection());
   } else if (tab === "account") {
     if (cf.sync_mode === "folder" && !sy.configured && !AC.folder) AC.folder = await call("folder_state").catch(() => ({}));
@@ -2470,6 +2558,7 @@ async function renderSettings() {
       renderSettings();
     };
     on("login", async () => { try { await call("set_login_item", { on: !st.login_item }); } catch (x) { alert(`没改成：${x}`); } renderSettings(); });
+    on("font-edit", () => fontDialog(renderSettings));
   }
   if (tab === "account" && !sy.shadow) bindAccount();
   if (tab === "projects") bindProjects();

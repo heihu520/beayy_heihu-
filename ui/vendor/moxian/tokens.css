@@ -37,7 +37,7 @@
   --scrim: rgba(11,11,11,0.50);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
-  --font-mono: "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

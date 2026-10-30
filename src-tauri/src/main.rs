@@ -8,6 +8,7 @@ mod amap;
 mod storage;
 mod daily;
 mod data;
+mod fonts;
 mod health;
 mod icons;
 mod mcp;
@@ -313,6 +314,15 @@ fn main() {
         println!("换掉 {n} 段");
         return;
     }
+    if args.get(1).map(|a| a == "--summary-try").unwrap_or(false) {
+        // 调试用：用现在的提示词给分段问一次模型，打印结果和用量，不写文件
+        let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
+        for name in &args[2..] {
+            let out = sm.try_segment(name).map(|(j, u)| json!({"summary": j, "usage": u})).unwrap_or_else(|e| json!({"error": e}));
+            println!("===== {name} =====\n{}\n", serde_json::to_string_pretty(&out).unwrap());
+        }
+        return;
+    }
     if args.get(1).map(|a| a == "--summary-pack").unwrap_or(false) {
         // 调试用：打印某分段拼好的摘要包（不调模型）
         let sm = beayy_summary::Summarizer::new(beayy_core::default_root());
@@ -405,7 +415,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status, phone_read_now, set_paused, set_login_item, quit_app, open_permission, open_data_dir, dev_report,
             data::list_days, data::get_day, data::get_rules, data::save_rules,
-            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, daily::daily_status, daily::get_week, daily::generate_weekly, daily::get_month, daily::generate_monthly, data::get_range, data::llm_usage, data::test_model,
+            data::get_settings, data::save_settings, storage::storage_stats, data::llm_status, data::set_api_key, data::set_relay_token, data::delete_since, data::list_devices, data::rename_device, data::set_place_label, data::recent_events, data::set_place_pick, data::clear_place_pick, data::list_place_labels, data::place_stats, data::edit_place_label, amap::set_amap_key, amap::amap_around, amap::amap_search, amap::amap_map, amap::amap_js_config, amap::set_amap_js, icons::get_icons, daily::generate_daily, daily::daily_status, daily::get_week, daily::generate_weekly, daily::get_month, daily::generate_monthly, data::get_range, data::llm_usage, data::test_model, fonts::list_fonts,
             data::get_profile, data::save_profile, data::list_projects, data::merge_project, data::set_project_domain,
             sync::sync_status, sync::sync_now,
             sync::account_signup, sync::account_login, sync::account_claim, sync::account_recover, sync::account_password,

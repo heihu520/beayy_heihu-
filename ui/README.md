@@ -58,5 +58,6 @@ python3 -m http.server 8767 --directory "app/ui"
 - 文字对比度 ≥ 4.5:1：设计系统的 `ink-4` 浅色是 `#75746e`，别再用更浅的灰写字；弱信息靠字号区分。
 - 地点淡色（`--pl-N`）只作带文字的底，细条和色块边用同色相实色 `--pl-N-s`（≥ 3:1）。
 - 手机断点是 `max-width: 759px`（style.css 和 app.js 的 `NARROW` 两处），电脑窗口最窄 760，别让两者碰上。
+- 字体只有两组：界面 `--font-sans`、数字和钟点 `--font-mono`（都来自设计系统令牌）。不再用 `--font-serif`。用户在设置 → 通用 → 字体换的字体存在本机 localStorage（`font-sans`、`font-mono`，`{family, name}`），index.html 里样式后面那段 `FONTS` 脚本把它排在默认字体前面；系统字体列表来自 `list_fonts` 命令（手机核心没有，手机上不放这一行）。
 - 页面标题 `h1`，区块标题 `h2`（`section()`、总结的段名），区块里的小标题 `h3`。
 - 能点的东西用 `<button>`；一天的形状这种一排格子用 `role="toolbar"`＋方向键（`bindStripKeys`），整条只占一个 Tab。

@@ -20,6 +20,7 @@
 | `set_relay_token` | `{ "token": "…" }`（空字符串＝删掉） | `null`（录音服务器口令写钥匙串，账号 relay_token；Windows 写数据目录 secrets/relay_token） |
 | `set_paused` | `{ "paused": bool, "minutes": int?（给了就是定时暂停，到点自动继续） }` | `null` |
 | `set_login_item` | `{ "on": bool }` | `null`；失败返回系统给的错误 |
+| `list_fonts` | — | `[{ "family": CSS font-family 用的名字, "name": 显示名（macOS 本地化，如「苹方-简」） }]`，按显示名排、去重，不含 . 开头的系统私有字体和 @ 开头的竖排字体（设置 → 通用 → 字体；macOS 问 NSFontManager，Windows 用 GDI 枚举；手机核心没有这个命令） |
 | `delete_since` | `{ "minutes": int }` 或 `{ "today": true }` | 删掉的条数。只删本机电脑事件和对应分段的 10 分钟摘要；iPhone 记录、已归档进仓库的不动 |
 | `list_devices` | — | `[{ "id": "mac-…"/"iphone-…"/"watch-…", "kind": "mac"/"iphone"/"win"/"watch", "name", "this": 是否本机, "first": ISO, "last": ISO, "events": 条数, "bytes": 占用 }]`，本机排第一（读数据目录 devices/，缓存 60 秒） |
 | `set_place_label` | `{ "lat", "lon", "label": "家", "kind": "home"/"work"/"other" }`（label 空＝删掉这个名字） | `null`；写 Beayy/places/labels.json：半径内已有的改它，没有就新加一条（r 150 米）。第一次写时先抄外部数据目录 raw/places/labels.json 里已有的 |
