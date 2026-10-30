@@ -394,14 +394,16 @@ pub fn live_computer(date: NaiveDate) -> Option<Value> {
             return v.clone();
         }
     }
-    // 过去的日子不会再变：算一次存盘（Beayy/daily/stats_YYYY-MM-DD.json），之后直接读
+    // 过去的日子不会再变：算一次存盘（Beayy/daily/stats_YYYY-MM-DD.json），之后直接读。
+    // 算出来是空的先不存：别的电脑的数据可能晚几天才同步到，存了空的这天就一直空着；一周以前的才存空
     let cache = default_root().join("daily").join(format!("stats_{date}.json"));
-    let past = date < Local::now().date_naive();
+    let today = Local::now().date_naive();
+    let (past, settled) = (date < today, date < today - Duration::days(7));
     let v = match fs::read_to_string(&cache).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
-        Some(v) if past => Some(v).filter(|v| !v.is_null()),
+        Some(v) if past && (!v.is_null() || settled) => Some(v).filter(|v| !v.is_null()),
         _ => {
             let v = compute_live(date);
-            if past {
+            if past && (v.is_some() || settled) {
                 let _ = fs::create_dir_all(cache.parent().unwrap());
                 let _ = fs::write(&cache, serde_json::to_string(&v).unwrap_or_default());
             }
@@ -1142,11 +1144,14 @@ pub fn list_days() -> Vec<Value> {
             }
         }
     }
+    // 没有摘要（没配模型）也没有数据包的日子：有电脑的原始分段就列上，算得出读数才留
+    let raw: HashSet<String> = raw_days().difference(&dates).cloned().collect();
+    dates.extend(raw.iter().cloned());
     let mut dates: Vec<String> = dates.into_iter().collect();
     dates.sort_by(|a, b| b.cmp(a));
     dates
         .iter()
-        .map(|date| {
+        .filter_map(|date| {
             let pack = pack_of(&repo, date);
             let md = summary_of(&repo, date);
             let nd = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
@@ -1158,16 +1163,29 @@ pub fn list_days() -> Vec<Value> {
                     c = l;
                 }
             }
+            if raw.contains(date) && c.is_null() && phone.is_none() {
+                return None;
+            }
             let pp = pack.as_ref().map(|p| p["phone"].clone()).unwrap_or(Value::Null);
-            json!({
+            Some(json!({
                 "date": date,
                 "line": md.as_deref().and_then(|m| section(m, "今天的一句话")),
                 "active_sec": c.get("active_sec").cloned().unwrap_or(Value::Null),
                 "phone_sec": phone.as_ref().map(|p| p["total_sec"].clone()).unwrap_or_else(|| pp.get("total_sec").cloned().unwrap_or(Value::Null)),
                 "hc": if c.is_null() { json!({}) } else { computer_hours(&c) },
                 "hp": phone.as_ref().map(|p| p["hours"].clone()).unwrap_or_else(|| pp.get("hours").cloned().unwrap_or(json!({}))),
-            })
+            }))
         })
+        .collect()
+}
+
+/// 电脑原始分段（本机的和同步来的）落在哪些本地日期
+fn raw_days() -> HashSet<String> {
+    beayy_summary::Summarizer::new(default_root())
+        .segment_names()
+        .iter()
+        .filter_map(|n| chrono::NaiveDateTime::parse_from_str(n, "%Y-%m-%dT%H-%M-%SZ").ok())
+        .map(|t| Utc.from_utc_datetime(&t).with_timezone(&Local).format("%Y-%m-%d").to_string())
         .collect()
 }
 
@@ -1745,4 +1763,32 @@ pub fn needs_onboarding() -> bool {
 /// 给 MCP 搜索用：全部 10 分钟摘要，按本地日期分组
 pub fn self_segments_pub() -> HashMap<String, Vec<Value>> {
     self_segments()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 没配模型（没有 10 分钟摘要）的日子也要列出来；旧版本存下的空缓存要重算
+    #[test]
+    fn raw_only_day_listed() {
+        let home = std::env::temp_dir().join(format!("beayy-data-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        std::env::set_var("HOME", &home);
+        std::env::set_var("APPDATA", &home);
+        let day = Local::now().date_naive() - Duration::days(1);
+        let t = Local.from_local_datetime(&day.and_hms_opt(20, 0, 0).unwrap()).unwrap().with_timezone(&Utc);
+        let log = beayy_core::EventLog::new(default_root(), "win-test");
+        let ev = |k: &str| json!({"state": "active", "app_name": "Code", "bundle_id": "code.exe", "k": k}).as_object().unwrap().clone();
+        log.write("app.activated", ev("a"), Some(t));
+        for i in 1..=5 {
+            log.write("heartbeat", ev("h"), Some(t + Duration::minutes(i)));
+        }
+        fs::create_dir_all(default_root().join("daily")).unwrap();
+        fs::write(default_root().join("daily").join(format!("stats_{day}.json")), "null").unwrap();
+        let days = list_days();
+        let row = days.iter().find(|d| d["date"] == day.to_string()).expect("昨天应该在日期列表里");
+        assert!(row["active_sec"].as_i64().unwrap_or(0) >= 300, "{row}");
+        let _ = fs::remove_dir_all(&home);
+    }
 }
