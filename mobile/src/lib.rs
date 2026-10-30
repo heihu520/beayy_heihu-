@@ -1,9 +1,9 @@
-//! Beayy 手机版的 Rust 核心：和电脑同一套数据代码。iPhone app（app/ios）里的网页视图加载同一套 ui/，
-//! 网页的 `invoke(命令, 参数)` 经 Swift 转到这里的 `beayy_call`，按命令名调到和电脑一样的函数，返回 JSON。
+//! Beayy 手机版的 Rust 核心：和电脑同一套数据代码。iPhone／Android 里的网页视图加载同一套 ui/，
+//! 网页的 `invoke(命令, 参数)` 经原生桥转到这里的 `beayy_call`，按命令名调到和电脑一样的函数，返回 JSON。
 //! - 数据代码直接引用电脑外壳的源文件（#[path]），算法只有一份；只编不依赖桌面的部分（不采集、不读屏幕使用、没有菜单栏和更新）。
 //! - 账号同步只下载：电脑的分段、摘要拉下来，界面照电脑那样算；录音、停留点经账号同步拿、手机自己也能算，
 //!   写进带「-m」后缀的设备目录（读的时候按停留点 id、段 id、句子去重）。电脑关机时手机也看得到。
-//! - 定位、手表录音中转、加密上传是原生 Swift；账号凭据读这里存的同一份（数据目录 sync/account）。
+//! - 定位、录音中转、加密上传是各平台原生；账号凭据读这里存的同一份（数据目录 sync/account）。
 //! 方案见 报告/方案_20261021_手机同一套代码.md
 
 #[path = "../../src-tauri/src/data.rs"]
@@ -39,7 +39,7 @@ const CLOUD_EVERY: Duration = Duration::from_secs(120);
 static CLOUD: Mutex<String> = Mutex::new(String::new());
 static START: Once = Once::new();
 
-/// 这台手机在同步里的设备名：iosapp-<8 位十六进制>，第一次启动生成存在数据目录。
+/// 这台手机在同步里的设备名：iosapp-／android-<8 位十六进制>，第一次启动生成存在数据目录。
 /// 不能和电脑那边的 iphone-…（屏幕使用、停留点）同名，否则同步会以为那是本机的、不下载
 fn device_id() -> String {
     let f = default_root().join("mobile_device");
@@ -49,7 +49,14 @@ fn device_id() -> String {
         }
     }
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let id = format!("iosapp-{:08x}", (t.subsec_nanos() ^ t.as_secs() as u32).wrapping_mul(2654435761));
+    #[cfg(target_os = "android")]
+    let prefix = "android";
+    #[cfg(not(target_os = "android"))]
+    let prefix = "iosapp";
+    let id = format!(
+        "{prefix}-{:08x}",
+        (t.subsec_nanos() ^ t.as_secs() as u32).wrapping_mul(2654435761)
+    );
     let _ = std::fs::create_dir_all(default_root());
     let _ = std::fs::write(&f, &id);
     id
@@ -201,3 +208,6 @@ pub unsafe extern "C" fn beayy_free(p: *mut c_char) {
         drop(CString::from_raw(p));
     }
 }
+
+#[cfg(target_os = "android")]
+mod jni;
