@@ -34,6 +34,7 @@
   --risk-ink: #8e2626;
   --risk-wash: rgba(208,59,59,0.10);
   --on-risk: #ffffff;
+  --illus-tint: rgba(143,181,164,0.55);
   --scrim: rgba(11,11,11,0.50);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
@@ -96,6 +97,7 @@
     --warn-wash: #311a00;
     --risk-ink: #ec7e7e;
     --risk-wash: #3c0e0e;
+    --illus-tint: rgba(143,181,164,0.45);
     --scrim: rgba(0,0,0,0.60);
     --shadow-sm: 0 1px 2px 0 rgba(11,11,11,0.06), 0 2px 8px 0 rgba(0,0,0,0.24);
     --shadow-lg: 0 4px 8px 0 rgba(11,11,11,0.08), 0 12px 28px -2px rgba(0,0,0,0.24);
@@ -130,6 +132,7 @@
   --warn-wash: #311a00;
   --risk-ink: #ec7e7e;
   --risk-wash: #3c0e0e;
+  --illus-tint: rgba(143,181,164,0.45);
   --scrim: rgba(0,0,0,0.60);
   --shadow-sm: 0 1px 2px 0 rgba(11,11,11,0.06), 0 2px 8px 0 rgba(0,0,0,0.24);
   --shadow-lg: 0 4px 8px 0 rgba(11,11,11,0.08), 0 12px 28px -2px rgba(0,0,0,0.24);

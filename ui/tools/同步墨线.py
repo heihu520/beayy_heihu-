@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""把设计系统「Beayy」（原名墨线，源文件夹仍叫 墨线）拷进网页界面：tokens.json → vendor/moxian/tokens.css，components/bundle.css 原样拷贝。
+"""把设计系统「Beayy」（原名墨线，源文件夹仍叫 墨线）拷进网页界面：tokens.json → vendor/moxian/tokens.css，components/bundle.css 原样拷贝，
+插画（components/Illustration/preview.html 里带 data-illus 的 SVG）抽成 vendor/moxian/illus.js（window.MX_ILLUS，按名字取）。
 
 Tauri 只能读 app/ui/ 里面的文件，所以拷一份进来（不走打包工具）。设计系统改了就重跑一次再提交。
 用法：python3 app/ui/tools/同步墨线.py
 """
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -43,7 +45,12 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "tokens.css").write_text("\n".join(css), encoding="utf-8")
     shutil.copyfile(SRC / "components/bundle.css", OUT / "bundle.css")
-    print(f"tokens.css {len(light)} 个变量（深色 {len(dark)} 个），bundle.css 已拷贝 → {OUT}")
+    ill = {}
+    for m in re.finditer(r'<svg class="mx-illus" data-illus="([a-z]+)"(.*?)</svg>', (SRC / "components/Illustration/preview.html").read_text(encoding="utf-8"), re.S):
+        ill[m.group(1)] = f'<svg class="mx-illus"{m.group(2)}</svg>'
+    (OUT / "illus.js").write_text("// Beayy 设计系统的插画 — 由 设计系统/墨线/project/components/Illustration/preview.html 抽出（app/ui/tools/同步墨线.py），不要手改\n"
+                                  f"window.MX_ILLUS = {json.dumps(ill, ensure_ascii=False, indent=1)};\n", encoding="utf-8")
+    print(f"tokens.css {len(light)} 个变量（深色 {len(dark)} 个），bundle.css 已拷贝，插画 {len(ill)} 张 → {OUT}")
 
 
 if __name__ == "__main__":

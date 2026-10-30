@@ -203,6 +203,10 @@ function header(title, right = "") {
 const section = (title, body, { count, aside } = {}) =>
   `<section class="mx-sec"><div class="mx-sec-head"><h2>${esc(title)}</h2>${count != null ? `<span class="mx-count">${count}</span>` : ""}${aside ? `<span class="mx-sec-aside">${aside}</span>` : ""}</div>${body}</section>`;
 const emptyInline = (text) => `<p class="mx-empty-inline">${esc(text)}</p>`;
+/** 设计系统的插画（vendor/moxian/illus.js，按名字取：day、notebook、map、sync、update、health、key）；sm＝弹层里的小号 */
+const illus = (name, sm = false) => { const svg = (window.MX_ILLUS || {})[name] || ""; return sm ? svg.replace('class="mx-illus"', 'class="mx-illus mx-illus--sm"') : svg; };
+/** 整块空状态：插画＋一句话＋可选的按钮（设计系统 Empty） */
+const emptyBlock = (name, text, btn = "") => `<div class="mx-empty">${illus(name)}<div>${esc(text)}</div>${btn}</div>`;
 /** 「怎么设置」链接（墨线文案：要分步骤的设置，界面一句话＋这个链接，步骤在弹层里） */
 const howto = (kind, text) => `<button type="button" class="howto" data-howto="${kind}">${esc(text)}</button>`;
 document.addEventListener("click", (e) => {
@@ -835,7 +839,7 @@ function updatePrompt() {
   if (later.v === u.latest && Date.now() < later.until) return;
   openDialog({
     title: `有新版本 ${u.latest}`,
-    body: `${u.notes ? `<p style="margin:0 0 var(--space-3)">${esc(u.notes)}</p>` : ""}<p class="note" style="margin:0">已经下好了，重启就能用，几秒钟。现在是 ${esc(u.current || "")}。</p>`,
+    body: `${illus("update", true)}${u.notes ? `<p style="margin:0 0 var(--space-3)">${esc(u.notes)}</p>` : ""}<p class="note" style="margin:0">已经下好了，重启就能用，几秒钟。现在是 ${esc(u.current || "")}。</p>`,
     ok: "重启更新", busy: "正在更新…", cancel: "稍后",
     // 装好了 app 会自己退出重开；没装成把错写在窗口里
     submit: async () => { await call("update_apply"); return false; },
@@ -987,11 +991,11 @@ async function renderToday() {
     PL.at = Date.now();
   }
   const placesView = pview === "often" ? oftenView(PL.stats) : visits.length ? placesSection(visits, today, sp && sp.conversations, pview)
-    : emptyInline(past ? "这一天没有停留点" : "今天还没有停留点");
+    : emptyBlock("map", past ? "这一天没有停留点" : "今天还没有停留点");
   const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : tab === "phone" && visits.length ? phoneByPlace(shown, visits, today) : shown.map(tlRow).join("")}</div>`
-    : past ? emptyInline(tab === "phone" ? "这一天没有手机记录" : tab === "watch" ? "这一天没有对话" : "这一天没有记录")
+    : past ? (tab === "phone" || tab === "watch" ? emptyInline(tab === "phone" ? "这一天没有手机记录" : "这一天没有对话") : emptyBlock("day", "这一天没有记录"))
     : tab === "phone" ? `<p class="mx-empty-inline">手机记录还没同步过来 · ${howto("screentime", "怎么设置")}</p>`
-    : emptyInline(tab === "watch" ? "今天还没有对话" : "今天还没有记录");
+    : tab === "watch" ? emptyInline("今天还没有对话") : emptyBlock("day", "今天还没有记录");
 
   // 照 Claude 自定义页：标题单独一行；页签和右边的控件（同步时刻、翻日期）同一行
   $app.innerHTML = header(past ? short(today) : "今天") + toolbar
@@ -1421,8 +1425,8 @@ const canWrite = () => !(S.status && S.status.mobile);
 /** 总结末尾一行：口径说明（由 Beayy 用……生成，数据截至……）＋「重新生成」 */
 const sumFoot = (note, id) => `<p class="note sum-foot">${esc(note || "")}${canWrite() ? `<button class="mx-btn mx-btn--text mx-btn--sm" id="${id}">重新生成</button>` : ""}</p>`;
 /** 还没有总结：一句说明＋「现在生成」（手机上只有说明）。说明写清会自动写，按钮只是不想等时用，免得读成两件事 */
-const sumEmpty = (title, text, id, err) => section(title, `<div class="gen-empty"><p class="mx-empty-inline">${canWrite() ? `${text}，也可以现在生成` : "总结在电脑上写，写好会同步过来"}</p>
-  ${canWrite() ? `<button class="mx-btn mx-btn--primary mx-btn--sm" id="${id}">现在生成</button>` : ""}${err ? `<div class="mx-field-error">${esc(err)}</div>` : ""}</div>`);
+const sumEmpty = (title, text, id, err) => section(title, emptyBlock("notebook", canWrite() ? `${text}，也可以现在生成` : "总结在电脑上写，写好会同步过来",
+  canWrite() ? `<button class="mx-btn mx-btn--secondary" id="${id}">现在生成</button>` : "") + (err ? `<div class="mx-field-error">${esc(err)}</div>` : ""));
 /** 一句话（蜡笔横线）＋点评 */
 const sumLead = (sum, lineTitle) => {
   const one = sum.parts.find((p) => p.title === lineTitle), rm = sum.parts.find((p) => p.title === "点评");
@@ -2882,7 +2886,7 @@ async function renderOnboarding() {
      <div class="btns sync-btns"><button class="mx-btn mx-btn--secondary" id="ob-account">去登录或注册</button></div>`,
   ][OB.step];
   const last = OB.step === steps.length - 1;
-  $app.innerHTML = `<div class="ob">${dots}<div class="ob-body">${body}${msg}</div>
+  $app.innerHTML = `<div class="ob">${dots}<div class="ob-body">${illus(["day", "key", "notebook", "sync"][OB.step])}${body}${msg}</div>
     <div class="ob-nav">${OB.step ? `<button class="mx-btn mx-btn--text" id="ob-back">上一步</button>` : "<span></span>"}
       <button class="mx-btn mx-btn--primary" id="ob-next">${last ? "开始使用" : OB.step === 2 && OB.mode === "custom" && !S.settings.has_api_key ? "先跳过" : "继续"}</button></div></div>`;
   const on = (id, f) => { const el = document.getElementById(id); if (el) el.onclick = f; };
