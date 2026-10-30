@@ -68,6 +68,12 @@ body { margin: 0; padding: 16px; }
 .mx-chip { display: inline-flex; align-items: center; gap: 6px; height: var(--control-sm); padding: 0 6px 0 10px; border: 0; border-radius: var(--radius-sm); background: var(--selected); color: var(--ink); font: 13px/17px var(--font-sans); cursor: pointer; }
 .mx-chip .mx-ico { width: 14px; height: 14px; color: var(--ink-3); }
 
+/* 分区导航（设置页左边一列） */
+.mx-subnav { display: flex; flex-direction: column; gap: 2px; width: 180px; flex: none; }
+.mx-subnav a, .mx-subnav button { display: flex; align-items: center; height: var(--control-md); padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink-2); font: 14px/20px var(--font-sans); text-align: left; text-decoration: none; cursor: pointer; }
+.mx-subnav a:hover, .mx-subnav button:hover { background: var(--hover); color: var(--ink); }
+.mx-subnav .is-on { background: var(--sidebar-selected); color: var(--ink); }
+
 /* 一段内容 */
 .mx-sec + .mx-sec { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--line); }
 .mx-sec-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); }

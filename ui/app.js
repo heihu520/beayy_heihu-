@@ -309,6 +309,23 @@ function closeDialog() {
   if (d.back && d.back.isConnected && d.back.focus) d.back.focus();
 }
 
+/** 选一个再做的弹层（暂停多久、删多少）：一排分段选项＋一句提醒＋主按钮，照设计系统「一个决定一个控件」 */
+function choiceDialog({ title, options, note, ok, okClass = "primary", go }) {
+  let pick = options[0][0];
+  openDialog({
+    title, ok, okClass,
+    body: `<div class="mx-seg" role="tablist" id="ch-seg">${options.map(([k, v], i) => `<button role="tab" aria-selected="${!i}" class="${i ? "" : "is-on"}" data-v="${k}">${v}</button>`).join("")}</div>${note ? `<p class="note" style="margin:0">${esc(note)}</p>` : ""}`,
+    onOpen: (el) => {
+      el.querySelector("#ch-seg").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        pick = b.dataset.v;
+        el.querySelectorAll("#ch-seg button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+      };
+    },
+    submit: () => go(pick),
+  });
+}
+
 /** 弹层里的一项输入 */
 const dlgField = (id, label, { type = "text", ph = "", value = "", mono = false, help = "" } = {}) =>
   `<div class="mx-field"><label for="${id}">${label}</label><input class="mx-input${mono ? " mono" : ""}" id="${id}" type="${type}" autocomplete="off" placeholder="${esc(ph)}" value="${esc(value)}">${help ? `<p class="note">${help}</p>` : ""}</div>`;
@@ -587,7 +604,7 @@ function placesSection(visits, date, convs, mode = "stays") {
     // 地图：左边一列简短的停留（编号、名字、起止），点哪段地图上那个点变成强调色；右边大地图
     const list = visits.map((v, i) => `<li><button class="pm-row" data-sel="${i}"><span class="ptl-dot">${MARKS[Math.min(i, MARKS.length - 1)]}</span><span class="pm-b"><span class="pm-n" title="${esc(chainOf(v))}">${esc(placeName(v))}${badgeHtml(v)}</span>${!v.label && !v.confirmed && (v.guesses || [])[0] ? `<span class="pm-m">${tr("可能是 {name}", { name: esc(shopShort(v.guesses[0].name)) })} ${pctText(v.guesses[0].p)}</span>` : ["auto", "remembered"].includes(v.confirmed) && (v.guesses || [])[0] ? `<span class="pm-m">${v.confirmed === "auto" ? tr("自动认出") : tr("按上次认定")} ${pctText(v.guesses[0].p)}</span>` : ""}<span class="pm-m">${visitSpan(v)} · ${spanText((visitEnd(v) - Date.parse(v.start)) / 1000)}</span></span></button></li>`).join("");
     return `<p class="ptl-sum">${sum}</p><div class="pm-wrap"><ol class="pm-list">${list}</ol>
-      <div class="pm-map"><div class="pl-live" id="pl-live"><p class="note">${tr("在打开地图…")}</p></div><p class="note">${tr("地图是高德的，能拖、能缩放。只画停留的地方，虚线只表示先后；认定是哪家、改地点在「停留」里。")}</p></div></div>`;
+      <div class="pm-map"><div class="pl-live" id="pl-live"><p class="note">${tr("在打开地图…")}</p></div><p class="note">${tr("地图是{who}的，能拖、能缩放。只画停留的地方，虚线只表示先后；认定是哪家、改地点在「停留」里。", { who: S.settings && S.settings.map_provider === "osm" ? "OpenStreetMap" : tr("高德") })}</p></div></div>`;
   }
   return `<p class="ptl-sum">${sum}</p><ol class="ptl" id="ptl">${rows}</ol>`;
 }
@@ -1241,14 +1258,17 @@ window.addEventListener("resize", () => { const b = document.getElementById("pl-
 async function drawLiveMap(visits, date, sel) {
   const box = document.getElementById("pl-live"); if (!box) return;
   fitLive(box);
+  if (S.settings && S.settings.map_provider === "osm") return drawLiveMapOsm(visits, date, sel, box);
   let A;
   try { A = await loadAmapJs(); }
   catch (e) { box.outerHTML = `<div class="pl-map-img" id="pl-map"><p class="note">${tr("{e}，先用静态图。", { e: esc(String(e.message || e)) })}</p></div>`; return drawPlaceMap(visits, sel); }
   if (!document.body.contains(box)) return;
   const keep = LM.day === date && LM.view;
-  if (LM.map) { try { LM.map.destroy(); } catch (e) {} }
+  const keepAmap = keep && LM.kind === "amap";
+  dropLiveMap();
   box.innerHTML = "";
-  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  const dark = isDark();
+  LM.kind = "amap";
   const map = new A.Map(box, { zoom: 14, mapStyle: dark ? "amap://styles/dark" : "amap://styles/whitesmoke" });
   map.addControl(new A.Scale());
   map.addControl(new A.ToolBar({ position: { top: "12px", right: "12px" } }));
@@ -1275,7 +1295,7 @@ async function drawLiveMap(visits, date, sel) {
     return m;
   });
   map.add(LM.markers);
-  if (keep) map.setZoomAndCenter(LM.view.zoom, LM.view.center, true);
+  if (keepAmap) map.setZoomAndCenter(LM.view.zoom, LM.view.center, true);
   else map.setFitView(LM.markers, true, [80, 80, 80, 80]);
   const save = () => { LM.view = { zoom: map.getZoom(), center: map.getCenter() }; };
   map.on("moveend", save); map.on("zoomend", save);
@@ -1285,9 +1305,85 @@ async function drawLiveMap(visits, date, sel) {
 }
 /** 选中一段：那个点变强调色压在最上面；从清单点的把地图挪过去（不缩小） */
 function liveSelect(i, pan) {
+  if (LM.kind === "osm") {
+    LM.markers.forEach((m, j) => { m.setIcon(m.iconOf(j === i)); m.setZIndexOffset(j === i ? 1000 : j); });
+    if (pan && i != null && LM.map) LM.map.setView(LM.markers[i].getLatLng(), Math.max(LM.map.getZoom(), 15));
+    if (pan && LM.card && LM.map) { LM.pinned = i; if (i == null) LM.card.close(); else LM.card.show(i); }
+    return;
+  }
   LM.markers.forEach((m, j) => { m.setContent(pinHtml(LM.visits[j], j, j === i)); m.setzIndex(j === i ? 200 : 100 + j); });
   if (pan && i != null && LM.map) LM.map.setZoomAndCenter(Math.max(LM.map.getZoom(), 15), LM.markers[i].getPosition());
   if (pan && LM.card && LM.map) { LM.pinned = i; if (i == null) LM.card.close(); else { LM.card.setContent(pinCard(LM.visits[i], i)); LM.card.open(LM.map, LM.markers[i].getPosition()); } }
+}
+
+const isDark = () => document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+/** 换地图（高德 ↔ OpenStreetMap）或重画前，拆掉旧的 */
+function dropLiveMap() {
+  if (!LM.map) return;
+  try { LM.kind === "osm" ? LM.map.remove() : LM.map.destroy(); } catch (e) {}
+  LM.map = null;
+}
+/** OpenStreetMap（设置 → 连接 → 地图选了它）：Leaflet＋OSM 官方的标准底图（免费、不用 Key）。
+ *  坐标就是 WGS-84，不用换；编号点、虚线、悬停小卡片、和清单互相选中同高德的 */
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (LM.leaflet) return LM.leaflet;
+  LM.leaflet = new Promise((ok, fail) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const sc = document.createElement("script");
+    sc.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    sc.onload = () => (window.L ? ok(window.L) : fail(new Error(tr("地图没加载上"))));
+    sc.onerror = () => fail(new Error(tr("连不上 OpenStreetMap")));
+    document.head.appendChild(sc);
+  }).catch((e) => { LM.leaflet = null; throw e; });
+  return LM.leaflet;
+}
+async function drawLiveMapOsm(visits, date, sel, box) {
+  let L;
+  try { L = await loadLeaflet(); }
+  catch (e) { box.outerHTML = `<div class="pl-map-img" id="pl-map"><p class="note">${esc(String(e.message || e))}</p></div>`; return; }
+  if (!document.body.contains(box)) return;
+  const keep = LM.day === date && LM.view && LM.kind === "osm";
+  dropLiveMap();
+  box.innerHTML = "";
+  LM.kind = "osm";
+  const map = L.map(box);
+  // OSM 官方的标准底图（CARTO 的浅色、深色底图 2026 起要 Key，不用了）；深色模式把底图反色（.lm-osm-dark）
+  box.classList.toggle("lm-osm-dark", isDark());
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  L.control.scale({ imperial: false }).addTo(map);
+  const pts = visits.map((v) => [v.lat, v.lon]);
+  if (pts.length > 1) L.polyline(pts, { color: "#73726C", weight: 2, opacity: 0.8, dashArray: "6 6" }).addTo(map);
+  LM.visits = visits; LM.pinned = null;
+  const card = L.popup({ closeButton: false, autoPan: false, offset: [0, -14], className: "lm-osm-card" });
+  const showCard = (i) => card.setLatLng(pts[i]).setContent(pinCard(visits[i], i)).openOn(map);
+  LM.card = { close: () => map.closePopup(card), show: showCard };
+  LM.markers = visits.map((v, i) => {
+    const iconOf = (on) => L.divIcon({ html: pinHtml(v, i, on), className: "lm-osm", iconSize: [26, 26], iconAnchor: [13, 13] });
+    const m = L.marker(pts[i], { icon: iconOf(i === sel), zIndexOffset: i === sel ? 1000 : i }).addTo(map);
+    m.iconOf = iconOf;
+    m.on("mouseover", () => showCard(i));
+    m.on("mouseout", () => { if (LM.pinned == null) map.closePopup(card); else if (LM.pinned !== i) showCard(LM.pinned); });
+    m.on("click", () => {
+      LM.pinned = LM.pinned === i ? null : i;
+      if (LM.pinned == null) map.closePopup(card); else showCard(i);
+      const same = PL_SEL.i === i; PL_SEL = same ? { date: null, i: null } : { date, i };
+      $app.querySelectorAll("[data-sel]").forEach((x) => x.classList.toggle("is-sel", !same && +x.dataset.sel === i));
+      liveSelect(same ? null : i, false);
+      const row = $app.querySelector(`.pm-row[data-sel="${i}"]`); if (row && !same) row.scrollIntoView({ block: "nearest" });
+    });
+    return m;
+  });
+  if (keep) map.setView(LM.view.center, LM.view.zoom);
+  else if (pts.length === 1) map.setView(pts[0], 16);
+  else map.fitBounds(L.latLngBounds(pts), { padding: [80, 80], maxZoom: 16 });
+  map.on("moveend", () => { LM.view = { zoom: map.getZoom(), center: map.getCenter() }; });
+  map.on("click", () => { LM.pinned = null; map.closePopup(card); });
+  if (sel != null && pts[sel]) { LM.pinned = sel; showCard(sel); }
+  LM.map = map; LM.day = date;
 }
 
 /** 地图图片缓存：停留点和选中的那段没变就不再问高德（今天页每分钟自动刷新） */
@@ -2054,6 +2150,8 @@ function bindSync() {
 const THEMES = [["", tr("跟随系统")], ["light", tr("浅色")], ["dark", tr("深色")]];
 /** 界面语言（i18n.js 读 localStorage "lang"）：语言名照各自的写法，不翻 */
 const LANGS = [["", tr("跟随系统")], ["zh", "简体中文"], ["en", "English"]];
+/** AI 总结的语言（settings.json 的 summary_language）：空＝跟随界面语言（界面语言只在本机 localStorage，启动时报给后台存成 ui_lang） */
+const SUM_LANGS = [["", tr("跟随界面")], ["zh", "简体中文"], ["en", "English"]];
 
 // ---------- 字体（设置 → 通用）：默认用系统的，也可以换成这台电脑上装的任意字体；只存本机（index.html 的 FONTS） ----------
 
@@ -2126,6 +2224,8 @@ const same = (a, b) => JSON.stringify(SETTING_KEYS.map((k) => a[k])) === JSON.st
 const IS_WIN = /Windows/.test(navigator.userAgent);
 const KEY_SOURCE = { keychain: tr("已存（钥匙串）"), file: tr("已存（数据目录）"), env: tr("在用环境变量里的") };
 const KEY_STORE = IS_WIN ? tr("数据目录") : tr("钥匙串");
+/** 暂停多久（设置 → 记录 → 暂停） */
+const PAUSES = [["60", tr("1 小时")], ["morning", tr("到明早 8 点")], ["on", tr("一直")]];
 const DELETES = [["15", tr("最近 15 分钟")], ["60", tr("最近 1 小时")], ["today", tr("今天全部")]];
 const SS = { deleting: null, deleted: null, advanced: false };
 /** 项目列表（设置页进来时取一次，改过后重取） */
@@ -2494,36 +2594,37 @@ async function renderSettings() {
   const st = S.status, cf = S.settings;
   const theme = document.documentElement.dataset.theme || "";
   let langPref = ""; try { langPref = localStorage.getItem("lang") || ""; } catch (e) {}
-  const tabs = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="set-tabs">${tabsHere.map(([k, v]) =>
-    `<button role="tab" aria-selected="${k === tab}" class="${k === tab ? "is-on" : ""}" data-st="${k}">${v}</button>`).join("")}</div></div></div>`;
+  // 照 Claude 设置页：左边一列分区（设计系统 SubNav），窄屏收成一排
+  const tabs = `<nav class="mx-subnav" id="set-tabs" aria-label="${tr("设置分区")}">${tabsHere.map(([k, v]) =>
+    `<button class="${k === tab ? "is-on" : ""}" data-st="${k}"${k === tab ? ' aria-current="page"' : ""}>${v}</button>`).join("")}</nav>`;
 
   let body = "";
   if (tab === "general") {
     const mobile = !!st.mobile;
     body = section(tr("个人资料"), profileRow())
       + (mobile ? phoneSection() : "")
-      + section(tr("通用"), (mobile ? "" : setRow(tr("开机自动启动"), tr("登录电脑后自动开始记录。"), `<button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="${tr("开机自动启动")}"></button>`))
+      + section(tr("通用"), (mobile ? "" : setRow(tr("开机自动启动"), tr("登录电脑后自动开始记录"), `<button class="mx-switch" role="switch" id="login" aria-checked="${!!st.login_item}" aria-label="${tr("开机自动启动")}"></button>`))
         + setRow(tr("主题"), "", `<div class="mx-seg" role="tablist" id="theme">${THEMES.map(([k, v]) => `<button role="tab" aria-selected="${k === theme}" class="${k === theme ? "is-on" : ""}" data-theme="${k}">${v}</button>`).join("")}</div>`)
         + setRow(tr("语言"), "", `<div class="mx-seg" role="tablist" id="lang">${LANGS.map(([k, v]) => `<button role="tab" aria-selected="${k === langPref}" class="${k === langPref ? "is-on" : ""}" data-lang="${k}">${v}</button>`).join("")}</div>`)
+        + setRow(tr("AI 总结的语言"), tr("10 分钟摘要、日总结、周总结、月总结用哪种语言写"), `<div class="mx-seg" role="tablist" id="sum-lang">${SUM_LANGS.map(([k, v]) => `<button role="tab" aria-selected="${k === (cf.summary_language || "")}" class="${k === (cf.summary_language || "") ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div>`)
         + (mobile ? "" : setRow(tr("字体"), fontDesc(), smallBtn("font-edit", tr("更改")))))
-      + (mobile ? section(tr("关于"), setRow(tr("版本 {v}", { v: esc(st.version || "") }), tr("手机版跟着 TestFlight 更新。"), "")) : aboutSection());
+      + (mobile ? section(tr("关于"), setRow(tr("版本 {v}", { v: esc(st.version || "") }), tr("手机版跟着 TestFlight 更新"), "")) : aboutSection());
   } else if (tab === "account") {
     if (cf.sync_mode === "folder" && !sy.configured && !AC.folder) AC.folder = await call("folder_state").catch(() => ({}));
     body = sy.shadow ? section(tr("账号"), emptyInline(tr("测试版不登录账号"))) : section(tr("账号与同步"), accountBody(sy));
   } else if (tab === "record") {
     const pause = st.paused
-      ? setRow(tr("已暂停"), st.paused_until ? tr("到 {t} 自动继续。", { t: hm(st.paused_until) }) : tr("一直暂停，点继续才恢复。"), `<button class="mx-btn mx-btn--primary mx-btn--sm" data-pause="off">${tr("继续记录")}</button>`)
-      : setRow(tr("暂停记录"), tr("暂停后不记录"), `<div class="btns"><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="60">${tr("1 小时")}</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="morning">${tr("到明早 8 点")}</button><button class="mx-btn mx-btn--secondary mx-btn--sm" data-pause="on">${tr("一直")}</button></div>`);
-    const block = `<div class="block"><div><div class="mx-setting-name">${tr("不记录的 app")}</div><div class="mx-setting-desc">${tr("在前台时只记用了多久，不记内容。")}</div></div>
+      ? setRow(tr("已暂停"), st.paused_until ? tr("到 {t} 自动继续", { t: hm(st.paused_until) }) : tr("一直暂停，点继续才恢复"), smallBtn("pause-off", tr("继续记录")))
+      : setRow(tr("暂停记录"), tr("暂停后不记录"), smallBtn("pause-open", tr("暂停")));
+    const block = `<div class="block"><div><div class="mx-setting-name">${tr("不记录的 app")}</div><div class="mx-setting-desc">${tr("在前台时只记用了多久，不记内容")}</div></div>
         ${cf.blocklist.length ? `<div class="mx-chips" id="chips">${cf.blocklist.map((b, i) => `<button class="mx-chip" data-i="${i}" title="${tr("移出")}">${esc(b)}${ICON.close}</button>`).join("")}</div>` : ""}
         <div class="inline"><input class="mx-input mono" id="block-new" placeholder="${tr("app 名或 bundle id，比如 1Password")}" aria-label="${tr("不记录的 app")}"><button class="mx-btn mx-btn--secondary" id="block-add">${tr("加入")}</button></div></div>`;
-    const del = SS.deleting
-      ? `<div class="mx-confirm"><div class="mx-confirm-text"><b>${tr("删除{what}的记录？", { what: DELETES.find((x) => x[0] === SS.deleting)[1] })}</b><span>${tr("删了找不回来。")}</span></div><button class="mx-btn mx-btn--secondary" data-del="keep">${tr("取消")}</button><button class="mx-btn mx-btn--danger" data-del="go">${tr("删除")}</button></div>`
-      : setRow(tr("删除最近的记录"), SS.deleted != null ? tr("刚删掉 {n} 条。", { n: SS.deleted }) : tr("比如刚输过的私人内容。"), `<div class="btns">${DELETES.map(([k, v]) => `<button class="mx-btn mx-btn--secondary mx-btn--sm" data-del="${k}">${v}</button>`).join("")}</div>`);
+    const del = setRow(tr("删除最近的记录"), SS.deleted != null ? tr("刚删掉 {n} 条", { n: SS.deleted }) : tr("比如刚输过的私人内容"), smallBtn("del-open", tr("删除")));
     body = section(tr("记录"), pause + block) + section(tr("隐私"), del);
   } else if (tab === "connect") {
     const ks = cf.api_key_source;
-    const amap = cf.has_amap_key && cf.has_amap_js ? pill(true, tr("已存")) : cf.has_amap_key ? pill(false, tr("缺地图 Key")) : pill(false, tr("还没有"));
+    const amap = cf.has_amap_key && cf.has_amap_js ? tr("Key 已存") : cf.has_amap_key ? tr("缺地图 Key") : tr("还没有 Key");
+    const osm = cf.map_provider === "osm";
     const syncLocked = sy.configured && !sy.shadow;
     const L = SS.llm || {};
     const official = cf.model_mode === "official", asrOfficial = cf.transcribe_server === cf.default_transcribe_server, mapOfficial = cf.map_mode === "official";
@@ -2541,22 +2642,23 @@ async function renderSettings() {
     const calls = (n) => tr("{n} 次", { n: numText(n) });
     body = section(tr("官方服务"), setRow(tr("这个账号"), L.plan === "official" ? tr("{list}用官方的，不用填 Key", { list: [[tr("模型"), L.llm], [tr("转写"), L.asr], [tr("地图"), L.map]].filter(([, u]) => !u || (u.quota || 0) >= 0).map(([n]) => n).join(tr("、")) }) : L.plan === "stopped" ? tr("已停用，联系管理员") : L.error ? tr("登录后才能用") : tr("还没开通，联系管理员"), planPill)
         + (L.plan === "official" ? useRow(tr("模型"), L.llm, official, tokens) + useRow(tr("转写"), L.asr, asrOfficial, minutes) + useRow(tr("地图"), L.map, mapOfficial, calls) : ""))
-      + section(tr("每一项"), (official
-      ? setRow(tr("模型"), tr("官方"), `${st.mobile ? "" : smallBtn("c-usage", tr("用量"))}${smallBtn("c-model", tr("设置"))}`)
-      : setRow(tr("模型"), `${tr("自己的网关")} · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || tr("没填模型"))}</span>`, `${pill(!!ks, ks ? tr("密钥已存") : tr("没有密钥"))}${st.mobile ? "" : smallBtn("c-usage", tr("用量"))}${smallBtn("c-model", tr("设置"))}`))
+      + section(tr("服务"), (official
+      ? setRow(tr("模型"), tr("官方"), smallBtn("c-model", tr("设置")))
+      : setRow(tr("模型"), `${tr("自己的网关")} · <span class="mono">${esc(hostOf(cf.gateway))} · ${esc(cf.model_segment || tr("没填模型"))}</span> · ${ks ? tr("密钥已存") : tr("没有密钥")}`, smallBtn("c-model", tr("设置"))))
+      + (st.mobile ? "" : setRow(tr("模型用量"), tr("近 30 天，按用途分"), smallBtn("c-usage", tr("查看"))))
       + setRow(tr("转写服务"), `${asrOfficial ? tr("官方") : `${tr("自建")} · <span class="mono">${esc(hostOf(cf.transcribe_server))}</span>`} · ${tr("你叫「{name}」", { name: esc(cf.speaker_name) })}${st.cloud_sync ? `<br>${esc(st.cloud_sync)}` : ""}`, smallBtn("c-asr", tr("设置")))
-      + setRow(tr("高德地图"), mapOfficial ? tr("官方") : tr("自己的 Key"), `${mapOfficial ? "" : amap}${smallBtn("c-amap", tr("设置"))}`)
+      + setRow(tr("地图"), osm ? tr("OpenStreetMap · 免费，不用 Key") : `${tr("高德地图")} · ${mapOfficial ? tr("官方") : `${tr("自己的 Key")} · ${amap}`}`, smallBtn("c-amap", tr("设置")))
       + (st.mobile ? "" : setRow(tr("同步方式"), cf.sync_mode === "folder" ? `${tr("同步文件夹")} · <span class="mono">${esc(tildePath(cf.sync_folder))}</span>`
           : `<span class="mono">${esc(hostOf(cf.sync_server))}</span>${cf.sync_server === cf.default_sync_server ? ` · ${tr("官方服务器")}` : ` · ${tr("自建服务器")}`}`,
         smallBtn("c-sync", tr("更改"), syncLocked ? `disabled title="${tr("同步开着不能换，先在「账号」里退出")}"` : "")))
       )
-      + (st.mobile ? "" : section(tr("问问历史"), setRow(tr("接到 AI 里"), tr("让 Claude、Cursor 这类本机 AI 读你的记录，直接问「上周哪天熬夜最多」「X 推进到哪了」。只读，数据不出这台电脑"), smallBtn("c-mcp", tr("接入方法")))));
+      + (st.mobile ? "" : section(tr("问问历史"), setRow(tr("接到 AI 里"), tr("让 Claude、Cursor 这类本机 AI 读你的记录，直接问「上周哪天熬夜最多」「X 推进到哪了」，只读，数据不出这台电脑"), smallBtn("c-mcp", tr("接入方法")))));
   } else if (tab === "data") {
     body = SS.storage ? storageView(SS.storage) : `<div class="form">${emptyInline(tr("在看数据存在哪……"))}</div>`;
   } else {
     body = projectsSection();
   }
-  $app.innerHTML = header(tr("设置")) + tabs + `<div class="form">${body}</div>`;
+  $app.innerHTML = header(tr("设置")) + `<div class="set-wrap">${tabs}<div class="form">${body}</div></div>`;
 
   document.getElementById("set-tabs").onclick = (e) => {
     const b = e.target.closest("[data-st]"); if (!b) return;
@@ -2582,26 +2684,19 @@ async function renderSettings() {
     };
     on("login", async () => { try { await call("set_login_item", { on: !st.login_item }); } catch (x) { alert(tr("没改成：{err}", { err: x })); } renderSettings(); });
     on("font-edit", () => fontDialog(renderSettings));
+    document.getElementById("sum-lang").onclick = async (e) => {
+      const b = e.target.closest("[data-v]"); if (!b) return;
+      await saveSome({ summary_language: b.dataset.v }); renderSettings();
+    };
   }
   if (tab === "account" && !sy.shadow) bindAccount();
   if (tab === "projects") bindProjects();
   if (tab === "record") {
-    $app.querySelectorAll("[data-pause]").forEach((b) => (b.onclick = async () => {
-      const k = b.dataset.pause;
-      if (k === "off") await call("set_paused", { paused: false });
-      else await call("set_paused", { paused: true, minutes: k === "on" ? null : k === "morning" ? minutesToMorning() : +k });
-      renderSettings();
-    }));
-    $app.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
-      const k = b.dataset.del;
-      if (k === "keep") { SS.deleting = null; return renderSettings(); }
-      if (k === "go") {
-        const what = SS.deleting; SS.deleting = null;
-        SS.deleted = await call("delete_since", what === "today" ? { today: true } : { minutes: +what });
-        return renderSettings();
-      }
-      SS.deleting = k; SS.deleted = null; renderSettings();
-    }));
+    on("pause-off", async () => { await call("set_paused", { paused: false }); renderSettings(); });
+    on("pause-open", () => choiceDialog({ title: tr("暂停记录"), options: PAUSES, note: tr("暂停期间不记录，到时间自动继续"), ok: tr("暂停"),
+      go: async (k) => { await call("set_paused", { paused: true, minutes: k === "on" ? null : k === "morning" ? minutesToMorning() : +k }); renderSettings(); } }));
+    on("del-open", () => choiceDialog({ title: tr("删除最近的记录"), options: DELETES, note: tr("删了找不回来"), ok: tr("删除"), okClass: "danger",
+      go: async (k) => { SS.deleted = await call("delete_since", k === "today" ? { today: true } : { minutes: +k }); renderSettings(); } }));
     const setBlock = async (list) => { await saveSome({ blocklist: list }); renderSettings(); };
     const addBlock = () => { const v = document.getElementById("block-new").value.trim(); if (v && !cf.blocklist.includes(v)) setBlock([...cf.blocklist, v]); };
     on("block-add", addBlock);
@@ -2753,18 +2848,30 @@ function asrDialog() {
 }
 
 /** 高德：「Web 服务」Key（地名、附近的店、搜地点），「Web端(JS API)」Key 和安全密钥（能缩放的地图）。留空不改 */
+/** 地图服务：高德（中国大陆的地点和店最全，官方或自己的 Key）或 OpenStreetMap（全球免费、不用 Key，地名和附近的店来自 OSM 社区数据） */
 function amapDialog() {
   const cf = S.settings, hex = /^[0-9a-f]{32}$/i;
   let mode = cf.map_mode === "official" ? "official" : "custom";
+  let prov = cf.map_provider === "osm" ? "osm" : "amap";
   openDialog({
-    title: tr("高德地图"), ok: tr("保存"),
-    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="am-mode">${[["official", tr("官方")], ["custom", tr("自己的 Key")]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
+    title: tr("地图"), ok: tr("保存"),
+    body: `<div class="mx-field"><div class="mx-seg" role="tablist" id="mp-prov">${[["amap", tr("高德地图")], ["osm", "OpenStreetMap"]].map(([k, v]) => `<button role="tab" aria-selected="${k === prov}" class="${k === prov ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
+      <div id="mp-osm" ${prov === "osm" ? "" : "hidden"}><p class="note" style="margin:0">${tr("全球免费，不用 Key；中国大陆的地点和店名不如高德全")}</p></div>
+      <div id="mp-amap" class="stack" ${prov === "amap" ? "" : "hidden"}>
+      <div class="mx-field"><div class="mx-seg" role="tablist" id="am-mode">${[["official", tr("官方")], ["custom", tr("自己的 Key")]].map(([k, v]) => `<button role="tab" aria-selected="${k === mode}" class="${k === mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div></div>
       <div id="am-official" ${mode === "official" ? "" : "hidden"}><p class="note">${tr("开通后不用填 Key")}</p></div>
       <div id="am-custom" class="stack" ${mode === "custom" ? "" : "hidden"}>`
       + dlgField("ak", tr("Web 服务 Key"), { type: "password", mono: true, ph: cf.has_amap_key ? KEEP : "", help: `${tr("用于地名和附近的店")} · ${howto("amap", tr("怎么获取"))}` })
       + dlgField("jk", tr("地图 Key"), { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "" })
-      + dlgField("jc", tr("地图安全密钥"), { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "", help: `${tr("用于显示可拖动的地图")} · ${howto("amap", tr("怎么获取"))}` }) + `</div>`,
+      + dlgField("jc", tr("地图安全密钥"), { type: "password", mono: true, ph: cf.has_amap_js ? KEEP : "", help: `${tr("用于显示可拖动的地图")} · ${howto("amap", tr("怎么获取"))}` }) + `</div></div>`,
     onOpen: (el) => {
+      el.querySelector("#mp-prov").onclick = (e) => {
+        const b = e.target.closest("[data-v]"); if (!b) return;
+        prov = b.dataset.v;
+        el.querySelectorAll("#mp-prov button").forEach((x) => { x.classList.toggle("is-on", x === b); x.setAttribute("aria-selected", x === b); });
+        el.querySelector("#mp-osm").hidden = prov !== "osm";
+        el.querySelector("#mp-amap").hidden = prov !== "amap";
+      };
       el.querySelector("#am-mode").onclick = (e) => {
         const b = e.target.closest("[data-v]"); if (!b) return;
         mode = b.dataset.v;
@@ -2774,14 +2881,16 @@ function amapDialog() {
       };
     },
     submit: async (el) => {
-      if (mode === "official") { await saveSome({ map_mode: "official" }); LM.loading = null; return renderSettings(); }
+      LM.loading = null; LM.kind = null;
+      if (prov === "osm") { await saveSome({ map_provider: "osm" }); return renderSettings(); }
+      if (mode === "official") { await saveSome({ map_provider: "amap", map_mode: "official" }); return renderSettings(); }
       const ak = dlgVal(el, "ak"), jk = dlgVal(el, "jk"), jc = dlgVal(el, "jc");
       if (ak && !hex.test(ak)) throw tr("Web 服务 Key 是 32 位的字母数字。");
       if ((jk || jc) && !(hex.test(jk) && hex.test(jc))) throw tr("地图 Key 和安全密钥要一起填，各 32 位");
       if (!ak && !cf.has_amap_key) throw tr("填一个 Web 服务 Key，或者改用官方。");
       if (ak) await call("set_amap_key", { key: ak });
       if (jk) await call("set_amap_js", { key: jk, code: jc });
-      await saveSome({ map_mode: "custom" }); LM.loading = null; renderSettings();
+      await saveSome({ map_provider: "amap", map_mode: "custom" }); renderSettings();
     },
   });
 }
@@ -2956,7 +3065,11 @@ async function route() {
   markNav(S.page);
   try {
     if (!S.days.length && !S.status) await boot();
-    if (!S.settings) { S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings)); }
+    if (!S.settings) {
+      S.settings = await call("get_settings"); S.draft = JSON.parse(JSON.stringify(S.settings));
+      // AI 总结「跟随界面」时后台要知道界面语言（界面语言只存在这台的 localStorage）：变了就报一次
+      if (TAURI && S.settings.ui_lang !== LANG) saveSome({ ui_lang: LANG }).catch(() => {});
+    }
     if (!S.settings.onboarded && TAURI && !(S.status && S.status.mobile)) return renderOnboarding();
     if (S.page !== "devices") { DEV.id = null; stopEventsTimer(); }
     if (S.page === "summary") await renderSummary(arg, arg2);

@@ -397,6 +397,8 @@ fn main() {
             },
             Some("storage_stats") => tauri::async_runtime::block_on(storage::storage_stats()),
             Some("test_model") => json!(tauri::async_runtime::block_on(data::test_model()).map(|_| "通了".to_string()).unwrap_or_else(|e| e)),
+            Some("map_around") => amap::amap_around(args.get(3).and_then(|x| x.parse().ok()).unwrap_or(32.0475), args.get(4).and_then(|x| x.parse().ok()).unwrap_or(118.9215), Some(120)).map(|v| json!(v.iter().take(6).map(|x| json!([x["name"], x["type"], x["distance"]])).collect::<Vec<_>>())).unwrap_or_else(|e| json!({ "error": e })),
+            Some("map_admin") => json!(amap::admin(32.0475, 118.9215, 20.0, true)),
             Some("amap_search") => amap::amap_search(args.get(3).cloned().unwrap_or_default(), Some(32.0475), Some(118.9215)).map(|v| json!(v.len())).unwrap_or_else(|e| json!({ "error": e })),
             Some("amap_js") => tauri::async_runtime::block_on(amap::amap_js_config()).as_object().map(|o| json!(o.keys().collect::<Vec<_>>())).unwrap_or(json!(null)),
             Some("sync_usage") => beayy_sync::usage(&beayy_core::data_root()).unwrap_or_else(|e| json!({ "error": e })),

@@ -51,6 +51,14 @@ body { padding: 0; overflow: hidden; }
 .mx-head-row { min-height: 32px; }
 .reading { max-width: var(--reading-width); }
 .form { max-width: var(--form-width); }
+/* 设置页：左边分区导航（设计系统 SubNav）＋右边正文；窄屏分区收成页名下面一排 */
+.set-wrap { display: flex; align-items: flex-start; gap: var(--space-6); }
+.set-wrap > .form { flex: 1; min-width: 0; }
+@media (max-width: 759px) {
+  .set-wrap { flex-direction: column; gap: var(--space-4); }
+  .set-wrap > .mx-subnav { flex-direction: row; width: auto; max-width: 100%; overflow-x: auto; }
+  .set-wrap > .mx-subnav button { flex: none; }
+}
 .note { font-size: 13px; line-height: 17px; color: var(--ink-3); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .mx-sec-head h2 { font-size: 15px; }
@@ -600,6 +608,12 @@ a.mx-btn { text-decoration: none; }
 .lm-pin.often { background: color-mix(in srgb, var(--ink) 30%, var(--surface)); }
 .lm-pin.now { background: var(--primary); color: var(--on-primary); }
 .lm-pin.sel { background: var(--accent-ink); color: var(--on-primary); transform: scale(1.2); }  /* 颜色都取墨线令牌，跟着深浅色走 */
+/* OpenStreetMap（Leaflet）：去掉 Leaflet 自带的白底方框和气泡外壳，点和小卡片用同高德的样式 */
+.leaflet-div-icon.lm-osm { background: none; border: 0; }
+.lm-osm-card .leaflet-popup-content-wrapper { padding: 0; background: none; box-shadow: none; border-radius: 0; }
+.lm-osm-card .leaflet-popup-content { margin: 0; }
+.lm-osm-card .leaflet-popup-tip-container { display: none; }
+.lm-osm-dark .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); }
 
 /* 一段停留认定了好几家：认定的候选打 ✓、实线墨色，再点取消 */
 .ptl-guess button.on { color: var(--ink); border-bottom: 1px solid var(--ink-3); }

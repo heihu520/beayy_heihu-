@@ -37,6 +37,8 @@ enum Amap {
     // MARK: 请求
 
     private static func get(_ path: String, _ q: [String: String]) async throws -> [String: Any] {
+        // 电脑上选了 OpenStreetMap：手机不问高德，地名和候选由电脑取、同步过来（10-30）
+        guard Account.shared.mapProvider == "amap" else { throw Failure.bad("用的是 OpenStreetMap，地名由电脑取") }
         let r: URLRequest
         if Account.shared.amapOfficial, Account.shared.credentials != nil {
             // 官方服务（香港那台，到高德快），凭地图票据

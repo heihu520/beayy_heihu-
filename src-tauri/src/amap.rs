@@ -4,11 +4,20 @@
 //!   每次算账号的地图用量；能缩放的地图拿公开的地图 Key＋安全密钥中转地址；
 //! - custom（自己的 Key）：Key 是高德开放平台「Web 服务」类型的，macOS 存钥匙串（服务 com.fengli.beayy，账号 amap_key），Windows 在数据目录 `secrets/amap_key`；不回传网页。
 //! 停留点存的是 WGS-84，发给高德前换成 GCJ-02，高德给的坐标换回来（同手机的 ChinaOffset）。坐标会发给高德
+//! 地图服务也可以选 OpenStreetMap（settings.json 的 map_provider＝osm，10-30 加）：全球免费、不用 Key，附近的店、搜地点、在哪都走 OSM，见文件末尾
 
 use serde_json::{json, Value};
 use std::time::Duration;
 
 pub const SECRET: &str = "amap_key";
+
+/// 地图服务：amap（高德，默认）／osm（OpenStreetMap）
+pub fn provider() -> &'static str {
+    match crate::data::read_settings_raw().get("map_provider").and_then(|v| v.as_str()) {
+        Some("osm") => "osm",
+        _ => "amap",
+    }
+}
 
 /// 地图走官方的吗：设置里选过就按选的；没选过的，有自己的 Key 算自己的，否则官方
 pub fn official() -> bool {
@@ -180,6 +189,9 @@ const PLACE_TYPES: &str = "010000|020000|030000|040000|050000|060000|070000|0800
 #[cfg_attr(not(beayy_mobile), tauri::command)]
 pub fn amap_around(lat: f64, lon: f64, radius: Option<u32>) -> Result<Vec<Value>, String> {
     let r = radius.unwrap_or(150).clamp(10, 3000);
+    if provider() == "osm" {
+        return osm_around(lat, lon, r);
+    }
     let v = get("place/around", &[("location", location(lat, lon)), ("radius", r.to_string()), ("sortrule", "distance".into()), ("types", PLACE_TYPES.into()), ("offset", "25".into())])?;
     Ok(pois(&v))
 }
@@ -190,6 +202,9 @@ pub fn amap_search(text: String, lat: Option<f64>, lon: Option<f64>) -> Result<V
     let text = text.trim().to_string();
     if text.is_empty() {
         return Ok(vec![]);
+    }
+    if provider() == "osm" {
+        return osm_search(&text, lat.zip(lon));
     }
     let v = match (lat, lon) {
         (Some(a), Some(b)) => get("place/around", &[("location", location(a, b)), ("keywords", text), ("radius", "50000".into()), ("sortrule", "distance".into()), ("offset", "20".into())])?,
@@ -203,6 +218,9 @@ pub fn amap_search(text: String, lat: Option<f64>, lon: Option<f64>) -> Result<V
 pub fn amap_map(points: Vec<[f64; 2]>, width: Option<u32>, height: Option<u32>, selected: Option<usize>, often: Option<Vec<bool>>) -> Result<String, String> {
     if points.is_empty() {
         return Err("这天没有停留点".into());
+    }
+    if provider() == "osm" {
+        return Err("OpenStreetMap 没有静态图，看能拖动的地图".into());
     }
     let (w, h) = (width.unwrap_or(1000).clamp(200, 1024), height.unwrap_or(480).clamp(200, 1024));
     const MARKS: &[u8] = b"123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -245,6 +263,13 @@ pub fn admin(lat: f64, lon: f64, acc: f64, online: bool) -> Option<Value> {
     }
     if !online {
         return None;
+    }
+    if provider() == "osm" {
+        let out = osm_admin(lat, lon)?;
+        cache.insert(key, out.clone());
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        let _ = std::fs::write(&path, serde_json::to_string(&Value::Object(cache)).unwrap_or_default());
+        return Some(out);
     }
     let v = get("geocode/regeo", &[("location", location(lat, lon)), ("extensions", "all".into()), ("radius", "100".into()), ("roadlevel", "0".into())]).ok()?;
     std::thread::sleep(Duration::from_millis(350)); // 高德限 3 次／秒
@@ -410,6 +435,178 @@ pub fn short(name: &str) -> String {
         }
     }
     name.trim().to_string()
+}
+
+// ---------- OpenStreetMap（map_provider＝osm）：全球免费、不用 Key ----------
+// 在哪、搜地点用 Nominatim（每秒最多 1 次，要带认得出 app 的 User-Agent），附近的店用 Overpass；坐标都是 WGS-84，不用换。
+// 店的类别换成高德那样的「大类;中类」，算把握时饭点、喝东西的加分照旧（score 认的是高德的叫法）
+
+const OSM_UA: &str = concat!("Beayy/", env!("CARGO_PKG_VERSION"), " (https://beayy.com)");
+
+fn osm_get(url: &str, q: &[(&str, String)]) -> Result<Value, String> {
+    let mut req = agent().get(url).header("User-Agent", OSM_UA).header("Accept-Language", "zh-CN,zh,en");
+    for (n, v) in q {
+        req = req.query(*n, v);
+    }
+    let mut r = req.call().map_err(|e| format!("连不上 OpenStreetMap：{e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("OpenStreetMap 没返回结果（{}）", r.status()));
+    }
+    r.body_mut().read_json().map_err(|e| e.to_string())
+}
+
+/// OSM 的标签 → 高德那样的「大类;中类」（常见的几种；其余写成「标签;值」）
+fn osm_type(tags: &Value) -> String {
+    let t = |k: &str| tags[k].as_str().unwrap_or("");
+    let s = match (t("amenity"), t("shop"), t("leisure"), t("tourism")) {
+        ("cafe", ..) => "餐饮服务;咖啡厅",
+        ("ice_cream", ..) | (_, "ice_cream", ..) => "餐饮服务;冷饮店",
+        ("fast_food", ..) => "餐饮服务;快餐厅",
+        ("restaurant" | "food_court", ..) => "餐饮服务;餐厅",
+        ("bar" | "pub", ..) => "餐饮服务;酒吧",
+        (_, "bakery" | "pastry", ..) => "餐饮服务;糕饼店",
+        (_, "tea", ..) => "餐饮服务;茶艺馆",
+        ("school" | "university" | "college" | "kindergarten", ..) => "科教文化服务;学校",
+        ("library", ..) => "科教文化服务;图书馆",
+        ("hospital" | "clinic" | "doctors" | "dentist", ..) => "医疗保健服务;医院",
+        ("pharmacy", ..) => "医疗保健服务;药店",
+        ("bank", ..) => "金融保险服务;银行",
+        ("cinema" | "theatre", ..) => "体育休闲服务;影剧院",
+        (_, _, "fitness_centre" | "sports_centre", _) => "体育休闲服务;运动场馆",
+        (_, _, "park", _) => "风景名胜;公园广场",
+        (_, "supermarket", ..) => "购物服务;超级市场",
+        (_, "mall" | "department_store", ..) => "购物服务;商场",
+        (_, "convenience", ..) => "购物服务;便利店",
+        (_, _, _, "hotel" | "hostel" | "guest_house" | "motel") => "住宿服务;宾馆酒店",
+        (_, _, _, "museum") => "科教文化服务;博物馆",
+        (_, _, _, "attraction" | "viewpoint") => "风景名胜;风景名胜",
+        (a, sh, l, tr) => {
+            let (k, v) = [("amenity", a), ("shop", sh), ("leisure", l), ("tourism", tr), ("office", t("office"))].into_iter().find(|x| !x.1.is_empty()).unwrap_or(("place", ""));
+            return format!("{k};{v}");
+        }
+    };
+    s.to_string()
+}
+
+/// 名字：有中文名用中文名
+fn osm_name(tags: &Value) -> Option<String> {
+    ["name:zh", "name:zh-Hans", "name"].iter().find_map(|k| tags[*k].as_str().filter(|s| !s.is_empty()).map(String::from))
+}
+
+/// 附近有名字的店和地方（吃喝、购物、休闲、住宿、办公），按距离，最多 25 个。
+/// 先问 Overpass；连不上（在中国大陆常超时）退到 Photon（komoot 的 OSM 搜索）的反查，附近的点少一些
+fn osm_around(lat: f64, lon: f64, r: u32) -> Result<Vec<Value>, String> {
+    let a = format!("(around:{r},{lat:.6},{lon:.6})");
+    let q = format!("[out:json][timeout:15];(nwr{a}[name][amenity];nwr{a}[name][shop];nwr{a}[name][leisure];nwr{a}[name][tourism];nwr{a}[name][office];);out center 60;");
+    let v = match osm_get("https://overpass-api.de/api/interpreter", &[("data", q)]) {
+        Ok(v) => v,
+        Err(_) => return photon_around(lat, lon, r),
+    };
+    let mut out: Vec<Value> = v["elements"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    let tags = &e["tags"];
+                    let name = osm_name(tags)?;
+                    let (plat, plon) = (e["lat"].as_f64().or(e["center"]["lat"].as_f64())?, e["lon"].as_f64().or(e["center"]["lon"].as_f64())?);
+                    let d = crate::data::haversine(lat, lon, plat, plon);
+                    Some(json!({ "id": format!("osm:{}/{}", e["type"].as_str().unwrap_or(""), e["id"]), "name": name, "type": osm_type(tags), "distance": (d * 10.0).round() / 10.0, "lat": plat, "lon": plon }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by(|a, b| a["distance"].as_f64().partial_cmp(&b["distance"].as_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(25);
+    Ok(out)
+}
+
+fn photon_around(lat: f64, lon: f64, r: u32) -> Result<Vec<Value>, String> {
+    let v = osm_get("https://photon.komoot.io/reverse", &[("lat", format!("{lat:.6}")), ("lon", format!("{lon:.6}")), ("radius", format!("{:.3}", r as f64 / 1000.0)), ("limit", "40".into())])?;
+    let mut out: Vec<Value> = v["features"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| {
+                    let p = &f["properties"];
+                    let key = p["osm_key"].as_str()?;
+                    if !["amenity", "shop", "leisure", "tourism", "office"].contains(&key) {
+                        return None;
+                    }
+                    let name = p["name"].as_str().filter(|s| !s.is_empty())?.to_string();
+                    let c = f["geometry"]["coordinates"].as_array()?;
+                    let (plon, plat) = (c.first()?.as_f64()?, c.get(1)?.as_f64()?);
+                    let mut tags = serde_json::Map::new();
+                    tags.insert(key.into(), p["osm_value"].clone());
+                    let d = crate::data::haversine(lat, lon, plat, plon);
+                    Some(json!({ "id": format!("osm:{}/{}", p["osm_type"].as_str().unwrap_or(""), p["osm_id"]), "name": name, "type": osm_type(&Value::Object(tags)), "distance": (d * 10.0).round() / 10.0, "lat": plat, "lon": plon }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by(|a, b| a["distance"].as_f64().partial_cmp(&b["distance"].as_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(25);
+    Ok(out)
+}
+
+/// 按名字搜：有位置就偏向这附近（约 50 公里），按距离排
+fn osm_search(text: &str, near: Option<(f64, f64)>) -> Result<Vec<Value>, String> {
+    let mut q = vec![("q", text.to_string()), ("format", "jsonv2".into()), ("limit", "20".into()), ("namedetails", "1".into())];
+    if let Some((lat, lon)) = near {
+        q.push(("viewbox", format!("{:.4},{:.4},{:.4},{:.4}", lon - 0.45, lat + 0.45, lon + 0.45, lat - 0.45)));
+    }
+    let v = osm_get("https://nominatim.openstreetmap.org/search", &q)?;
+    let mut out: Vec<Value> = v
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    let (plat, plon) = (r["lat"].as_str()?.parse::<f64>().ok()?, r["lon"].as_str()?.parse::<f64>().ok()?);
+                    let name = osm_name(&r["namedetails"]).or_else(|| r["name"].as_str().filter(|s| !s.is_empty()).map(String::from))
+                        .or_else(|| r["display_name"].as_str().and_then(|d| d.split(',').next()).map(|s| s.trim().to_string()))?;
+                    let mut tags = serde_json::Map::new();
+                    tags.insert(r["category"].as_str().unwrap_or("place").to_string(), r["type"].clone());
+                    let d = near.map(|(lat, lon)| (crate::data::haversine(lat, lon, plat, plon) * 10.0).round() / 10.0);
+                    Some(json!({ "id": format!("osm:{}/{}", r["osm_type"].as_str().unwrap_or(""), r["osm_id"]), "name": name, "type": osm_type(&Value::Object(tags)), "distance": d, "lat": plat, "lon": plon }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if near.is_some() {
+        out.sort_by(|a, b| a["distance"].as_f64().partial_cmp(&b["distance"].as_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    Ok(out)
+}
+
+/// 在哪（同高德 admin 的字段）：国家、省、市、区县、街道，区域是点所在的那个有名字的地方（楼、园区、店），没有就「路名一带」
+fn osm_admin(lat: f64, lon: f64) -> Option<Value> {
+    let v = osm_get("https://nominatim.openstreetmap.org/reverse", &[("lat", format!("{lat:.6}")), ("lon", format!("{lon:.6}")), ("format", "jsonv2".into()), ("zoom", "18".into()), ("addressdetails", "1".into()), ("namedetails", "1".into())]).ok()?;
+    std::thread::sleep(Duration::from_millis(1100)); // Nominatim 限每秒 1 次
+    let a = &v["address"];
+    let s = |keys: &[&str]| keys.iter().find_map(|k| a[*k].as_str().filter(|t| !t.is_empty()).map(String::from));
+    let province = s(&["state", "province", "region"]);
+    let named = osm_name(&v["namedetails"]).or_else(|| v["name"].as_str().filter(|t| !t.is_empty()).map(String::from));
+    // 区域：点落在的那个有名字的地方（不是路）；再看地址里的小区、商圈、楼；都没有写「路名一带」
+    let area = named.filter(|_| v["category"] != "highway")
+        .or_else(|| s(&["amenity", "shop", "building", "leisure", "tourism", "office", "residential", "commercial", "retail", "industrial"]))
+        .or_else(|| s(&["road"]).map(|r| format!("{r}一带")))
+        .or_else(|| s(&["neighbourhood", "quarter", "suburb"]));
+    // 中国的数据里 city 常常填的是区县（「江宁区」），这时把它当区县，市写省
+    let mut city = s(&["city", "town", "municipality"]);
+    let mut district = s(&["city_district", "district", "county", "borough"]);
+    if district.is_none() && city.as_deref().map(|c| c.ends_with('区') || c.ends_with('县')).unwrap_or(false) {
+        district = city.take();
+    }
+    Some(json!({
+        "country": s(&["country"]),
+        "province": province,
+        "city": city.or(province.clone()),
+        "district": district,
+        "township": s(&["suburb", "quarter", "village", "town"]),
+        "adcode": Value::Null,
+        "towncode": Value::Null,
+        "area": area,
+    }))
 }
 
 #[cfg(test)]

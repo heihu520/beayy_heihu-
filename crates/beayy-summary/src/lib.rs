@@ -743,6 +743,13 @@ impl Summarizer {
         (get("gateway", GATEWAY), get("summary_model", MODEL))
     }
 
+    /// AI 总结用哪种语言写：settings.json 的 summary_language（zh／en）；没选＝跟随界面语言（界面启动时报的 ui_lang），再没有就中文
+    pub fn out_lang(&self) -> &'static str {
+        let s = self.raw_settings();
+        let pick = |k: &str| s.get(k).and_then(Value::as_str).filter(|v| *v == "zh" || *v == "en");
+        if pick("summary_language").or(pick("ui_lang")) == Some("en") { "en" } else { "zh" }
+    }
+
     fn raw_settings(&self) -> Map<String, Value> {
         fs::read_to_string(self.root.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
     }
@@ -798,6 +805,12 @@ impl Summarizer {
                 return Err("还没设模型：到设置 → 连接 → 模型 里填".into());
             }
             (format!("{}/chat/completions", gateway.trim_end_matches('/')), format!("Bearer {}", api_key()?))
+        };
+        // AI 总结的语言（设置 → 通用）：给人看的那几种（10 分钟摘要、小时摘要、日周月总结）照设置写；项目名归并、打标签这些内部用的不管
+        let system = if self.out_lang() == "en" && ["segment", "hourly", "daily", "weekly", "monthly"].contains(&kind) {
+            format!("{system}\n{EN_NOTE}")
+        } else {
+            system.to_string()
         };
         let body = json!({"model": model, "temperature": 0.3, "messages": [
             {"role": "system", "content": system}, {"role": "user", "content": user}]});
@@ -1122,6 +1135,9 @@ const ACTIVITY_GUIDE: &str = "    activity 只能填下面的二级类型（如�
     domain 是这件事为了什么，只能填：工作（为收入或职业：雇主、客户、自己的产品）、成长（为提升自己）、生活（家庭、财务、住行等个人事务）、健康（身体和心理）、关系（家人朋友、社交）、休闲（纯放松）
     project 是这段在推进的具体项目、产品、客户或事情，用最短的常用叫法（如「官网改版」「张三的合同」）；不要拿聊天会话、文档、窗口的标题当项目名，要写这件事本身；同一件事优先沿用「已有的项目名」里的写法；看不出就写空字符串。
 ";
+
+/// 总结用英文写时接在提示词后面：规定只能填中文选项的字段照原样，给人看的文字都用英文
+const EN_NOTE: &str = "输出语言：英文（这一条优先于上面「全部用中文」的要求）。JSON 的字段名，以及 activity、domain 这类规定只能从中文选项里选的字段，照原样填中文；project 照「已有的项目名」的写法。除此之外所有给人看的文字（标题、描述、经过、线索、一句话、点评、做成了什么、偏离、明天等）都用英文（English）写，对用户用 you。引文用英文原文或通行英译，出处也写英文。";
 
 const ROLLUP_PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上一个小时里每 10 分钟的摘要。请把它们合成这一小时的摘要，全部用中文，用第二人称「你」。
 只写摘要里有的事，不编造，不要写「材料未显示」这类话，不写具体分钟数。

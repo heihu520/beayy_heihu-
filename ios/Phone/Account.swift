@@ -81,6 +81,8 @@ struct RemoteConfig: Codable, Equatable {
     /// 地图用官方服务（official，经同步服务中转、不用 Key）还是自己的（custom，amap_key）
     var map_mode: String?
     var amap_key: String?
+    /// 地图服务：amap（高德）／osm（OpenStreetMap，手机不问高德）；旧电脑没推这一项＝amap
+    var map_provider: String?
     var updated: Int64?
 }
 
@@ -168,6 +170,9 @@ final class Account: ObservableObject {
 
     /// 高德 Key：电脑推来的；没有（没登录、电脑没配）就是空
     var amapKey: String? { lock.withLock { storedConfig?.amap_key }.flatMap { $0.isEmpty ? nil : $0 } }
+
+    /// 地图服务：电脑选的，没推过＝高德
+    var mapProvider: String { lock.withLock { storedConfig?.map_provider } ?? "amap" }
 
     /// 地图走官方服务：电脑选的官方；或者电脑没配、也没有编进去的 Key 时，登录着就走官方
     var amapOfficial: Bool {

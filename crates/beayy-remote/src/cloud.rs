@@ -328,8 +328,9 @@ pub fn round(relay: &mut Relay, root: &Path, budget: Duration) -> Result<CloudNo
 fn push_config(root: &Path, st: &mut Map<String, Value>) -> Result<(), String> {
     // 地图用官方的：不推 Key，手机也经同步服务中转
     let official_map = settings().get("map_mode").and_then(Value::as_str).map(|m| m == "official").unwrap_or_else(|| beayy_core::secret_get("amap_key").is_none());
+    let provider = settings().get("map_provider").and_then(Value::as_str).filter(|p| *p == "osm").unwrap_or("amap").to_string();
     let cfg = json!({"v": 1, "transcribe_server": transcribe_server(), "map_mode": if official_map { "official" } else { "custom" },
-        "amap_key": if official_map { None } else { beayy_core::secret_get("amap_key") }});
+        "amap_key": if official_map { None } else { beayy_core::secret_get("amap_key") }, "map_provider": provider});
     let sig = format!("{:x}", fnv(&cfg.to_string()));
     if st.get("config_sig").and_then(Value::as_str) == Some(sig.as_str()) {
         return Ok(());
@@ -352,13 +353,20 @@ fn pull_config(root: &Path) -> Result<(), String> {
             beayy_core::secret_set("amap_key", k)?;
         }
     }
-    if let Some(t) = v["transcribe_server"].as_str().filter(|t| !t.is_empty()) {
-        let p = default_root().join("settings.json");
-        let mut s: Map<String, Value> = fs::read_to_string(&p).ok().and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_default();
-        if s.get("transcribe_server").and_then(Value::as_str) != Some(t) {
-            s.insert("transcribe_server".into(), json!(t));
-            let _ = fs::write(&p, serde_json::to_vec_pretty(&s).unwrap_or_default());
+    // 转写服务地址、地图服务（高德／OpenStreetMap）照电脑的写进手机的设置
+    let p = default_root().join("settings.json");
+    let mut s: Map<String, Value> = fs::read_to_string(&p).ok().and_then(|x| serde_json::from_str(&x).ok()).unwrap_or_default();
+    let mut changed = false;
+    for k in ["transcribe_server", "map_provider"] {
+        if let Some(t) = v[k].as_str().filter(|t| !t.is_empty()) {
+            if s.get(k).and_then(Value::as_str) != Some(t) {
+                s.insert(k.into(), json!(t));
+                changed = true;
+            }
         }
+    }
+    if changed {
+        let _ = fs::write(&p, serde_json::to_vec_pretty(&s).unwrap_or_default());
     }
     Ok(())
 }
