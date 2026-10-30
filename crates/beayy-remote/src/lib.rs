@@ -192,7 +192,7 @@ fn agent() -> ureq::Agent {
     // 根证书用系统的（同 beayy-sync）
     beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+        .tls_config(beayy_core::tls!())
         .timeout_global(Some(Duration::from_secs(60)))
         .http_status_as_error(false)
         .build())

@@ -4,7 +4,9 @@
 //! - 账号同步只下载：电脑的分段、摘要拉下来，界面照电脑那样算；录音、停留点经账号同步拿、手机自己也能算，
 //!   写进带「-m」后缀的设备目录（读的时候按停留点 id、段 id、句子去重）。电脑关机时手机也看得到。
 //! - 定位、手表录音中转、加密上传是原生 Swift；账号凭据读这里存的同一份（数据目录 sync/account）。
-//! 方案见 报告/方案_20261021_手机同一套代码.md
+//! - 安卓（app/android）同一套：Kotlin 外壳经 JNI 调 `Core.call`，到这里的同一个 dispatch。安卓能直接读每个 app 的使用时长
+//!   （UsageStatsManager），所以它是一台采集设备：设备名 android-…，记成和 iPhone 一样的 app.focus 事件，随账号同步上传给电脑。
+//! 方案见 报告/方案_20261021_手机同一套代码.md、报告/方案_20261030_安卓.md
 
 #[path = "../../src-tauri/src/data.rs"]
 #[allow(dead_code)]
@@ -39,7 +41,7 @@ const CLOUD_EVERY: Duration = Duration::from_secs(120);
 static CLOUD: Mutex<String> = Mutex::new(String::new());
 static START: Once = Once::new();
 
-/// 这台手机在同步里的设备名：iosapp-<8 位十六进制>，第一次启动生成存在数据目录。
+/// 这台手机在同步里的设备名：iosapp-<8 位十六进制>（安卓 android-…），第一次启动生成存在数据目录。
 /// 不能和电脑那边的 iphone-…（屏幕使用、停留点）同名，否则同步会以为那是本机的、不下载
 fn device_id() -> String {
     let f = default_root().join("mobile_device");
@@ -49,7 +51,7 @@ fn device_id() -> String {
         }
     }
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let id = format!("iosapp-{:08x}", (t.subsec_nanos() ^ t.as_secs() as u32).wrapping_mul(2654435761));
+    let id = format!("{}-{:08x}", if cfg!(target_os = "android") { "android" } else { "iosapp" }, (t.subsec_nanos() ^ t.as_secs() as u32).wrapping_mul(2654435761));
     let _ = std::fs::create_dir_all(default_root());
     let _ = std::fs::write(&f, &id);
     id
@@ -79,8 +81,11 @@ fn start() {
     START.call_once(|| {
         std::env::set_var("BEAYY_DEVICE", device_id());
         let root = data_root();
-        // 同步日志不放进 devices/：手机不是一台采集设备，放进去设备页会把它当「这台」、去查电脑那些权限
-        let _ = std::fs::remove_dir_all(root.join("devices").join(beayy_core::local_device()));
+        // 同步日志不放进 devices/：iPhone 不是一台采集设备，放进去设备页会把它当「这台」、去查电脑那些权限。
+        // 安卓是（app 使用记录写在 devices/android-…/，同步上传）
+        if !cfg!(target_os = "android") {
+            let _ = std::fs::remove_dir_all(root.join("devices").join(beayy_core::local_device()));
+        }
         sync::start(Arc::new(EventLog::new(root.join("mobile"), beayy_core::local_device())));
         std::thread::spawn(move || {
             let mut relay = Relay::default();
@@ -95,6 +100,49 @@ fn start() {
             }
         });
     });
+}
+
+// ---------- 安卓：app 使用记录 ----------
+
+/// 安卓外壳读到的前台切换（UsageStatsManager 的 ACTIVITY_RESUMED／PAUSED），记成和 iPhone 一样的 app.focus 事件：
+/// biome_time 是 Unix 秒，另带 app_name（安卓包名查不到名字，电脑那边靠它显示）。
+/// 外壳每次从上次读到的地方往后读；这里再按「读到哪了」（数据目录 android_cursor）挡一次重复。返回记了几条
+fn android_usage(events: Vec<Value>) -> Result<usize, String> {
+    let root = data_root();
+    let f = root.join("android_cursor");
+    let mut cursor: f64 = std::fs::read_to_string(&f).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+    let log = EventLog::new(root.clone(), beayy_core::local_device());
+    let mut n = 0;
+    for e in events {
+        let (Some(t), Some(pkg)) = (e["t"].as_f64(), e["package"].as_str()) else { continue };
+        if t <= cursor {
+            continue;
+        }
+        let Some(at) = chrono::DateTime::<chrono::Utc>::from_timestamp_micros((t * 1e6) as i64) else { continue };
+        log.write(
+            "app.focus",
+            beayy_core::fields! {
+                "state" => if e["start"].as_bool().unwrap_or(false) { "start" } else { "end" },
+                "bundle_id" => pkg,
+                "app_name" => e["name"].as_str().unwrap_or(""),
+                "biome_time" => t,
+                "source" => "android:UsageStats",
+                "recorded_at" => beayy_core::iso(chrono::Utc::now()),
+            },
+            Some(at),
+        );
+        cursor = t;
+        n += 1;
+    }
+    if n > 0 {
+        std::fs::write(&f, cursor.to_string()).map_err(|e| e.to_string())?;
+    }
+    Ok(n)
+}
+
+/// 外壳问「上次读到哪了」：没有记录时给 0（外壳就从 7 天前读起）
+fn android_cursor() -> f64 {
+    std::fs::read_to_string(data_root().join("android_cursor")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
 }
 
 // ---------- 网页的命令 ----------
@@ -163,6 +211,8 @@ fn dispatch(cmd: &str, a: &Map<String, Value>) -> Result<Value, String> {
         "account_remove_device" => ok(wait(sync::account_remove_device(arg(a, "id")?))?),
         "account_logout" => ok(wait(sync::account_logout())),
         "account_recovery_code" => ok(sync::account_recovery_code()),
+        "android_usage" => ok(android_usage(arg(a, "events")?)?),
+        "android_cursor" => ok(android_cursor()),
         _ => Err(format!("手机版没有这个功能：{cmd}")),
     }
 }
@@ -199,5 +249,36 @@ pub extern "C" fn beayy_start() {
 pub unsafe extern "C" fn beayy_free(p: *mut c_char) {
     if !p.is_null() {
         drop(CString::from_raw(p));
+    }
+}
+
+/// 安卓的 JNI 入口（com.fengli.beayy.Core）：init 先把 HOME 指到 app 的私有目录（数据根＝HOME/Library/Application Support/Beayy，
+/// 和其他端一样的相对位置），再启动后台同步；call 同 beayy_call
+#[cfg(target_os = "android")]
+mod android {
+    use jni::objects::{JClass, JString};
+    use jni::sys::jstring;
+    use jni::JNIEnv;
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_fengli_beayy_Core_init(mut env: JNIEnv, _: JClass, home: JString) {
+        if let Ok(h) = env.get_string(&home) {
+            std::env::set_var("HOME", String::from(h));
+        }
+        super::start();
+    }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_fengli_beayy_Core_call(mut env: JNIEnv, _: JClass, cmd: JString, args: JString) -> jstring {
+        let cmd: String = env.get_string(&cmd).map(String::from).unwrap_or_default();
+        let args: String = env.get_string(&args).map(String::from).unwrap_or_else(|_| "{}".into());
+        let (c, a) = (std::ffi::CString::new(cmd).unwrap_or_default(), std::ffi::CString::new(args).unwrap_or_default());
+        let out = unsafe {
+            let p = super::beayy_call(c.as_ptr(), a.as_ptr());
+            let s = std::ffi::CStr::from_ptr(p).to_string_lossy().to_string();
+            super::beayy_free(p);
+            s
+        };
+        env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
     }
 }

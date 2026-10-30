@@ -822,7 +822,7 @@ window.I18N_EN = {
   "Windows 上不用授权。杀毒软件拦键盘监听时，放行 Beayy。": "No permissions needed on Windows. If antivirus blocks keyboard monitoring, allow Beayy.",
   "macOS 要你亲自打开这三项权限。": "macOS needs you to turn on these three permissions yourself.",
   "完全磁盘访问（可选）": "Full Disk Access (optional)",
-  "摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不选也能先只记录，以后在设置里改。": "Summaries and daily reviews need a large language model. Use the official one: once your account is enabled, just sign in. Or enter your own gateway (any OpenAI-compatible service). You can also skip this and only record for now, then change it in Settings.",
+  "摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不配也照常记录，时间线先只列用过的 app，以后在设置里改。": "Summaries and daily reviews need a large language model. Use the official one: once your account is enabled, just sign in. Or enter your own gateway (any OpenAI-compatible service). Without one, recording still works and the timeline just lists the apps you used; you can set it up later in Settings.",
   "用官方": "Use official",
   "下一步登录账号，开通后就能用": "Sign in next. It works once your account is enabled",
   "接口地址": "API URL",
@@ -880,5 +880,14 @@ window.I18N_EN = {
   "近 30 天，按用途分": "Last 30 days, by purpose",
   "还没有 Key": "No key yet",
   "连不上 OpenStreetMap": "Can't reach OpenStreetMap",
-  "高德": "Amap"
+  "高德": "Amap",
+  "没有摘要的时段只列了用过的 app": "Stretches without a summary only list the apps you used",
+  "设置模型": "Set up a model",
+  "零碎地用了一会儿": "A few short bits",
+  "使用情况": "Usage access",
+  "在系统设置里允许 Beayy 读取使用情况": "Allow Beayy to read usage in system settings",
+  "已允许": "Allowed",
+  "记每个 app 用了多久": "Records how long you use each app",
+  "安卓手机每 15 分钟传一次，手机没联网时会晚": "Android phones upload every 15 minutes; it lags when the phone is offline",
+  "手机停在 {t}": "Phone data stops at {t}"
 };

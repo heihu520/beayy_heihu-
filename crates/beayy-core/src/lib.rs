@@ -189,6 +189,19 @@ impl EventLog {
 }
 
 /// 方便拼字段：`fields!{"app_name" => name, "pid" => 12}`
+/// ureq 的 TLS 设置（在调用方展开，用调用方的 ureq）：电脑、iPhone 用系统的 TLS 和证书；
+/// 安卓没有系统 TLS 库可链，用 rustls 和自带的根证书（webpki-roots）
+#[macro_export]
+macro_rules! tls {
+    () => {{
+        #[cfg(not(target_os = "android"))]
+        let c = ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+        #[cfg(target_os = "android")]
+        let c = ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::Rustls).root_certs(ureq::tls::RootCerts::WebPki).build();
+        c
+    }};
+}
+
 #[macro_export]
 macro_rules! fields {
     ($($k:expr => $v:expr),* $(,)?) => {{

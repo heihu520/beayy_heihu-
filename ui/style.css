@@ -688,3 +688,4 @@ a.mx-btn { text-decoration: none; }
 .up-notes { margin: 0; padding: 0; list-style: none; counter-reset: up; display: flex; flex-direction: column; gap: var(--space-2); font-size: 14px; line-height: 22px; color: var(--ink); }
 ol.up-notes li { position: relative; padding-left: 20px; counter-increment: up; }
 ol.up-notes li::before { content: counter(up) "."; position: absolute; left: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.raw-note { margin: 0 0 var(--space-3); }

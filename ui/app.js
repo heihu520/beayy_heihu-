@@ -970,7 +970,8 @@ async function renderToday() {
   const pack = d.pack || {}, c = d.live || pack.computer || {}, ph = d.phone;
   const fda = ((S.status || {}).permissions || {}).full_disk_access;
   // iPhone 的数据是苹果经 iCloud 传到这台 Mac 的，常晚几个小时；落后 3 小时以上就写明在等苹果，免得以为 Beayy 坏了
-  const phoneLag = tr("iPhone 的屏幕使用时间由苹果经 iCloud 传到这台 Mac，常晚几个小时，到了 Beayy 才读得到；这段时间没用手机也会停在这里。\niPhone 的「设置 → 屏幕使用时间 → 在设备间共享」要开着");
+  const android = d.phone_kind === "android";
+  const phoneLag = android ? tr("安卓手机每 15 分钟传一次，手机没联网时会晚") : tr("iPhone 的屏幕使用时间由苹果经 iCloud 传到这台 Mac，常晚几个小时，到了 Beayy 才读得到；这段时间没用手机也会停在这里。\niPhone 的「设置 → 屏幕使用时间 → 在设备间共享」要开着");
   const phoneStale = ph && !past && Date.now() - Date.parse(ph.synced_until) > 3 * 3600e3;
   const phoneCap = ph ? (past ? (ph.pickups != null ? tr("拿起 {n} 次", { n: ph.pickups }) : "") : `${tr("同步至 {t}", { t: ymdhm(ph.synced_until) })}${phoneStale ? `\n${phoneLag}` : ""}`)
     : fda === false ? tr("未授权完全磁盘访问") : past ? tr("取不到") : `${tr("今天还没有手机数据")}\n${phoneLag}`;
@@ -995,7 +996,7 @@ async function renderToday() {
   const toolbar = `<div class="toolbar"><div class="toolbar-left"><div class="tabs" role="tablist" id="view-tabs">${[["overview", tr("全面")], ["timeline", tr("时间线")], ["places", tr("地点")]].map(([k, v]) =>
       `<button role="tab" aria-selected="${k === view}" class="${k === view ? "is-on" : ""}" data-view="${k}">${v}</button>`).join("")}</div>
       ${view === "timeline" ? `<span class="tb-sep"></span>${seg}` : ""}${view === "places" ? `<span class="tb-sep"></span>${pseg}` : ""}</div>
-    <div class="toolbar-right">${ph && !past ? (phoneStale ? `<span class="note tb-note" title="${esc(phoneLag)}">${tr("手机停在 {t}，在等苹果传来", { t: hm(ph.synced_until) })}</span>` : `<span class="note tb-note">${tr("同步至 {t}", { t: ymdhm(ph.synced_until) })}</span>`) : ""}${view === "places" && pview === "often" ? "" : dayPicker(today, past)}</div></div>`;
+    <div class="toolbar-right">${ph && !past ? (phoneStale ? `<span class="note tb-note" title="${esc(phoneLag)}">${android ? tr("手机停在 {t}", { t: hm(ph.synced_until) }) : tr("手机停在 {t}，在等苹果传来", { t: hm(ph.synced_until) })}</span>` : `<span class="note tb-note">${tr("同步至 {t}", { t: ymdhm(ph.synced_until) })}</span>`) : ""}${view === "places" && pview === "often" ? "" : dayPicker(today, past)}</div></div>`;
   const overview = `<div class="readouts">
         ${readout(tr("在电脑前"), hh(c.active_sec), "h", c.first ? `${c.first}–${c.last}` : tr("还没有记录"))}
         ${readout(tr("手机"), ph || fda !== false ? hh(ph ? ph.total_sec : (pack.phone || {}).total_sec) : "—", "h", phoneCap)}
@@ -1010,16 +1011,19 @@ async function renderToday() {
     + section(tr("一天"), dayStrip(hc, hp, true, { hw, visits, date: today, sleep: hl && hl.sleep_blocks }) + `<div class="legend"><span><i style="background:var(--rec-computer)"></i>${tr("电脑")}</span><span><i style="background:var(--rec-phone)"></i>${tr("手机")}</span>${sp ? `<span><i style="background:var(--rec-watch)"></i>${tr("说话")}</span>` : ""}${visits.length ? `<span><i style="background:var(--rec-go-s)"></i>${tr("路上")}</span>` : ""}</div>`)
     + placeTotals(visits, today)
     + healthSection(hl)
-    + workSection(d.work) + `</div>`;
+    + (workSection(d.work) || appsSection(c.apps)) + `</div>`;
   if (view === "places" && (pview === "often" || !PL.stats || Date.now() - (PL.at || 0) > 600e3)) {
     [PL.stats, PL.labels] = await Promise.all([call("place_stats", { days: 30 }).catch(() => null), call("list_place_labels").catch(() => [])]);
     PL.at = Date.now();
   }
   const placesView = pview === "often" ? oftenView(PL.stats) : visits.length ? placesSection(visits, today, sp && sp.conversations, pview)
     : emptyBlock("map", past ? tr("这一天没有停留点") : tr("今天还没有停留点"));
-  const timeline = shown.length ? `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : tab === "phone" && visits.length ? phoneByPlace(shown, visits, today) : shown.map(tlRow).join("")}</div>`
+  // 有 30 分钟以前的段还没摘要：多半是模型没配好或额度用完，说一句、给个去处
+  const rawOld = tab !== "phone" && tab !== "watch" && (d.segments || []).some((s) => s.source === "raw" && Date.parse(s.end) < Date.now() - 1800e3);
+  const rawNote = rawOld ? `<p class="note raw-note">${tr("没有摘要的时段只列了用过的 app")} · <a href="#/settings" data-set-tab="connect">${tr("设置模型")}</a></p>` : "";
+  const timeline = shown.length ? rawNote + `<div class="tl" id="tl">${tab === "all" ? hourRows(d, items) : tab === "phone" && visits.length ? phoneByPlace(shown, visits, today) : shown.map(tlRow).join("")}</div>`
     : past ? (tab === "phone" || tab === "watch" ? emptyInline(tab === "phone" ? tr("这一天没有手机记录") : tr("这一天没有对话")) : emptyBlock("day", tr("这一天没有记录")))
-    : tab === "phone" ? `<p class="mx-empty-inline">${tr("手机记录还没同步过来")} · ${howto("screentime", tr("怎么设置"))}</p>`
+    : tab === "phone" ? `<p class="mx-empty-inline">${tr("手机记录还没同步过来")}${android ? "" : ` · ${howto("screentime", tr("怎么设置"))}`}</p>`
     : tab === "watch" ? emptyInline(tr("今天还没有对话")) : emptyBlock("day", tr("今天还没有记录"));
 
   // 照 Claude 自定义页：标题单独一行；页签和右边的控件（同步时刻、翻日期）同一行
@@ -1051,6 +1055,7 @@ async function renderToday() {
     renderToday();
   };
   bindPick(document.getElementById("day-pick"));
+  $app.querySelectorAll("[data-set-tab]").forEach((a) => (a.onclick = () => { SS.tab = a.dataset.setTab; try { localStorage.setItem("settings-tab", SS.tab); } catch (x) {} }));
   $app.querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => goDay(b.dataset.day)));
   $app.querySelectorAll("[data-chip]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); pickChip(visits, +b.dataset.chip, b.dataset.shop); }));
   $app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const li = b.closest("li"); EDITOR && EDITOR.parentNode === li ? closeEditor() : placeEditor(visits[+b.dataset.edit], li); }));
@@ -1123,6 +1128,15 @@ function workSection(w) {
   return section(tr("时间"), `<div class="work"><div><h3>${tr("项目")}</h3>${tree("projects", projects)}</div><div><h3>${tr("类型")}</h3>${tree("activities", w.activities || [])}</div></div>`);
 }
 
+/** 还没有摘要（没配模型）时，「时间」只按 app 列：电脑上用得最多的 8 个 */
+function appsSection(apps) {
+  const xs = (apps || []).filter((a) => !NOT_APPS.has(a.bundle_id) && a.sec >= 60).slice(0, 8);
+  if (!xs.length) return "";
+  const max = xs[0].sec, total = xs.reduce((a, x) => a + x.sec, 0);
+  const dur = (sec) => (sec < 3600 ? Math.round(sec / 60) + "m" : hh(sec) + "h");
+  return section(tr("时间"), `<div class="bars">${xs.map((a) => `<div class="bar-row"><span class="bar-name" title="${esc(a.name)}">${esc(a.name)}</span><span class="bar"><i style="width:${Math.max(2, Math.round((a.sec / max) * 100))}%"></i></span><span class="bar-v mono">${dur(a.sec)}</span><span class="bar-p mono">${Math.round((a.sec / total) * 100)}%</span></div>`).join("")}</div>`);
+}
+
 // 展开／收起一级：直接改这一块，不重画整页
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-work]"); if (!b) return;
@@ -1176,7 +1190,12 @@ function hourRows(d, items) {
     const phApps = {};
     for (const x of ph) for (const a of x.ses.apps) phApps[a.name] = (phApps[a.name] || 0) + a.sec;
     const topPh = Object.entries(phApps).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n).join(tr("、"));
-    const latest = comp[0] && comp[0].seg;
+    let latest = comp[0] && comp[0].seg;
+    if (!r && comp.length && comp.every((x) => x.seg.source === "raw")) {
+      const sum = {};
+      for (const x of comp) for (const a of x.seg.raw_apps || []) (sum[a.bundle_id + a.name] ||= { ...a, sec: 0 }).sec += a.sec;
+      latest = { title: rawTitle(Object.values(sum).sort((a, b) => b.sec - a.sec)), description: "" };
+    }
     const title = r && r.title !== "不在电脑前" ? r.title : comp.length ? (k + 3600e3 > now ? tr("进行中：{t}", { t: latest.title }) : latest.title) : "不在电脑前";
     const desc = r && r.title !== "不在电脑前" ? r.description : comp.length && k + 3600e3 > now ? latest.description : "";
     // 项目：小时摘要里按秒累计好的，没有（进行中）就用这几段的
@@ -1441,13 +1460,22 @@ function timelineItems(d) {
   DAY_COMPUTERS = d.computers || [];
   DAY_NAMES = d.device_names || {};
   const out = [];
-  for (const s of d.segments || []) out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
+  for (const s of d.segments || []) {
+    if (s.source === "raw") s.title = rawTitle(s.raw_apps);
+    out.push({ dev: "computer", start: s.start, end: s.end, seg: s });
+  }
   for (const x of (d.phone && d.phone.sessions) || []) out.push({ dev: "phone", start: x.start, end: x.end, ses: x });
   for (const v of (d.places && d.places.visits) || []) out.push({ dev: "phone", start: v.start, end: v.end, visit: v });
   SELF = (d.speech && d.speech.self) || null;
   // 对话按录它的设备归页签：手表录的在「手表」，iPhone 自己录的在「手机」
   for (const c of (d.speech && d.speech.conversations) || []) out.push({ dev: (c.device || "").startsWith("iphone-") ? "phone" : "watch", start: c.start, end: c.end, conv: c });
   return out.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
+}
+
+/** 没有摘要的 10 分钟：用了哪些 app、各多久（不满 1 分钟的不写） */
+function rawTitle(apps) {
+  const xs = (apps || []).filter((a) => !NOT_APPS.has(a.bundle_id) && a.sec >= 60).slice(0, 3);
+  return xs.length ? xs.map((a) => `${a.name} ${tr("{n} 分钟", { n: Math.round(a.sec / 60) })}`).join(" · ") : tr("零碎地用了一会儿");
 }
 
 const minText = (sec) => (sec < 60 ? tr("{n} 秒", { n: sec }) : tr("{n} 分钟", { n: Math.round(sec / 60) }));
@@ -1865,6 +1893,7 @@ const DEV_RECORDS = {
   win: [tr("切换程序和窗口"), tr("键盘输入和发送（密码框打码）"), tr("点击和滚动"), tr("界面上的文字"), tr("在不在电脑前、锁屏、睡眠"), tr("10 分钟摘要")],
   iphone: [tr("每个 app 在前台的时长"), tr("停留点：到了哪、待了多久")],
   watch: [tr("录音转成的文字，分出说话人"), tr("录音时记下的停留点")],
+  android: [tr("每个 app 在前台的时长")],
 };
 
 /** 设备详情页：DetailHeader（返回、名字、状态、操作菜单）＋ 下划线页签 概况／事件 */
@@ -1901,7 +1930,7 @@ function devOverview(d, st) {
   const kind = d.kind === "win" ? "win" : d.kind;
   const recs = DEV_RECORDS[kind] || DEV_RECORDS.mac;
   const what = section(tr("记什么"), `<ul class="dev-recs">${recs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`, { aside: `<a href="#/devices/${encodeURIComponent(d.id)}/events">${tr("看最近的事件")}</a>` });
-  const perms = d.this && !IS_WIN ? section(tr("权限"), `<div class="rows">${permRow("accessibility", tr("辅助功能"), tr("读取窗口标题和屏幕上的文字"))}${permRow("input_monitoring", tr("输入监控"), tr("判断你在打字还是程序在操作"))}${permRow("full_disk_access", tr("完全磁盘访问"), `${tr("读取 iPhone 的屏幕使用时间")} · ${howto("screentime", tr("怎么设置"))}`)}</div>`) : "";
+  const perms = d.this && d.kind === "mac" ? section(tr("权限"), `<div class="rows">${permRow("accessibility", tr("辅助功能"), tr("读取窗口标题和屏幕上的文字"))}${permRow("input_monitoring", tr("输入监控"), tr("判断你在打字还是程序在操作"))}${permRow("full_disk_access", tr("完全磁盘访问"), `${tr("读取 iPhone 的屏幕使用时间")} · ${howto("screentime", tr("怎么设置"))}`)}</div>`) : "";
   return stats + what + perms + `<p class="note dev-id">${tr("设备编号")} <span class="mono">${esc(d.id)}</span></p>`;
 }
 
@@ -2734,13 +2763,17 @@ async function renderSettings() {
   }
 }
 
-/** 手机版设置「通用」里的「这台手机」：定位、手表、用这台 iPhone 录、本人声纹、上传进度（原生做的，经 native_ 命令） */
+/** 手机版设置「通用」里的「这台手机」：定位、手表、用这台 iPhone 录、本人声纹、上传进度；安卓是使用情况和上传（原生做的，经 native_ 命令） */
 function phoneSection() {
   const n = SS.native;
   if (!n) return section(tr("这台手机"), emptyInline(tr("在看这台手机的状态……")));
   if (n.error) return section(tr("这台手机"), `<div class="mx-field-error">${esc(n.error)}</div>`);
-  const loc = { always: [true, tr("始终允许")], when_in_use: [false, tr("只在使用时")], denied: [false, tr("没允许")], not_determined: [false, tr("还没问过")] }[n.location] || [false, n.location];
   const ago = (iso) => (iso ? mdhm(iso) : tr("还没有"));
+  // 安卓：读每个 app 的使用时长（系统设置里允许「使用情况访问权限」），读到的随账号同步给电脑
+  if (n.android) return section(tr("这台手机"),
+    setRow(tr("使用情况"), n.usage ? tr("记每个 app 用了多久") : tr("在系统设置里允许 Beayy 读取使用情况"), `${pill(!!n.usage, n.usage ? tr("已允许") : tr("没允许"))}${n.usage ? "" : smallBtn("ph-usage", tr("去设置"))}`)
+    + setRow(tr("上传"), `${tr("最近读 {t}", { t: ago(n.last_read) })}${n.last_error ? `<br>${esc(n.last_error)}` : ""}${n.logged_in ? "" : `<br>${tr("登录账号后开始上传。")}`}`, smallBtn("ph-usage-read", tr("现在读"), n.usage ? "" : "disabled")));
+  const loc = { always: [true, tr("始终允许")], when_in_use: [false, tr("只在使用时")], denied: [false, tr("没允许")], not_determined: [false, tr("还没问过")] }[n.location] || [false, n.location];
   // 苹果健康：只读；苹果不告诉 app 给了哪些类型，改授权要去系统设置
   const h = n.health || {};
   const health = h.available === false ? "" : setRow(tr("苹果健康"),
@@ -2771,6 +2804,8 @@ function bindPhone() {
   on("ph-health", () => act("health_connect"));
   on("ph-health-read", () => act("health_read"));
   on("ph-health-demo", () => act("health_demo"));
+  on("ph-usage", () => act("open_usage_settings"));
+  on("ph-usage-read", () => act("usage_read"));
 }
 
 /** 「数据」页：本机、同步服务、转写服务三处各存了什么、多大、留多久（方案见 报告/方案_20261021_录音与存储.md）；开着时每分钟刷新 */
@@ -3005,7 +3040,7 @@ async function renderOnboarding() {
      ${permRow("accessibility", tr("辅助功能"), tr("读取窗口标题和屏幕上的文字"))}
      ${permRow("input_monitoring", tr("输入监控"), tr("判断你在打字还是程序在操作"))}
      ${permRow("full_disk_access", tr("完全磁盘访问（可选）"), `${tr("读取 iPhone 的屏幕使用时间")} · ${howto("screentime", tr("怎么设置"))}`)}`,
-    `<h2>${tr("模型")}</h2><p class="ob-lead">${tr("摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不选也能先只记录，以后在设置里改。")}</p>
+    `<h2>${tr("模型")}</h2><p class="ob-lead">${tr("摘要和日总结要用一个大模型。用官方的：账号开通后登录就能用，不用填；也可以填自己的网关（任何兼容 OpenAI 接口的服务）。不配也照常记录，时间线先只列用过的 app，以后在设置里改。")}</p>
      <div class="mx-seg" role="tablist" id="ob-mode" style="margin-bottom:var(--space-4)">${[["official", tr("用官方")], ["custom", tr("自己的网关")]].map(([k, v]) => `<button role="tab" aria-selected="${k === OB.mode}" class="${k === OB.mode ? "is-on" : ""}" data-v="${k}">${v}</button>`).join("")}</div>
      ${OB.mode === "official" ? `<p class="note">${tr("下一步登录账号，开通后就能用")}</p>` : `<div class="stack"><div class="mx-field"><label for="ob-gw">${tr("接口地址")}</label><input class="mx-input mono" id="ob-gw" value="${esc(S.draft.gateway || "https://api.openai.com/v1")}"></div>
        <div class="mx-field"><label for="ob-model">${tr("模型名")}</label><input class="mx-input mono" id="ob-model" value="${esc(S.draft.model_segment || "")}" placeholder="${tr("比如 gpt-4.1-mini")}"></div>

@@ -12,4 +12,10 @@ serde_json.workspace = true
 chrono.workspace = true
 regex = "1"
 # 系统 TLS（macOS Security 框架、Windows SChannel），不用编 C，Mac 上也能交叉检查 Windows
+
+# 安卓没有系统 TLS 库，改用 rustls（见 beayy_core::tls!）
+[target.'cfg(not(target_os = "android"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }

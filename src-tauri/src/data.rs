@@ -83,9 +83,16 @@ const PHONE_NAMES: &[(&str, &str)] = &[
     ("ph.telegra.Telegraph", "Telegram"),
 ];
 
-/// iPhone 应用名：内置的常见 app，加上查图标时从 App Store 拿到的名字（Beayy/icons/ios/<id>.name）
+/// 安卓 app 的名字：安卓外壳记事件时带上的（app_name），读手机记录时收集
+static ANDROID_NAMES: std::sync::Mutex<Option<HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+/// 手机应用名：内置的常见 app，安卓事件带来的名字，加上查图标时从 App Store 拿到的名字（Beayy/icons/ios/<id>.name）
 fn app_names() -> HashMap<String, String> {
     let mut m: HashMap<String, String> = PHONE_NAMES.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    phone_events();
+    if let Some(a) = ANDROID_NAMES.lock().unwrap().as_ref() {
+        m.extend(a.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
     if let Ok(it) = fs::read_dir(default_root().join("icons/ios")) {
         for f in it.filter_map(|e| e.ok()) {
             let n = f.file_name().to_string_lossy().to_string();
@@ -127,9 +134,11 @@ fn phone_events() -> std::sync::Arc<Vec<PhoneEv>> {
 
 fn read_phone_events() -> Vec<PhoneEv> {
     let mut out = Vec::new();
+    let mut names = HashMap::new();
     let devices = default_root().join("devices");
     let Ok(devs) = fs::read_dir(&devices) else { return out };
-    for dev in devs.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with("iphone-")) {
+    // iPhone（电脑读屏幕使用时间写的）和安卓（手机自己记、同步来的）是同一种事件
+    for dev in devs.filter_map(|e| e.ok()).filter(|e| { let n = e.file_name().to_string_lossy().to_string(); n.starts_with("iphone-") || n.starts_with("android-") }) {
         let Ok(segs) = fs::read_dir(dev.path().join("segments")) else { continue };
         for seg in segs.filter_map(|e| e.ok()) {
             let Ok(bytes) = fs::read(seg.path().join("events.jsonl")) else { continue };
@@ -137,6 +146,9 @@ fn read_phone_events() -> Vec<PhoneEv> {
                 let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
                 if e["event_type"] == "app.focus" {
                     if let (Some(t), Some(b)) = (e["biome_time"].as_f64(), e["bundle_id"].as_str()) {
+                        if let Some(n) = e["app_name"].as_str().filter(|n| !n.is_empty()) {
+                            names.insert(b.to_string(), n.to_string());
+                        }
                         out.push(PhoneEv { t, start: e["state"] == "start", bundle: b.into() });
                     }
                 }
@@ -144,6 +156,7 @@ fn read_phone_events() -> Vec<PhoneEv> {
         }
     }
     out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    *ANDROID_NAMES.lock().unwrap() = Some(names);
     out
 }
 
@@ -412,6 +425,58 @@ pub fn live_computer(date: NaiveDate) -> Option<Value> {
     };
     g.insert(date, (Instant::now(), v.clone()));
     v
+}
+
+/// 某天每个 10 分钟里用过的 app（按秒，多的在前），给没有摘要的时段当时间线的一行（source: "raw"）。
+/// 今天的缓存 60 秒；以前的日子算一次留在内存里
+fn raw_segments(date: NaiveDate) -> Vec<Value> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+    static CACHE: OnceLock<Mutex<HashMap<NaiveDate, (Instant, Vec<Value>)>>> = OnceLock::new();
+    let today = Local::now().date_naive();
+    let mut g = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    if let Some((t, v)) = g.get(&date) {
+        if date < today - Duration::days(1) || t.elapsed().as_secs() < 60 {
+            return v.clone();
+        }
+    }
+    let (s, e) = day_bounds(date);
+    let act = beayy_summary::Summarizer::new(default_root()).activity(s.with_timezone(&Utc), e.with_timezone(&Utc));
+    let slot = |t: DateTime<Utc>| t - Duration::seconds(t.timestamp().rem_euclid(600)) - Duration::nanoseconds(t.timestamp_subsec_nanos() as i64);
+    // 段开始 → [(名字, bundle, 秒)]
+    let mut by: BTreeMap<DateTime<Utc>, Vec<(String, String, f64)>> = BTreeMap::new();
+    for (a, b, name, bundle) in &act.windows {
+        let mut t = *a;
+        while t < *b {
+            let k = slot(t);
+            let next = (k + Duration::minutes(10)).min(*b);
+            let sec = (next - t).num_milliseconds() as f64 / 1000.0;
+            let apps = by.entry(k).or_default();
+            match apps.iter_mut().find(|x| x.1 == *bundle && x.0 == *name) {
+                Some(x) => x.2 += sec,
+                None => apps.push((name.clone(), bundle.clone(), sec)),
+            }
+            t = next;
+        }
+    }
+    let out: Vec<Value> = by
+        .into_iter()
+        .filter_map(|(k, mut apps)| {
+            let total: f64 = apps.iter().map(|x| x.2).sum();
+            if total < 30.0 {
+                return None;
+            }
+            apps.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+            Some(json!({
+                "start": utc_iso(k), "end": utc_iso(k + Duration::minutes(10)), "kind": "10min", "source": "raw",
+                "title": "", "description": "", "active_sec": total.round() as i64,
+                "apps": apps.iter().map(|x| x.1.clone()).filter(|b| !b.is_empty()).collect::<Vec<_>>(),
+                "raw_apps": apps.iter().take(6).map(|(n, b, v)| json!({"name": n, "bundle_id": b, "sec": v.round() as i64})).collect::<Vec<_>>(),
+            }))
+        })
+        .collect();
+    g.insert(date, (Instant::now(), out.clone()));
+    out
 }
 
 fn compute_live(date: NaiveDate) -> Option<Value> {
@@ -1204,6 +1269,12 @@ pub fn get_day(date: String) -> Value {
     let mut segs: Vec<Value> = pack.as_ref().map(|p| codex_segments(p, nd)).unwrap_or_default();
     segs.retain(|s| !taken.contains(s["start"].as_str().unwrap_or("")));
     segs.extend(own);
+    // 没有摘要的 10 分钟（没配模型、额度用完、还没轮到）按原始记录补一行：用了哪些 app、各多久
+    let covered: Vec<(String, String)> = segs.iter().filter_map(|s| Some((s["start"].as_str()?.to_string(), s["end"].as_str()?.to_string()))).collect();
+    segs.extend(raw_segments(nd).into_iter().filter(|r| {
+        let (a, z) = (r["start"].as_str().unwrap_or(""), r["end"].as_str().unwrap_or(""));
+        !covered.iter().any(|(s, e)| s.as_str() < z && a < e.as_str())
+    }));
     segs.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
     let work = work_of(&segs);
     let hours = rollups_of(nd);
@@ -1223,6 +1294,8 @@ pub fn get_day(date: String) -> Value {
         "computers": computers,
         "device_names": beayy_sync::device_names(&beayy_core::data_root()),
         "phone": phone_day(phone_events().as_slice(), nd, &app_names()),
+        // 手机记录从哪来：有安卓设备就是安卓自己传的（页面不提「等苹果传来」）
+        "phone_kind": if fs::read_dir(default_root().join("devices")).map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("android-"))).unwrap_or(false) { "android" } else { "iphone" },
         "speech": speech_day(nd),
         "places": places_day(nd),
         "health": crate::health::health_day(nd),
@@ -1594,6 +1667,7 @@ fn read_devices() -> Vec<Value> {
             "iphone" => format!("iPhone · {}", &id[7..]),
             "win" => format!("Windows · {}", &id[4..]),
             "watch" => format!("Apple Watch · {}", &id[6..]),
+            "android" => format!("Android · {}", &id[8..]),
             _ => id.clone(),
         };
         let name = custom.get(&id).cloned().unwrap_or_else(|| default_name.clone());

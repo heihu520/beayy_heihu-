@@ -17,7 +17,7 @@ A summary every 10 minutes, a journal every evening, rolled up into weekly and m
 [![License](https://img.shields.io/github/license/hengfengliya/beayy?color=0b0b0b)](LICENSE)
 ![Platform](https://img.shields.io/badge/macOS%2014%2B%20%C2%B7%20Windows%2010%2F11%20%C2%B7%20iPhone-0b0b0b)
 
-[Download for Mac / Windows](https://github.com/hengfengliya/beayy/releases/latest) · [iPhone & Apple Watch (TestFlight)](https://testflight.apple.com/join/Ptzqu4q8) · [beayy.com](https://beayy.com)
+[Download for Mac / Windows / Android](https://github.com/hengfengliya/beayy/releases/latest) · [iPhone & Apple Watch (TestFlight)](https://testflight.apple.com/join/Ptzqu4q8) · [beayy.com](https://beayy.com)
 
 <img src="docs/images/hero.gif" alt="Beayy Today view: the shape of a day" width="860">
 
@@ -84,7 +84,7 @@ Either way, records are compressed and encrypted on your device before they leav
 | | |
 |---|---|
 | Computer | Which app and window is in front, what you type and send, clicks, scrolling, on-screen text (via macOS Accessibility or Windows UI Automation), whether you're at the computer, sleep and lock. Password fields are never recorded. You can exclude apps entirely, pause at any time, and delete the last 15 minutes, hour or day |
-| Phone | iPhone Screen Time as synced to your Mac through iCloud: when each app was in the foreground and for how long. App contents are not visible |
+| Phone | iPhone Screen Time as synced to your Mac through iCloud: when each app was in the foreground and for how long. App contents are not visible. On Android, the Beayy Android app reads it itself (usage access) and syncs it to your computer, encrypted |
 | Location (optional) | Stops recorded by the iPhone app (arrival, departure, place name), encrypted and synced to your computer. Routes are not recorded |
 | Health (optional) | The iPhone app reads Apple Health (sleep, steps, activity, workouts, heart rate, mood and more) read-only, and syncs it to your computer encrypted. The Today view shows last night's sleep and the day's activity; the journal leaves out details like heart rate and mood |
 | Watch (optional) | All-day Apple Watch audio, sent to a transcription service (the official one or your own) that transcribes it and separates speakers. Your computer only gets the text: who said what, and when |
@@ -98,11 +98,13 @@ Download `Beayy-<version>.dmg` from [Releases](https://github.com/hengfengliya/b
 
 The iPhone and Apple Watch apps are in public TestFlight: https://testflight.apple.com/join/Ptzqu4q8 (source in [`ios/`](ios/)).
 
+Android app (preview): download `Beayy-<version>-android.apk` from Releases, sign in with the same account as your computer, and allow usage access under Settings → General → This phone. It records how long you use each app; location is not recorded yet (source in [`android/`](android/)).
+
 Requires macOS 14 or later, or Windows 10/11 (64-bit).
 
 ## Not supported yet
 
-- Android phones and Linux computers
+- Linux computers; the Android app does not record location yet and is not release-signed
 - iPhone Screen Time can only be read on a Mac. With only a Windows computer you won't see which phone apps you used (location still works)
 - The Windows build is still a preview. It isn't code-signed, so SmartScreen blocks the first run; choose "More info → Run anyway". Antivirus software may flag the keyboard hook as a keylogger; allow it. Apps running as administrator can't be read (Beayy doesn't elevate)
 - The official model allowance is 50,000 tokens a month, enough to try Beayy out (a 10-minute summary takes about 6,000 tokens). For daily use, bring your own model. Transcription and maps aren't included
@@ -126,6 +128,12 @@ cd ios && xcodegen            # generates BeayyRecorder.xcodeproj; set DEVELOPME
 open BeayyRecorder.xcodeproj  # run BeayyPhone; the Rust core is built before compiling
 ```
 
+Android app (JDK 17, Android SDK 35 and NDK 27, [cargo-ndk](https://github.com/bbqsrc/cargo-ndk), and the Rust targets `aarch64-linux-android` and `x86_64-linux-android`):
+
+```bash
+cd android && ./build.sh      # builds app/build/outputs/apk/debug/app-debug.apk; ./build.sh release for a release build
+```
+
 UI only: open `ui/index.html` in a browser. It reads the made-up sample data in `ui/mock/` (regenerate with `python3 ui/mock/make_mock.py`).
 
 <details>
@@ -142,6 +150,7 @@ UI only: open `ui/index.html` in a browser. It reads the made-up sample data in 
 | `src-tauri` | Tauri 2 shell: menu bar, main window, commands for the web UI (`src-tauri/COMMANDS.md`), scheduled jobs, daily/weekly/monthly reviews, MCP server |
 | `ui` | Web UI in plain HTML, CSS and JS, shared by the computer and the iPhone; English and Simplified Chinese (`i18n.js`, `locales/`) |
 | `mobile` | Rust core for iPhone (static library), built from the same data code as `src-tauri` |
+| `android` | Kotlin shell for the Android app: reads per-app usage and calls the same Rust core over JNI; the UI is a web view loading `ui/` |
 | `ios` | Swift shells for the iPhone and Apple Watch apps (XcodeGen): location stops, watch recording, encrypted upload; the UI is a web view loading `ui/` |
 | `server` | Server: sync (ciphertext only) + transcription + optional model and map proxies, in Python (FastAPI + SQLite + local files). Run it with Docker on your own computer or server, see [`server/README.md`](server/README.md); the official instance runs the same code |
 | `sync-server` | The old Cloudflare sync server (Workers + R2 + D1), same API as `server`, no longer maintained |

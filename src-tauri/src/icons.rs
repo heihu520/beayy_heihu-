@@ -79,7 +79,7 @@ fn mac_icon(_id: &str) -> Option<Vec<u8>> {
 fn app_store(id: &str) -> Option<(Vec<u8>, String)> {
     let agent: ureq::Agent = beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+        .tls_config(beayy_core::tls!())
         .timeout_global(Some(Duration::from_secs(8)))
         .build());
     // 先查中国区，没上架的（比如 Claude）再查美区

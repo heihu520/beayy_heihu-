@@ -20,7 +20,7 @@
 ![Platform](https://img.shields.io/badge/macOS%2014%2B%20%C2%B7%20Windows%2010%2F11%20%C2%B7%20iPhone-0b0b0b)
 [![LINUX DO](https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+)](https://linux.do/t/topic/3081565)
 
-[下载 Mac / Windows 版](https://github.com/hengfengliya/beayy/releases/latest) · [iPhone 和手表（TestFlight）](https://testflight.apple.com/join/Ptzqu4q8) · [beayy.com](https://beayy.com)
+[下载 Mac / Windows / 安卓版](https://github.com/hengfengliya/beayy/releases/latest) · [iPhone 和手表（TestFlight）](https://testflight.apple.com/join/Ptzqu4q8) · [beayy.com](https://beayy.com)
 
 <img src="docs/images/hero.gif" alt="Beayy 今天页：一天的形状" width="860">
 
@@ -85,7 +85,7 @@ Claude 桌面版、Cursor 的配置在「设置 → 连接 → 接到 AI 里」�
 | | |
 |---|---|
 | 电脑 | 切到哪个 app 和窗口、打字和发出去的内容、点了什么、滚动、屏幕上的文字（macOS 辅助功能、Windows UI Automation 读取）、在不在电脑前、睡眠锁屏。密码框不记；可以指定某些 app 完全不记；可以随时暂停、删掉最近 15 分钟／1 小时／今天的记录 |
-| 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久，看不到 app 里的内容 |
+| 手机 | iPhone 经 iCloud 同步到 Mac 的屏幕使用时间：每个 app 什么时候在前台、用了多久，看不到 app 里的内容；安卓手机由 Beayy 安卓 app 自己读（使用情况访问权限），加密后经同步传到电脑 |
 | 位置（可选） | iPhone app 记下的停留点（几点到、几点走、地名），加密后经同步传到电脑；路上的轨迹不记 |
 | 健康（可选） | iPhone app 只读苹果健康（睡眠、步数、活动、锻炼、心率、心情等），加密后经同步传到电脑，今天页汇成昨晚睡眠和当天活动；日总结不写心率、心情这类细项 |
 | 手表（可选） | Apple Watch 全天录音，传到转写服务（官方的或你自己部署的）转写、分说话人；电脑上只有文字（谁在几点说了什么） |
@@ -101,11 +101,13 @@ Claude 桌面版、Cursor 的配置在「设置 → 连接 → 接到 AI 里」�
 
 iPhone 和 Apple Watch app 走 TestFlight 公开测试：https://testflight.apple.com/join/Ptzqu4q8 （源码在 [`ios/`](ios/)）。
 
+安卓 app（试用）：在 Releases 下载 `Beayy-<版本>-android.apk` 装上，登录和电脑同一个账号，在 设置 → 通用 → 这台手机 允许读取使用情况。现在记每个 app 用了多久，还不记位置（源码在 [`android/`](android/)）。
+
 要求 macOS 14 以上，或 Windows 10／11（64 位）。
 
 ## 还不支持的
 
-- 安卓手机、Linux 电脑
+- Linux 电脑；安卓 app 还不记位置、没有正式签名
 - iPhone 的屏幕使用时间只能在 Mac 上读；只有 Windows 电脑的话，看不到手机用了哪些 app（位置不受影响）
 - Windows 版还在试用：没有代码签名，第一次运行 SmartScreen 会拦，点「更多信息 → 仍要运行」；杀毒软件可能把键盘钩子当成键盘记录器，放行即可；以管理员身份运行的程序读不到（Beayy 不提权）
 - 官方送的模型额度每月 5 万 token，只够试用（一段 10 分钟摘要约 6 千 token），天天用要自己配模型；转写、地图不送
@@ -128,6 +130,12 @@ cd ios && xcodegen          # 生成 BeayyRecorder.xcodeproj；project.yml 里�
 open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Rust 核心
 ```
 
+安卓 app（要 JDK 17、Android SDK 35 和 NDK 27、[cargo-ndk](https://github.com/bbqsrc/cargo-ndk)，Rust 加上 `aarch64-linux-android`、`x86_64-linux-android`）：
+
+```bash
+cd android && ./build.sh      # 出 app/build/outputs/apk/debug/app-debug.apk；./build.sh release 出发布包
+```
+
 只看界面：用浏览器打开 `ui/index.html`，读 `ui/mock/` 里的虚构样例数据（`python3 ui/mock/make_mock.py` 重新生成）。
 
 <details>
@@ -144,6 +152,7 @@ open BeayyRecorder.xcodeproj  # 选 BeayyPhone 运行，编译前会自动编 Ru
 | `src-tauri` | Tauri 2 外壳：菜单栏、主窗口、给网页的命令（`src-tauri/COMMANDS.md`）、定时任务、日周月总结、MCP 服务 |
 | `ui` | 网页界面：纯 HTML＋CSS＋JS，电脑和 iPhone 共用；简体中文和英文（`i18n.js`、`locales/`） |
 | `mobile` | iPhone 版的 Rust 核心（静态库），直接编 `src-tauri` 的数据代码，和电脑同一份 |
+| `android` | 安卓 app 的 Kotlin 外壳：读每个 app 的使用时长、经 JNI 调同一个 Rust 核心；界面是网页视图加载 `ui/` |
 | `ios` | iPhone 和 Apple Watch app 的 Swift 外壳（XcodeGen）：定位记停留点、手表录音、登录账号加密上传；界面是网页视图加载 `ui/` |
 | `server` | 服务端：同步（只存密文）＋录音转写＋可选的模型、地图代理，Python（FastAPI＋SQLite＋本地文件）。用 Docker 在自己的电脑或服务器上跑，见 [`server/README.md`](server/README.md)；官方实例跑的也是它 |
 | `sync-server` | 同步服务的旧 Cloudflare 版（Workers＋R2＋D1），接口和 `server` 相同，不再维护 |

@@ -95,7 +95,7 @@ pub fn set_amap_js(key: String, code: String) -> Result<(), String> {
 fn agent() -> ureq::Agent {
     beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+        .tls_config(beayy_core::tls!())
         .timeout_global(Some(Duration::from_secs(10)))
         // 出错时也读返回体：官方地图没开通、额度用完写在里面
         .http_status_as_error(false)

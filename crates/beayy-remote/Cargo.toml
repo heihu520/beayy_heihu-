@@ -11,4 +11,10 @@ beayy-sync.workspace = true
 base64 = "0.22"
 serde_json.workspace = true
 chrono.workspace = true
+
+# 安卓没有系统 TLS 库，改用 rustls（见 beayy_core::tls!）
+[target.'cfg(not(target_os = "android"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["json", "native-tls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
