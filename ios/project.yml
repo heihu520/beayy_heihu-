@@ -19,7 +19,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.2"
-    CURRENT_PROJECT_VERSION: "19"
+    CURRENT_PROJECT_VERSION: "20"
     GENERATE_INFOPLIST_FILE: YES
 targets:
   BeayyPhone:
@@ -58,9 +58,9 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_OBJC_BRIDGING_HEADER: Phone/BeayyCore.h
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": $(SRCROOT)/../target/aarch64-apple-ios/release
-        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": $(SRCROOT)/../target/aarch64-apple-ios-sim/release
-        OTHER_LDFLAGS: -lbeayy_mobile -framework Security -framework SystemConfiguration
+        # 直接写 .a 的路径：mobile 也出 cdylib（安卓要），用 -l 会挑中 .dylib，装到手机上一打开就崩（build 19）
+        "OTHER_LDFLAGS[sdk=iphoneos*]": $(SRCROOT)/../target/aarch64-apple-ios/release/libbeayy_mobile.a -framework Security -framework SystemConfiguration
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": $(SRCROOT)/../target/aarch64-apple-ios-sim/release/libbeayy_mobile.a -framework Security -framework SystemConfiguration
     scheme:
       testTargets: [BeayyPhoneTests]
   # 同步加密（Phone/SyncCrypto.swift）对照测试向量，不挂 app
