@@ -1,4 +1,4 @@
-/* 墨线 — 组件样式。只引用 tokens.json 生成的变量，不写色值。类名统一以 mx- 开头。 */
+/* Beayy 设计系统（原名墨线）— 组件样式。只引用 tokens.json 生成的变量，不写色值。类名统一以 mx- 开头。 */
 
 html, body { background: var(--page); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 20px; -webkit-font-smoothing: antialiased; }
 body { margin: 0; padding: 16px; }

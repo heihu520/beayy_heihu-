@@ -9,11 +9,11 @@ Tauri 2 外壳加载的网页：今天、总结、规矩、设备四页，加上
 | `index.html` | 壳：侧栏（四个入口，左下角账号菜单：设置、暂停记录、设备与同步、打开数据目录、退出；记录状态写在名字后面）＋正文 |
 | `app.js` | 取数、路由（`#/today[/YYYY-MM-DD]`、`#/summary[/week｜month]/YYYY-MM-DD`、`#/rules`、`#/devices`、`#/settings`）、各页 |
 | `style.css` | 壳的布局、作息图／一天的形状／读数（设计系统「人生记录」；读数数字 10-29 起用苹方加等宽数字，不用等宽字体，取自 `网站/static/`，变量加 `rec-` 前缀）、页面专用的几样 |
-| `vendor/moxian/` | 墨线的 `tokens.css`（由 tokens.json 生成）和 `bundle.css`（原样拷贝），不要手改 |
-| `tools/同步墨线.py` | 墨线改了就跑一次：`python3 app/ui/tools/同步墨线.py` |
+| `vendor/moxian/` | 设计系统 Beayy（原名墨线）的 `tokens.css`（由 tokens.json 生成）和 `bundle.css`（原样拷贝），不要手改 |
+| `tools/同步墨线.py` | 设计系统改了就跑一次：`python3 app/ui/tools/同步墨线.py` |
 | `mock/` | 样例数据（全是虚构的）：`<命令名>.json` 和合成的 `mock.js`，由 `mock/make_mock.py` 生成 |
 
-## 墨线怎么引用
+## 设计系统怎么引用
 
 Tauri 只能读 `app/ui/` 里面的文件，所以把 `设计系统/墨线/project/` 拷一份进 `vendor/moxian/`，不在页面里用相对路径跳出去。主题：默认跟随系统，设置页可固定成浅色或深色（`<html data-theme>`，记在 localStorage）。
 
@@ -55,7 +55,7 @@ python3 -m http.server 8767 --directory "app/ui"
 
 守住的几条：
 
-- 文字对比度 ≥ 4.5:1：墨线 `ink-4` 浅色是 `#75746e`，别再用更浅的灰写字；弱信息靠字号区分。
+- 文字对比度 ≥ 4.5:1：设计系统的 `ink-4` 浅色是 `#75746e`，别再用更浅的灰写字；弱信息靠字号区分。
 - 地点淡色（`--pl-N`）只作带文字的底，细条和色块边用同色相实色 `--pl-N-s`（≥ 3:1）。
 - 手机断点是 `max-width: 759px`（style.css 和 app.js 的 `NARROW` 两处），电脑窗口最窄 760，别让两者碰上。
 - 页面标题 `h1`，区块标题 `h2`（`section()`、总结的段名），区块里的小标题 `h3`。

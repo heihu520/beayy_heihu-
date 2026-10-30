@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""把设计系统「墨线」拷进网页界面：tokens.json → vendor/moxian/tokens.css，components/bundle.css 原样拷贝。
+"""把设计系统「Beayy」（原名墨线，源文件夹仍叫 墨线）拷进网页界面：tokens.json → vendor/moxian/tokens.css，components/bundle.css 原样拷贝。
 
-Tauri 只能读 app/ui/ 里面的文件，所以拷一份进来（不走打包工具）。墨线改了就重跑一次再提交。
+Tauri 只能读 app/ui/ 里面的文件，所以拷一份进来（不走打包工具）。设计系统改了就重跑一次再提交。
 用法：python3 app/ui/tools/同步墨线.py
 """
 import json
@@ -35,7 +35,7 @@ def main():
         l, d = vals(tok)
         light.append(f"  --{tok['name']}: {l};")
         dark.append(f"  --{tok['name']}: {d};")
-    css = [f"/* 墨线 — 由 设计系统/墨线/project/tokens.json 生成（app/ui/tools/同步墨线.py），不要手改 */",
+    css = [f"/* Beayy 设计系统 — 由 设计系统/墨线/project/tokens.json 生成（app/ui/tools/同步墨线.py），不要手改 */",
            ":root {", *light, "  color-scheme: light;", "}",
            "@media (prefers-color-scheme: dark) {", '  :root:not([data-theme="light"]) {',
            *["  " + x for x in dark], "    color-scheme: dark;", "  }", "}",
