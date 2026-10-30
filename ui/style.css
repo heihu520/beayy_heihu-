@@ -79,6 +79,7 @@ body { padding: 0; overflow: hidden; }
 .strip, .strip-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); column-gap: 2px; }
 .strip { row-gap: 3px; }
 .strip-rows { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: var(--space-2); align-items: center; row-gap: 3px; }
+.strip-rows:lang(en) { grid-template-columns: max-content minmax(0, 1fr); }  /* 英文行名（Computer、Conversations）比两个汉字宽 */
 .strip-rows > .k { font-size: 11px; line-height: 16px; color: var(--ink-4); white-space: nowrap; }
 .strip span { height: 22px; border-radius: 2px; background: var(--rec-track); }
 /* 今天还没到的小时格只留空框 */
@@ -515,6 +516,9 @@ a.mx-btn { text-decoration: none; }
 .ptl { list-style: none; margin: 0; padding: 0; }
 .ptl > li { position: relative; display: grid; grid-template-columns: 52px 24px minmax(0, 1fr) auto; column-gap: 10px; }
 .ptl > li::before { content: ""; position: absolute; left: 73px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+/* 英文时刻列要放得下 Yesterday：列宽和竖线一起挪 */
+.ptl > li:lang(en) { grid-template-columns: 68px 24px minmax(0, 1fr) auto; }
+.ptl > li:lang(en)::before { left: 89px; }
 .ptl > li:first-child::before { top: 14px; }
 .ptl > li:last-child::before { bottom: calc(100% - 14px); }
 .ptl-t { padding-top: 6px; font: 12px/18px var(--font-mono); color: var(--ink-4); text-align: right; font-variant-numeric: tabular-nums; }
@@ -630,7 +634,7 @@ a.mx-btn { text-decoration: none; }
   .page { max-width: none; padding: calc(16px + env(safe-area-inset-top)) 16px calc(88px + env(safe-area-inset-bottom)); }
   .mx-title { font-size: 24px; line-height: 32px; }
   .toolbar { margin-bottom: var(--space-4); }
-  .toolbar-left { flex-wrap: wrap; row-gap: var(--space-2); }
+  .toolbar-left { flex-wrap: wrap; row-gap: var(--space-2); max-width: 100%; }  /* 页签放不下（英文更宽）就在栏里横滑，不撑宽整页 */
   .tabs { overflow-x: auto; max-width: 100%; }
   .tb-sep { display: none; }
   .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }

@@ -41,6 +41,8 @@ cd "$HERE"
 # 预填给用户的默认网关和模型（编进程序，密钥不预填）：放在 app/ 外面的 ../脚本/app默认值.env，不跟开源；没有这个文件就用代码里的通用默认
 DEFAULTS="$HERE/../脚本/app默认值.env"
 [ -f "$DEFAULTS" ] && { set -a; . "$DEFAULTS"; set +a; }
+# 界面的英文译文缺了只提醒、不拦（缺的那句英文界面显示中文）。补译文见 ui/i18n.js
+python3 "$HERE/ui/tools/查译文.py" | grep -E "^(缺译文|注意)" | grep -v "调用处要另传" || true
 cargo build --release -p beayy 2>&1 | grep -E "^error|warning: unused|Finished" || true
 BIN="$HERE/target/release/beayy"
 [ -x "$BIN" ] || { echo "编译失败"; exit 1; }
