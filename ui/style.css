@@ -428,7 +428,7 @@ a.mx-btn { text-decoration: none; }
 .ob-steps .done { color: var(--ink-3); }
 .ob-title { margin: 0; font-size: 26px; line-height: 34px; font-weight: 600; }
 .ob .mx-illus { margin: 0 0 var(--space-4); }
-.mx-dialog .mx-illus--sm { margin: 0; }
+.mx-dialog .mx-illus--sm { margin: 0 auto; }
 .ob h2 { margin: 0 0 var(--space-2); font-size: 20px; font-weight: 600; }
 .ob-lead { margin: var(--space-2) 0 var(--space-4); font-size: 14px; line-height: 22px; color: var(--ink-2); }
 .ob-list { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -668,3 +668,9 @@ a.mx-btn { text-decoration: none; }
 .fp-f { flex: none; max-width: 40%; font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fp-item .mx-ico { color: var(--accent-ink); }
 .fp-wait { margin: 0; padding: 8px; color: var(--ink-3); }
+
+/* 新版本下好的弹层：插画居中、更新要点 1. 2. 一行一件、最后一行灰字写当前版本 */
+.up-meta { margin: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.up-notes { margin: 0; padding: 0; list-style: none; counter-reset: up; display: flex; flex-direction: column; gap: var(--space-2); font-size: 14px; line-height: 22px; color: var(--ink); }
+ol.up-notes li { position: relative; padding-left: 20px; counter-increment: up; }
+ol.up-notes li::before { content: counter(up) "."; position: absolute; left: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }

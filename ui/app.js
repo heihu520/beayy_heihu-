@@ -831,6 +831,13 @@ async function loadUpdate() {
   try { S.update = await call("update_status"); renderSide(); updatePrompt(); } catch (e) {}
 }
 
+/** 更新说明：latest.json 里是一句话、分号隔开几件事，拆成 1. 2. 一行一件（只有一件就照写） */
+function noteList(notes) {
+  const items = String(notes || "").split(/[；;\n]+/).map((x) => x.trim().replace(/[。.]$/, "")).filter(Boolean);
+  if (!items.length) return "";
+  return items.length > 1 ? `<ol class="up-notes">${items.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : `<p class="up-notes">${esc(items[0])}</p>`;
+}
+
 /** 新版本下好了：开着窗口就弹一次。「稍后」这一版 24 小时内不再弹（菜单和设置里照样能点），换了新版本照弹 */
 function updatePrompt() {
   const u = S.update || {};
@@ -839,8 +846,8 @@ function updatePrompt() {
   try { later = JSON.parse(localStorage.getItem("update-later") || "{}"); } catch (e) {}
   if (later.v === u.latest && Date.now() < later.until) return;
   openDialog({
-    title: tr("有新版本 {v}", { v: u.latest }),
-    body: `${illus("update", true)}${u.notes ? `<p style="margin:0 0 var(--space-3)">${esc(u.notes)}</p>` : ""}<p class="note" style="margin:0">${tr("已经下好了，重启就能用，几秒钟。现在是 {v}。", { v: esc(u.current || "") })}</p>`,
+    title: tr("新版本 {v} 已就绪", { v: u.latest }),
+    body: `${illus("update", true)}${noteList(u.notes)}<p class="note up-meta">${tr("当前版本 {v}", { v: esc(u.current || "") })}</p>`,
     ok: tr("重启更新"), busy: tr("正在更新…"), cancel: tr("稍后"),
     // 装好了 app 会自己退出重开；没装成把错写在窗口里
     submit: async () => { await call("update_apply"); return false; },
