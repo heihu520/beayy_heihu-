@@ -255,8 +255,8 @@ fn install(dmg: &Path) -> Result<(), String> {
     })();
     let _ = run("/usr/bin/hdiutil", &["detach", "-force", &mnt_s]);
     result?;
-    // 退出后再打开新的
-    Command::new("/bin/sh").args(["-c", &format!("sleep 2; /usr/bin/open -n '{}'", bundle.display())]).spawn().map_err(|e| e.to_string())?;
+    // 退出后再打开新的，带 --open 直接开主窗口（不带只在菜单栏，看着像没重新打开）
+    Command::new("/bin/sh").args(["-c", &format!("sleep 2; /usr/bin/open -n '{}' --args --open", bundle.display())]).spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -282,9 +282,9 @@ fn install(zip: &Path) -> Result<(), String> {
         return Err(format!("换不了正在用的程序：{e}"));
     }
     let _ = fs::remove_dir_all(&tmp);
-    // 等这个进程退出再打开新的
+    // 等这个进程退出再打开新的，带 --open 直接开主窗口
     Command::new("cmd")
-        .args(["/C", &format!("ping -n 3 127.0.0.1 >nul & start \"\" \"{}\"", exe.display())])
+        .args(["/C", &format!("ping -n 3 127.0.0.1 >nul & start \"\" \"{}\" --open", exe.display())])
         .creation_flags(NO_WINDOW)
         .spawn()
         .map_err(|e| e.to_string())?;
