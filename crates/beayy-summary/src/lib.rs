@@ -461,8 +461,8 @@ impl Summarizer {
             }
         }
 
-        // 先收成 (时刻, 种类, 正文)，界面文字最后按预算截
-        let mut items: Vec<(String, &'static str, String)> = vec![];
+        // 先收成 (时刻, 种类, 正文, 窗口)，界面文字最后按预算截；正文里的「@窗口」和上一条同一窗口时写成「@同上」
+        let mut items: Vec<(String, &'static str, String, String)> = vec![];
         let mut clicks: Vec<(String, String, String, String, String)> = vec![];
         let mut others: Vec<(String, usize)> = vec![];
         let mut apps: Vec<String> = vec![];
@@ -486,7 +486,7 @@ impl Summarizer {
                 urls.insert(u.clone());
             }
             if t == "app.activated" {
-                items.push((hm, "", format!("切到 {wh}")));
+                items.push((hm, "", format!("切到 {wh}"), wh.clone()));
             } else if t == "keyboard.submit" {
                 let text = text_of(e);
                 if last_submit.as_deref() == Some(text.as_str()) {
@@ -495,22 +495,22 @@ impl Summarizer {
                 last_submit = Some(text.clone());
                 let typed = s(e, "typed");
                 let tail = if typed.is_empty() { String::new() } else { format!("（按键原文 {}）", cut(typed, 80)) };
-                items.push((hm, "", format!("[{}] 发送 @{wh}：{}{tail}", actor(e), cut(&text, 500))));
+                items.push((hm, "", format!("[{}] 发送 @{wh}：{}{tail}", actor(e), cut(&text, 500)), wh.clone()));
                 dd.feed(e);
             } else if is_text_event(e) {
                 let new = dd.feed(e);
                 if t == "keyboard.text_input" {
                     if !new.is_empty() {
-                        items.push((hm, "", format!("[{}] 输入 @{wh}：", actor(e)) + &cut(&new.join(" / "), 1500)));
+                        items.push((hm, "", format!("[{}] 输入 @{wh}：", actor(e)) + &cut(&new.join(" / "), 1500), wh.clone()));
                     } else if !s(e, "typed").is_empty() {
-                        items.push((hm, "", format!("[{}] 输入 @{wh}：（读不到输入框，按键原文 {}）", actor(e), cut(s(e, "typed"), 120))));
+                        items.push((hm, "", format!("[{}] 输入 @{wh}：（读不到输入框，按键原文 {}）", actor(e), cut(s(e, "typed"), 120)), wh.clone()));
                     }
                 } else if !new.is_empty() || url.is_some() {
                     let u = url.as_ref().map(|u| format!("（{}）", cut(u, 200))).unwrap_or_default();
-                    items.push((hm, "ui", format!("界面 @{wh}{u}：{}", new.join(" / "))));
+                    items.push((hm, "ui", format!("界面 @{wh}{u}：{}", new.join(" / ")), wh.clone()));
                 }
             } else if t == "keyboard.shortcut" {
-                items.push((hm, "", format!("[{}] 快捷键 {} @{wh}", actor(e), s(e, "keys"))));
+                items.push((hm, "", format!("[{}] 快捷键 {} @{wh}", actor(e), s(e, "keys")), wh.clone()));
             } else if t == "mouse.click" {
                 let n = el_name(e.get("element"));
                 if !n.is_empty() {
@@ -518,7 +518,7 @@ impl Summarizer {
                     clicks.push((hm, actor(e), wh, role.strip_prefix("AX").unwrap_or(role).to_string(), n));
                 }
             } else if t == "presence" {
-                items.push((hm, "", if s(e, "state") == "idle" { "离开电脑".into() } else { "回到电脑前".into() }));
+                items.push((hm, "", if s(e, "state") == "idle" { "离开电脑".into() } else { "回到电脑前".into() }, String::new()));
             } else if let Some(label) = match t {
                 "system.sleep" => Some("睡眠"),
                 "system.wake" => Some("唤醒"),
@@ -528,9 +528,9 @@ impl Summarizer {
                 "screen.unlocked" => Some("解锁"),
                 _ => None,
             } {
-                items.push((hm, "", label.into()));
+                items.push((hm, "", label.into(), String::new()));
             } else if let Some(u) = &url {
-                items.push((hm, "", format!("网址 @{wh}：{}", cut(u, 200))));
+                items.push((hm, "", format!("网址 @{wh}：{}", cut(u, 200)), wh.clone()));
             } else if !NOISE.contains(&t) && !["keyboard.return", "heartbeat", "window.changed"].contains(&t) {
                 match others.iter_mut().find(|(k, _)| k == t) {
                     Some(x) => x.1 += 1,
@@ -553,7 +553,8 @@ impl Summarizer {
             }
         }
         for ((who, wh), its, hm) in click_lines {
-            items.push((hm, "", format!("[{who}] 点击 @{wh}：") + &its.iter().take(30).cloned().collect::<Vec<_>>().join("、")));
+            let text = format!("[{who}] 点击 @{wh}：") + &its.iter().take(30).cloned().collect::<Vec<_>>().join("、");
+            items.push((hm, "", text, wh));
         }
         items.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -573,28 +574,38 @@ impl Summarizer {
             head.push("其他事件计数：".to_string() + &others.iter().map(|(k, v)| format!("{k}×{v}")).collect::<Vec<_>>().join("，"));
         }
         head.push(String::new());
-        head.push("时间线（[人]＝用户本人键鼠，[代理]＝AI 等程序合成的键鼠；「界面」＝窗口里新出现的文字）：".into());
+        head.push("时间线（[人]＝用户本人键鼠，[代理]＝AI 等程序合成的键鼠；「界面」＝窗口里新出现的文字；「@同上」＝和上一条同一个窗口）：".into());
 
-        // 超预算先压界面文字，再压其他长行，最后丢中间
-        let mut timeline: Vec<String> = vec![];
-        let mut pack = String::new();
+        // 超预算先压界面文字，再压其他长行，最后丢中间（丢掉的前后各自从头写窗口，「@同上」不会指到丢掉的那条）
+        let lines = |its: &[(String, &'static str, String, String)], ui_cap: usize, cap: usize| -> Vec<String> {
+            let mut prev = "";
+            its.iter()
+                .map(|(hm, k, x, wh)| {
+                    let x = if !wh.is_empty() && wh == prev && clen(wh) > 8 { x.replacen(&format!("@{wh}"), "@同上", 1) } else { x.clone() };
+                    if !wh.is_empty() {
+                        prev = wh;
+                    }
+                    format!("{hm} {}", cut(&x, if *k == "ui" { ui_cap } else { cap }))
+                })
+                .collect()
+        };
         let tail = self.speech_and_place(start, start + Duration::minutes(10));
-        for (ui_cap, cap) in [(2000, 2000), (1000, 2000), (500, 600), (250, 300), (120, 300)] {
-            timeline = items.iter().map(|(hm, k, x)| format!("{hm} {}", cut(x, if *k == "ui" { ui_cap } else { cap }))).collect();
-            pack = head.iter().chain(timeline.iter()).chain(tail.iter()).cloned().collect::<Vec<_>>().join("\n");
+        let join = |parts: Vec<Vec<String>>| head.iter().cloned().chain(parts.into_iter().flatten()).chain(tail.iter().cloned()).collect::<Vec<_>>().join("\n");
+        let (mut ui_cap, mut cap) = (2000, 2000);
+        let mut pack = String::new();
+        for (u, c) in [(2000, 2000), (1000, 2000), (500, 600), (250, 300), (120, 300)] {
+            (ui_cap, cap) = (u, c);
+            pack = join(vec![lines(&items, u, c)]);
             if clen(&pack) <= PACK_CHARS {
                 break;
             }
         }
-        while clen(&pack) > PACK_CHARS && timeline.len() > 20 {
-            let mid = timeline.len() / 2;
-            timeline.drain(mid - 5..(mid + 5).min(timeline.len()));
-            let mut all = head.clone();
-            all.extend(timeline[..mid].iter().cloned());
-            all.push("……（中间略）".into());
-            all.extend(timeline[mid..].iter().cloned());
-            all.extend(tail.iter().cloned());
-            pack = all.join("\n");
+        // 从正中间往两边一次丢 10 条，直到放得下（同原来：至少留 20 条）
+        let mut drop = 0;
+        while clen(&pack) > PACK_CHARS && items.len() - drop > 20 {
+            drop = (drop + 10).min(items.len());
+            let a = (items.len() - drop) / 2;
+            pack = join(vec![lines(&items[..a], ui_cap, cap), vec!["……（中间略）".into()], lines(&items[a + drop..], ui_cap, cap)]);
         }
         for (k, _) in &rows {
             if let Some(b) = bundles.get(k) {
@@ -884,15 +895,16 @@ impl Summarizer {
             format!("parts: {}", Value::Array(norm_parts(j.get("parts")))),
             "---".into(),
             String::new(),
-            "## Memory summary".into(),
-            String::new(),
-            match j.get("memory_summary") {
-                Some(Value::String(s)) => s.trim().to_string(),
-                Some(o) => o.to_string(),
-                None => String::new(),
-            },
-            String::new(),
         ];
+        // 10-30 起模型不再写 memory_summary、prior_context（和「经过」重复、没人读，省输出 token）；不写空段，免得读的一方把下一节当成它
+        let memory = match j.get("memory_summary") {
+            Some(Value::String(s)) => s.trim().to_string(),
+            Some(Value::Null) | None => String::new(),
+            Some(o) => o.to_string(),
+        };
+        if !memory.is_empty() {
+            md.extend(["## Memory summary".into(), String::new(), memory, String::new()]);
+        }
         let prior = one(j.get("prior_context"));
         if !prior.is_empty() {
             md.extend(["### Relevant prior context".into(), String::new(), prior, String::new()]);
@@ -956,6 +968,14 @@ impl Summarizer {
         let names = self.segment_names();
         let events = self.load(name);
         self.build_pack(name, &events, &names).0
+    }
+
+    /// 用现在的提示词给某个分段问一次模型，返回（模型给的 JSON，用量），不写文件（调试用：改提示词后和已有摘要对比）
+    pub fn try_segment(&self, name: &str) -> Result<(Map<String, Value>, Value), String> {
+        let names = self.segment_names();
+        let events = self.load_own(name);
+        let (pack, _, _) = self.build_pack(name, &events, &names);
+        self.call_model(&pack, &self.prior_summary(name, &names), &self.known_projects())
     }
 
     /// 写摘要。`pick` 为空＝本机记过、已结束、还没写过的分段（同步来的别的电脑的分段由那台自己写，免得重复调模型）；
@@ -1040,8 +1060,6 @@ const PROMPT: &str = "你是电脑活动记录员。下面是用户电脑上 10 
 - 只返回一个 JSON 对象，不要代码块，字段：
   title: 15 字以内的标题
   description: 一两句，概括你这 10 分钟在做什么、有什么结果
-  memory_summary: 一段 80–150 字，写主线任务和进展
-  prior_context: 一两句，承接上一段的背景（没有上一段就空字符串）
   context: 3–6 条字符串数组，每条「名称：说明」，写出现的文档、项目、会话、联系人这类以后回看需要的线索
   recording: 1–3 个对象的数组，每个 {\"heading\": 小标题, \"bullets\": [2–5 条具体经过]}
   parts: 0–3 个对象的数组，这 10 分钟的时间花在哪，每个 {\"activity\": 二级类型, \"domain\": 领域, \"project\": 项目, \"share\": 占比 0–1}，占比加起来是 1；人不在电脑前（离开电脑、只有后台程序在跑）返回空数组 []
