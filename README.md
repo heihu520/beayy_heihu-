@@ -4,10 +4,12 @@
 
 # Beayy
 
-**Be Authentic. Your Yesterdays.**
+**自动记下你的一天：几点、在哪、在做什么**
 
-自动记下你的一天：几点、在哪、在做什么。<br>
+电脑、手机、手表一起记，去过的地方也记。<br>
 每 10 分钟写一段摘要，每晚写一份日总结，再汇成周和月。
+
+*Be Authentic. Your Yesterdays.*
 
 *Beayy records your day on Mac, Windows and iPhone — when, where, and what you were doing — and writes the journal for you. Local-first, open source, self-hostable.*
 

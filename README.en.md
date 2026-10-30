@@ -4,10 +4,12 @@
 
 # Beayy
 
-**Be Authentic. Your Yesterdays.**
+**Your day, written down automatically: when, where, and what you were doing**
 
-Beayy records your day automatically: when, where, and what you were doing.<br>
-It writes a summary every 10 minutes and a journal every evening, then rolls them up into weekly and monthly reviews.
+Your computer, phone and watch together, plus the places you went.<br>
+A summary every 10 minutes, a journal every evening, rolled up into weekly and monthly reviews.
+
+*Be Authentic. Your Yesterdays.*
 
 [简体中文](README.md) · **English**
 
