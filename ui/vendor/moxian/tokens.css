@@ -20,7 +20,7 @@
   --primary: #0b0b0b;
   --primary-hover: #2c2c2a;
   --on-primary: #ffffff;
-  --brand: #c6613f;
+  --brand: #5f8a76;
   --focus: #2a78d6;
   --accent-ink: #184f95;
   --on-accent: #ffffff;
@@ -34,7 +34,7 @@
   --risk-ink: #8e2626;
   --risk-wash: rgba(208,59,59,0.10);
   --on-risk: #ffffff;
-  --illus-tint: rgba(143,181,164,0.55);
+  --brand-wash: rgba(143,181,164,0.55);
   --scrim: rgba(11,11,11,0.50);
   --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
@@ -90,6 +90,7 @@
     --primary: #ffffff;
     --primary-hover: #e1e0d9;
     --on-primary: #0b0b0b;
+    --brand: #8fb5a4;
     --accent-ink: #6da7ec;
     --ok-ink: #0ca30c;
     --ok-wash: #11260f;
@@ -97,7 +98,7 @@
     --warn-wash: #311a00;
     --risk-ink: #ec7e7e;
     --risk-wash: #3c0e0e;
-    --illus-tint: rgba(143,181,164,0.45);
+    --brand-wash: rgba(143,181,164,0.45);
     --scrim: rgba(0,0,0,0.60);
     --shadow-sm: 0 1px 2px 0 rgba(11,11,11,0.06), 0 2px 8px 0 rgba(0,0,0,0.24);
     --shadow-lg: 0 4px 8px 0 rgba(11,11,11,0.08), 0 12px 28px -2px rgba(0,0,0,0.24);
@@ -125,6 +126,7 @@
   --primary: #ffffff;
   --primary-hover: #e1e0d9;
   --on-primary: #0b0b0b;
+  --brand: #8fb5a4;
   --accent-ink: #6da7ec;
   --ok-ink: #0ca30c;
   --ok-wash: #11260f;
@@ -132,7 +134,7 @@
   --warn-wash: #311a00;
   --risk-ink: #ec7e7e;
   --risk-wash: #3c0e0e;
-  --illus-tint: rgba(143,181,164,0.45);
+  --brand-wash: rgba(143,181,164,0.45);
   --scrim: rgba(0,0,0,0.60);
   --shadow-sm: 0 1px 2px 0 rgba(11,11,11,0.06), 0 2px 8px 0 rgba(0,0,0,0.24);
   --shadow-lg: 0 4px 8px 0 rgba(11,11,11,0.08), 0 12px 28px -2px rgba(0,0,0,0.24);
