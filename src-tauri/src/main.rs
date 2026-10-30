@@ -176,6 +176,9 @@ fn open_data_dir() {
 }
 
 fn open_main(app: &AppHandle) {
+    if !shadow_mode() {
+        update::check_soon();
+    }
     // 主窗口开着时进 Dock、能 ⌘Tab；关掉后退回只在菜单栏（见 run 里的 Destroyed）
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -460,7 +463,7 @@ fn main() {
             daily::start(state.paused.clone());
             // 多设备同步：每 5 分钟一轮（没开同步就什么都不做；测试版不同步）
             sync::start(state.log.clone());
-            // 自动更新：启动 1 分钟后查，之后每 6 小时；下好了由用户点「重启更新」（测试版不查）
+            // 自动更新：启动 1 分钟后查，之后每小时、打开主窗口时也查；下好了由用户点「重启更新」（测试版不查）
             if !shadow_mode() {
                 update::start();
             }

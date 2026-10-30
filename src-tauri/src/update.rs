@@ -6,7 +6,7 @@
 //!   本机自己编译、用开发证书签的版本（凤梨的开发机）不自动更新：换成 Developer ID 签名会掉系统授权，那台走 build.sh。
 //! - Windows：解压 zip，把正在运行的 beayy.exe 改名成 beayy.old.exe（Windows 允许改名运行中的程序），新的放回原位，重新打开；
 //!   下次启动删掉 beayy.old.exe。
-//! 下载放在 Beayy/update/。启动 1 分钟后查一次，之后每 6 小时查一次。
+//! 下载放在 Beayy/update/。启动 1 分钟后查一次，之后每小时查一次；打开主窗口时也查（10 分钟内查过就不再查）。
 
 use beayy_core::default_root;
 use serde_json::{json, Value};
@@ -171,7 +171,14 @@ pub fn status() -> Value {
     })
 }
 
-/// 启动 1 分钟后查一次，之后每 6 小时
+/// 上次查是 10 分钟以前（或还没查过）
+fn due() -> bool {
+    with(|s| s.checked.as_deref().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()))
+        .map(|t| chrono::Utc::now().signed_duration_since(t) > chrono::Duration::minutes(10))
+        .unwrap_or(true)
+}
+
+/// 启动 1 分钟后查一次，之后每小时
 pub fn start() {
     #[cfg(target_os = "windows")]
     if let Ok(exe) = std::env::current_exe() {
@@ -180,10 +187,19 @@ pub fn start() {
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(60));
         loop {
-            check();
-            std::thread::sleep(Duration::from_secs(6 * 3600));
+            if due() {
+                check();
+            }
+            std::thread::sleep(Duration::from_secs(3600));
         }
     });
+}
+
+/// 打开主窗口时在后台查一次（10 分钟内查过就不查）
+pub fn check_soon() {
+    if due() {
+        std::thread::spawn(check);
+    }
 }
 
 #[tauri::command]

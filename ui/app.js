@@ -810,6 +810,8 @@ function renderSide() {
   const av = document.getElementById("me-avatar");
   // 窄屏底栏「我的」用和别的页签一样的线条图标，不用头像
   if (av) { av.classList.toggle("avatar--icon", NARROW.matches); av.innerHTML = NARROW.matches ? lu('<path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/>') : avatarHtml(pf); }
+  const md = document.getElementById("me-dot");
+  if (md) { md.hidden = !updateReady(); md.title = tr("新版本 {v} 已就绪", { v: (S.update || {}).latest || "" }); }
   const nm = document.getElementById("me-name");
   // 窄屏（手机）底栏这一格是「我的」页签，不写名字
   if (nm) nm.textContent = NARROW.matches ? tr("我的") : pf.name || tr("我");
@@ -840,6 +842,9 @@ const MI = {
 // ---------- 自动更新：后台下好了，菜单和设置里出「重启更新」 ----------
 
 /** 左下角菜单里的一行：下好了可以点；还在下就只显示 */
+/** 新版本下好了、能装（电脑版）：头像和设置「通用」挂一个点，装完就没了 */
+const updateReady = () => { const u = S.update || {}; return !!(u.newer && u.ready && !u.updatable) && !(S.status && S.status.mobile); };
+
 function updateItem() {
   const u = S.update || {};
   if (!u.newer || u.updatable) return "";
@@ -2629,7 +2634,7 @@ async function renderSettings() {
   let langPref = ""; try { langPref = localStorage.getItem("lang") || ""; } catch (e) {}
   // 照 Claude 设置页：左边一列分区（设计系统 SubNav），窄屏收成一排
   const tabs = `<nav class="mx-subnav" id="set-tabs" aria-label="${tr("设置分区")}">${tabsHere.map(([k, v]) =>
-    `<button class="${k === tab ? "is-on" : ""}" data-st="${k}"${k === tab ? ' aria-current="page"' : ""}>${v}</button>`).join("")}</nav>`;
+    `<button class="${k === tab ? "is-on" : ""}" data-st="${k}"${k === tab ? ' aria-current="page"' : ""}>${v}${k === "general" && updateReady() ? `<i class="sub-dot" title="${esc(tr("新版本 {v} 已就绪", { v: S.update.latest }))}"></i>` : ""}</button>`).join("")}</nav>`;
 
   let body = "";
   if (tab === "general") {

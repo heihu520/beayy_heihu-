@@ -304,6 +304,9 @@ div.tl-row { grid-template-columns: 92px minmax(0, 1fr); }
 /* ---------- 侧栏：左下角照 Claude（头像＋名字·状态＋下拉，点开向上弹菜单）；设备有异常时导航上挂一个点 ---------- */
 .side-fill { flex: 1; }
 .me-wrap { position: relative; display: block; }
+.me { position: relative; }
+.me-dot { position: absolute; left: 28px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--sidebar); }
+.mx-subnav .sub-dot { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--warn); }
 .me { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-md, 8px); background: none; color: var(--ink); font: 14px/20px var(--font-sans); text-align: left; cursor: pointer; }
 .me:hover, .me[aria-expanded="true"] { background: var(--hover); }
 .avatar { width: 26px; height: 26px; flex: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); color: var(--page); font-size: 12px; font-weight: 600; overflow: hidden; }
