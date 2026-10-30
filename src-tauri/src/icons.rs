@@ -77,12 +77,11 @@ fn mac_icon(_id: &str) -> Option<Vec<u8>> {
 
 /// App Store 查图标和名字（名字也给手机时间线用，见 data.rs 的 app_names）
 fn app_store(id: &str) -> Option<(Vec<u8>, String)> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let agent: ureq::Agent = beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
         .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .timeout_global(Some(Duration::from_secs(8)))
-        .build()
-        .into();
+        .build());
     // 先查中国区，没上架的（比如 Claude）再查美区
     let lookup = |country: &str| -> Option<Value> {
         let v: Value = agent.get(&format!("https://itunes.apple.com/lookup?bundleId={id}&country={country}")).call().ok()?.body_mut().read_json().ok()?;

@@ -56,12 +56,11 @@ fn platform() -> &'static str {
 }
 
 fn agent(secs: u64) -> ureq::Agent {
-    ureq::Agent::config_builder()
+    beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
         .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .timeout_global(Some(Duration::from_secs(secs)))
-        .build()
-        .into()
+        .build())
 }
 
 fn dir() -> PathBuf {
@@ -111,7 +110,7 @@ pub fn check() -> Value {
 }
 
 fn check_inner() -> Result<(), String> {
-    let latest: Value = agent(20).get(&format!("{BASE}latest.json")).call().map_err(|e| format!("连不上更新服务器：{e}"))?.body_mut().read_json().map_err(|e| e.to_string())?;
+    let latest: Value = agent(60).get(&format!("{BASE}latest.json")).call().map_err(|e| format!("连不上更新服务器：{e}"))?.body_mut().read_json().map_err(|e| e.to_string())?;
     let ver = latest["version"].as_str().unwrap_or("").to_string();
     with(|s| s.latest = Some(latest.clone()));
     if !newer(&ver, current()) {

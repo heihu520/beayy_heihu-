@@ -148,15 +148,36 @@ fn reset_state_for(root: &Path, user: &str) {
 
 // ---------- HTTP ----------
 
+/// 解析出的地址 IPv4 排前面，IPv6 留作后备。
+/// Windows 有 IPv6 地址时系统把 IPv6 排前面，ureq 按顺序一个个连，超时按 1/2、1/4… 分给各地址；
+/// IPv6 不通又不报错（国内常见）时前两个 IPv6 白等大半时间，轮到 IPv4 已所剩无几。
+/// 10-30 那台 Windows：同步常要 25、45 秒一轮，查更新（20 秒）一直「timeout: global」。
+#[derive(Debug, Default)]
+struct Ipv4First(ureq::unversioned::resolver::DefaultResolver);
+
+impl ureq::unversioned::resolver::Resolver for Ipv4First {
+    fn resolve(&self, uri: &ureq::http::Uri, config: &ureq::config::Config, timeout: ureq::unversioned::transport::NextTimeout) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let mut addrs = self.0.resolve(uri, config, timeout)?;
+        addrs.sort_by_key(|a| a.is_ipv6());
+        Ok(addrs)
+    }
+}
+
+/// 所有联网请求都用它建 Agent（先连 IPv4）
+pub fn http_agent(config: ureq::config::Config) -> ureq::Agent {
+    ureq::Agent::with_parts(config, ureq::unversioned::transport::DefaultConnector::default(), Ipv4First::default())
+}
+
 fn agent() -> ureq::Agent {
     // 根证书用系统的（macOS 钥匙串、Windows 证书库）：ureq 默认的内置清单会关掉系统根证书，Windows 上验不过 Cloudflare 的证书链
-    ureq::Agent::config_builder()
-        .proxy(None)
-        .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
-        .timeout_global(Some(Duration::from_secs(60)))
-        .http_status_as_error(false)
-        .build()
-        .into()
+    http_agent(
+        ureq::Agent::config_builder()
+            .proxy(None)
+            .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
+            .timeout_global(Some(Duration::from_secs(60)))
+            .http_status_as_error(false)
+            .build(),
+    )
 }
 
 fn err_of(mut r: ureq::http::Response<ureq::Body>) -> String {
@@ -1222,6 +1243,17 @@ fn finish(root: &Path, mut st: State, uploaded: usize, downloaded: usize, errors
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// localhost 解析出 ::1 和 127.0.0.1：IPv4 要排在前面
+    #[test]
+    fn ipv4_first() {
+        use ureq::unversioned::resolver::Resolver;
+        let config = ureq::Agent::config_builder().build();
+        let uri: ureq::http::Uri = "http://localhost:1/".parse().unwrap();
+        let addrs = Ipv4First::default().resolve(&uri, &config, ureq::unversioned::transport::NextTimeout { after: ureq::unversioned::transport::time::Duration::NotHappening, reason: ureq::Timeout::Global }).unwrap();
+        assert!(addrs[0].is_ipv4(), "{:?}", &addrs[..]);
+        assert!(addrs.windows(2).all(|w| !(w[0].is_ipv6() && w[1].is_ipv4())), "{:?}", &addrs[..]);
+    }
 
     /// 两台设备经同一个文件夹同步：A 新开、写一段，B 用主密码加入、下载到同样的位置；主密码错了加入不了
     #[test]

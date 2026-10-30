@@ -82,13 +82,12 @@ fn advance(st: &mut Map<String, Value>, prefix: &str, items: &[Value], miss: Opt
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
         .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .timeout_global(Some(Duration::from_secs(120)))
         .http_status_as_error(false)
-        .build()
-        .into()
+        .build())
 }
 
 #[derive(Default, Debug)]

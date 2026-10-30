@@ -190,13 +190,12 @@ pub struct PullNote {
 
 fn agent() -> ureq::Agent {
     // 根证书用系统的（同 beayy-sync）
-    ureq::Agent::config_builder()
+    beayy_sync::http_agent(ureq::Agent::config_builder()
         .proxy(None)
         .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
         .timeout_global(Some(Duration::from_secs(60)))
         .http_status_as_error(false)
-        .build()
-        .into()
+        .build())
 }
 
 fn state_path(root: &Path) -> std::path::PathBuf {
