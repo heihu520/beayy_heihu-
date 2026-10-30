@@ -251,8 +251,9 @@ function amapHowtoDialog() {
 let DLG = null;
 
 /** title、body（HTML）、ok（主按钮文字）、okClass（primary／danger）、busy（提交中的按钮文字）、cancel（false＝不要取消钮）、
- *  closable（false＝只能点主按钮关）、submit(el)：抛错就把错写在窗口里、不关，返回 false 也不关；onOpen(el, d) 绑窗口里的交互 */
-function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取消", closable = true, submit, onOpen }) {
+ *  closable（false＝只能点主按钮关）、submit(el)：抛错就把错写在窗口里、不关，返回 false 也不关；onOpen(el, d) 绑窗口里的交互；
+ *  onClose()：窗口关掉时（取消、Esc、点遮罩、换页、提交成功）调 */
+function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取消", closable = true, submit, onOpen, onClose }) {
   closeDialog();
   const root = document.createElement("div");
   root.className = "mx-scrim dlg-root";
@@ -262,7 +263,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
     <div class="mx-dialog-foot">${cancel ? `<button class="mx-btn mx-btn--secondary" data-dlg="close">${esc(cancel)}</button>` : ""}${ok ? `<button class="mx-btn mx-btn--${okClass}" data-dlg="ok">${esc(ok)}</button>` : ""}</div></div>`;
   document.body.appendChild(root);
   const el = root.querySelector(".mx-dialog"), okBtn = root.querySelector('[data-dlg="ok"]'), err = root.querySelector('[data-dlg="err"]');
-  const d = (DLG = { root, el, closable, busy: false, back: document.activeElement });
+  const d = (DLG = { root, el, closable, busy: false, back: document.activeElement, onClose });
   d.setErr = (m) => { err.hidden = !m; err.textContent = m || ""; };
   d.setOk = (text) => { if (okBtn) okBtn.textContent = text; };
   d.go = async () => {
@@ -298,6 +299,7 @@ function openDialog({ title, body, ok, okClass = "primary", busy, cancel = "取�
 function closeDialog() {
   const d = DLG; if (!d) return;
   DLG = null; d.root.remove();
+  if (d.onClose) d.onClose();
   if (d.back && d.back.isConnected && d.back.focus) d.back.focus();
 }
 
@@ -820,7 +822,25 @@ function updateItem() {
 
 async function loadUpdate() {
   if (!TAURI) return;
-  try { S.update = await call("update_status"); renderSide(); } catch (e) {}
+  try { S.update = await call("update_status"); renderSide(); updatePrompt(); } catch (e) {}
+}
+
+/** 新版本下好了：开着窗口就弹一次。「稍后」这一版 24 小时内不再弹（菜单和设置里照样能点），换了新版本照弹 */
+function updatePrompt() {
+  const u = S.update || {};
+  if (!u.newer || !u.ready || u.updatable || (S.status && S.status.mobile) || DLG || (S.settings && !S.settings.onboarded)) return;
+  let later = {};
+  try { later = JSON.parse(localStorage.getItem("update-later") || "{}"); } catch (e) {}
+  if (later.v === u.latest && Date.now() < later.until) return;
+  openDialog({
+    title: `有新版本 ${u.latest}`,
+    body: `${u.notes ? `<p style="margin:0 0 var(--space-3)">${esc(u.notes)}</p>` : ""}<p class="note" style="margin:0">已经下好了，重启就能用，几秒钟。现在是 ${esc(u.current || "")}。</p>`,
+    ok: "重启更新", busy: "正在更新…", cancel: "稍后",
+    // 装好了 app 会自己退出重开；没装成把错写在窗口里
+    submit: async () => { await call("update_apply"); return false; },
+    // 关掉（稍后、Esc、点遮罩、换页）都算稍后
+    onClose: () => { try { localStorage.setItem("update-later", JSON.stringify({ v: u.latest, until: Date.now() + 864e5 })); } catch (e) {} },
+  });
 }
 
 async function applyUpdate() {
